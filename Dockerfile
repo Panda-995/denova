@@ -27,7 +27,7 @@ COPY LICENSE /opt/denova/LICENSE
 COPY docker/entrypoint.sh /usr/local/bin/denova-entrypoint
 COPY docker/chromium.sh /usr/local/bin/chromium
 RUN chmod 755 /usr/local/bin/denova-entrypoint /usr/local/bin/chromium
-ENV DENOVA_DIR=/data/.denova HOME=/data PATH=/opt/denova:/usr/local/bin:/usr/bin:/bin
+ENV DENOVA_DIR=/data/.denova HOME=/data PATH=/opt/denova:/opt/denova/tools:/usr/local/bin:/usr/bin:/bin
 WORKDIR /data
 USER denova
 EXPOSE 8080
