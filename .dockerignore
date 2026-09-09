@@ -1,0 +1,16 @@
+.git
+.github
+**/node_modules
+web/dist
+internal/webfs/dist
+output
+dist
+.denova
+.nova
+data
+log
+.env
+.env.*
+*.log
+web/playwright-report
+web/test-results

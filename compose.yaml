@@ -1,0 +1,19 @@
+name: denova
+services:
+  denova:
+    image: ghcr.io/panda-995/denova:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      DENOVA_DIR: /data/.denova
+      DENOVA_USERNAME: ${DENOVA_USERNAME:-admin}
+      DENOVA_PASSWORD: ${DENOVA_PASSWORD:?Set a password of at least 12 characters in .env}
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "${WEB_PORT:-8082}:8080"
+    volumes:
+      - denova_data:/data
+    shm_size: 256mb
+    stop_grace_period: 30s
+
+volumes:
+  denova_data:
