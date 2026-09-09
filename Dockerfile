@@ -8,7 +8,7 @@ ENV CGO_ENABLED=0
 COPY go.mod go.sum ./
 COPY agent/go.mod agent/go.sum ./agent/
 RUN go mod download && cd agent && go mod download
-COPY web/package.json web/pnpm-lock.yaml ./web/
+COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./web/
 RUN pnpm --dir web install --frozen-lockfile
 COPY . .
 RUN go mod tidy -diff && (cd agent && go mod tidy -diff)
