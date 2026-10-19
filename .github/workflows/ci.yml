@@ -262,3 +262,16 @@ jobs:
               test "$result" = success
             done
           fi
+
+  publish-image:
+    name: Publish verified container
+    needs: [changes, test-build]
+    if: >-
+      ${{ github.repository == 'Panda-995/denova'
+          && github.ref == 'refs/heads/master'
+          && needs.changes.outputs.code == 'true'
+          && needs.test-build.result == 'success' }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker-publish.yml

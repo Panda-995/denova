@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { currentRun, ensureWorkflow, githubAPI, waitForCI } from './image-ci.mjs'
+import { currentRun, ensureWorkflow, githubAPI } from './image-ci.mjs'
 
 const sha = 'a'.repeat(40)
 const run = (status, conclusion, extra = {}) => ({ id: 42, head_sha: sha, event: 'workflow_dispatch', status, conclusion, ...extra })
@@ -22,36 +22,15 @@ for (const [status, conclusion, dispatch] of [
   })
 }
 
-test('missing build dispatches the fork workflow without CI-only inputs', async () => {
+test('missing source CI dispatches the verified pipeline', async () => {
   const calls = []
   const api = async (...args) => { calls.push(args); return { workflow_runs: [] } }
-  await ensureWorkflow(api, 'docker-publish.yml', sha)
-  assert.deepEqual(calls[1], ['docker-publish.yml', 'POST', { ref: 'master' }])
+  await ensureWorkflow(api, 'ci.yml', sha)
+  assert.deepEqual(calls[1], ['ci.yml', 'POST', { ref: 'master', inputs: { suite: 'smoke' } }])
 })
 
 test('another commit or untrusted PR cannot satisfy the source CI gate', () => {
   assert.equal(currentRun([run('completed', 'success', { head_sha: 'b'.repeat(40) }), run('completed', 'success', { event: 'pull_request' })], sha), undefined)
-})
-
-test('CI gate waits through queued and running states until success', async () => {
-  const runs = [run('queued', null), run('in_progress', null), run('completed', 'success', { html_url: 'https://github.com/example/denova/actions/runs/42' })]
-  let sleeps = 0
-  const result = await waitForCI(async () => ({ workflow_runs: [runs.shift()] }), sha, { sleep: async () => { sleeps++ } })
-  assert.equal(sleeps, 2)
-  assert.match(result, /Source CI passed/)
-})
-
-for (const conclusion of ['failure', 'cancelled', 'timed_out', 'skipped']) {
-  test(`CI gate refuses ${conclusion} without retrying or publishing`, async () => {
-    await assert.rejects(waitForCI(async () => ({ workflow_runs: [run('completed', conclusion)] }), sha), /latest will not be published/)
-  })
-}
-
-test('missing CI is bounded by the wait deadline', async () => {
-  let elapsed = 0
-  await assert.rejects(waitForCI(async () => ({ workflow_runs: [] }), sha, {
-    now: () => elapsed, sleep: async ms => { elapsed += ms }, timeoutMs: 100, intervalMs: 50,
-  }), /Timed out/)
 })
 
 test('API requests target the explicit fork and exact source commit', async () => {
