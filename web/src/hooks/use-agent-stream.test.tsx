@@ -17,6 +17,32 @@ function setup(transport: ChatTransport<AgentUIMessage>) {
 }
 
 describe('Agent display connection', () => {
+  it('renders and streams over LAN HTTP without crypto.randomUUID', async () => {
+    vi.stubGlobal('crypto', { getRandomValues: crypto.getRandomValues.bind(crypto) })
+    try {
+      const active = connection()
+      const transport = { sendMessages: vi.fn().mockResolvedValue(active.stream), reconnectToStream: vi.fn() }
+      const { result, options } = setup(transport)
+      let completed!: Promise<void>
+      await act(async () => { completed = result.current.sendMessage({ role: 'user', parts: [{ type: 'text', text: 'Continue' }] }) })
+      await act(async () => {
+        active.controller.enqueue({ type: 'text-start', id: 'answer' })
+        active.controller.enqueue({ type: 'text-delta', id: 'answer', delta: 'LAN response' })
+        active.controller.enqueue({ type: 'finish' })
+        active.controller.close()
+        await completed
+      })
+      const submitted = transport.sendMessages.mock.calls[0][0]
+      expect(submitted.chatId).toMatch(/^[0-9a-f-]{36}$/)
+      expect(submitted.messages[0].id).toMatch(/^[0-9a-f-]{36}$/)
+      expect(submitted.chatId).not.toBe(submitted.messages[0].id)
+      expect(result.current.messages.at(-1)?.parts[0]).toMatchObject({ text: 'LAN response', state: 'done' })
+      expect(options.onError).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('keeps history intact through submission, data events and final text', async () => {
     const active = connection()
     const transport = { sendMessages: vi.fn().mockResolvedValue(active.stream), reconnectToStream: vi.fn() }

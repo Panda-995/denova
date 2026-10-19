@@ -23,6 +23,9 @@ func TestValidateContextCommitDerivesEveryBatchShape(t *testing.T) {
 	completion.TaskCompletion = &agentschema.TaskCompletionMessageMeta{
 		CompletionID: "completion-1", Author: "researcher", Recipient: "parent",
 	}
+	continuation := agentschema.UserMessage("Submit the remaining modules")
+	continuation.Extra = map[string]any{agentschema.ExtraKeyAgentContinuation: true}
+	prose := agentschema.AssistantMessage("The gate is open.", nil)
 
 	valid := []struct {
 		name     string
@@ -31,6 +34,7 @@ func TestValidateContextCommitDerivesEveryBatchShape(t *testing.T) {
 		{name: "state", messages: []*agentschema.Message{state}},
 		{name: "tool batch", messages: []*agentschema.Message{call, result}},
 		{name: "task completion", messages: []*agentschema.Message{completion}},
+		{name: "accepted response continuation", messages: []*agentschema.Message{prose, continuation}},
 	}
 	for _, test := range valid {
 		t.Run(test.name, func(t *testing.T) {
@@ -53,6 +57,10 @@ func TestValidateContextCommitDerivesEveryBatchShape(t *testing.T) {
 		{name: "tool batch mismatched result", messages: []*agentschema.Message{call, agentschema.ToolMessage(agentschema.TextToolResult("complete"), "call-2")}},
 		{name: "task completion without identity", messages: []*agentschema.Message{agentschema.UserMessage("child result")}},
 		{name: "mixed state and completion", messages: []*agentschema.Message{state, completion}},
+		{name: "continuation without response", messages: []*agentschema.Message{continuation}},
+		{name: "response without continuation", messages: []*agentschema.Message{prose}},
+		{name: "ordinary user after response", messages: []*agentschema.Message{prose, agentschema.UserMessage("new request")}},
+		{name: "tool result after plain response", messages: []*agentschema.Message{prose, result}},
 	}
 	for _, test := range invalid {
 		t.Run(test.name, func(t *testing.T) {

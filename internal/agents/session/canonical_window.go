@@ -111,7 +111,7 @@ func (s *Session) ReadCanonicalWindow(ctx context.Context, count int, archive *a
 				}
 				pending = nil
 			}
-			if message.Role == agentschema.User && !state {
+			if message.Role == agentschema.User && !state && !agentschema.IsAgentContinuationMessage(message) {
 				pending = message
 				return nil
 			}

@@ -41,7 +41,7 @@ func RestoreCanonicalCheckpoint(ctx context.Context, checkpoint PersistedMessage
 			appendMessage(pendingUser)
 			pendingUser = nil
 		}
-		if message != nil && message.Role == schema.User && !history.IsContextStateMessage(message) {
+		if message != nil && message.Role == schema.User && !history.IsContextStateMessage(message) && !schema.IsAgentContinuationMessage(message) {
 			pendingUser = message
 			return nil
 		}

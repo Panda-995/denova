@@ -35,6 +35,7 @@ func rememberGameCreation(ctx context.Context, projectStoreDir string, story int
 	}
 	preferences := &config.GameCreationPreferences{
 		Resources: resources, CustomAgentID: customAgentID,
+		Protagonist:      &config.GameCreationProtagonist{Mode: story.Protagonist.Mode},
 		DisabledModules:  []string{},
 		PlanningEnabled:  story.PlanningMode == "enabled",
 		ReplyTargetChars: story.ReplyTargetChars, ChoiceCount: story.ChoiceCount,
@@ -42,6 +43,14 @@ func rememberGameCreation(ctx context.Context, projectStoreDir string, story int
 		DifficultyShift: story.CheckSettings.DifficultyShift, RollModifier: story.CheckSettings.RollModifier,
 		RuleStateConsumptionMode: story.CheckSettings.RuleStateConsumptionMode, RuleVisibilityMode: story.CheckSettings.RuleVisibilityMode,
 		StateSchemaMode: story.StateSchemaPolicy.Mode, Background: presentation.Background, Characters: presentation.Characters,
+	}
+	switch story.Protagonist.Mode {
+	case interactive.StoryProtagonistModeLore:
+		preferences.Protagonist.SourceLoreItemID = story.Protagonist.SourceLoreItemID
+	case interactive.StoryProtagonistModeCustom:
+		preferences.Protagonist.Name = story.Protagonist.Name
+		preferences.Protagonist.Profile = story.Protagonist.Profile
+	case interactive.StoryProtagonistModeDefault:
 	}
 	// Retain the chosen resource even while its module is switched off, so
 	// turning it on in the next creation restores the user's selection.

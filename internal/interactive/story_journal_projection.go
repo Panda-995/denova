@@ -223,7 +223,7 @@ func (projection *storyJournalProjection) applyEvent(cursor conversationjournal.
 			if parentID != branch.Head {
 				branch.HistoryEpoch = record.Envelope.ID
 			}
-		case StoryEventTypeTurnBackgroundRevised, StoryEventTypeStateDelta, StoryEventTypeTurnInterrupted, StoryEventTypeTurnStateRevised, StoryEventTypeStoryConfigUpdated, StoryEventTypeBranchPlanRevised:
+		case StoryEventTypeTurnPresentationRevised, StoryEventTypeTurnBackgroundRevised, StoryEventTypeStateDelta, StoryEventTypeTurnInterrupted, StoryEventTypeTurnStateRevised, StoryEventTypeStoryConfigUpdated, StoryEventTypeBranchPlanRevised:
 			// These affect next-turn preparation, not canonical raw messages.
 		case StoryEventTypeBranch, StoryEventTypeBranchHeadMoved, StoryEventTypeTurnVersionSelected, StoryEventTypeTurnNarrativeRevised:
 			branch.HistoryEpoch, branch.HistoryRevision = record.Envelope.ID, record.Envelope.ID
@@ -389,7 +389,7 @@ func (projection *storyJournalProjection) applyEvent(cursor conversationjournal.
 		}
 		projection.TurnDrafts[turnDraftKey(event.BranchID, event.Draft.Identity)] = storyDraftLocator{ID: event.ID, Cursor: cursor}
 	case StoryEventTypeHotChoices,
-		StoryEventTypeTurnBackgroundRevised, StoryEventTypeTurnNarrativeRevised, StoryEventTypeTurnDisplayAppended,
+		StoryEventTypeTurnPresentationRevised, StoryEventTypeTurnBackgroundRevised, StoryEventTypeTurnNarrativeRevised, StoryEventTypeTurnDisplayAppended,
 		StoryEventTypeStoryConfigUpdated, StoryEventTypeBranchSwitched, StoryEventTypeBranchArchived:
 		// Side/audit records do not independently advance branch state.
 	default:

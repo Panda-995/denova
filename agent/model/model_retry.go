@@ -30,17 +30,19 @@ type ModelOutputReview struct {
 	Reason   string
 }
 
-const modelRepairFeedbackMaxBytes = 64 * 1024
+const modelFeedbackMaxBytes = 64 * 1024
 
-func ModelRepairMessages(review ModelOutputReview) ([]*agentschema.Message, error) {
+// ModelFeedbackMessages renders bounded, attributed model feedback. Callers
+// decide whether it is temporary repair feedback or accepted continuation.
+func ModelFeedbackMessages(fragments []agentschema.ContextFragment) ([]*agentschema.Message, error) {
 	var messages []*agentschema.Message
 	total := 0
-	for _, fragment := range review.Feedback {
+	for _, fragment := range fragments {
 		if fragment.Source == "" || fragment.Purpose == "" || fragment.HardLimit <= 0 {
 			return nil, errors.New("model output feedback requires source, purpose, and a positive hard limit")
 		}
 		total += len(fragment.Content)
-		if len(fragment.Content) > fragment.HardLimit || total > modelRepairFeedbackMaxBytes {
+		if len(fragment.Content) > fragment.HardLimit || total > modelFeedbackMaxBytes {
 			return nil, errors.New("model output feedback exceeds its byte limit")
 		}
 		role := fragment.Role

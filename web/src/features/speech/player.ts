@@ -1,7 +1,9 @@
+import { randomUUID } from '@/lib/uuid'
 import { APIError, fetchAPI, responseAPIError } from '@/lib/api-client'
 import i18n from '@/i18n'
 import type { SpeechSettings } from '@/features/settings/types'
 import { speechChunks } from './text'
+import { claimAudioFocus, releaseAudioFocus } from './audio-focus'
 
 export type SpeechStatus = 'idle' | 'loading' | 'playing' | 'paused' | 'stopped' | 'ended' | 'error' | 'blocked' | 'empty'
 export interface SpeechState {
@@ -63,6 +65,7 @@ export class SpeechPlayer {
   }
   private release(task?: SpeechTask) { task?.urls.forEach(url => URL.revokeObjectURL(url)) }
   private halt() {
+    releaseAudioFocus(this.pause)
     this.epoch++
     this.abort?.abort()
     this.abort = undefined
@@ -116,6 +119,7 @@ export class SpeechPlayer {
     this.task = task
     this.index = 0
     this.paused = false
+    claimAudioFocus(this.pause)
     this.publish({ owner: task.owner, turnId: task.turnId, segment: 1, total: task.chunks.length, error: '' })
     void this.loadSegment()
   }
@@ -130,7 +134,7 @@ export class SpeechPlayer {
     try {
       let url = task.urls.get(index)
       if (!url) {
-        this.requestID = crypto.randomUUID()
+        this.requestID = randomUUID()
         const response = await fetchAPI('/api/speech', { method: 'POST', signal: abort.signal, suppressBackendUnavailableToast: true,
           headers: { 'Content-Type': 'application/json', 'X-Denova-Locale': i18n.language },
           body: JSON.stringify({ id: this.requestID, input: task.chunks[index], ...(task.preview ? { preview: task.preview } : {}) }) })
@@ -152,18 +156,20 @@ export class SpeechPlayer {
         if (epoch !== this.epoch) return
         if (this.index + 1 < task.chunks.length) { this.index++; void this.loadSegment() }
         else if (this.queue.length) this.begin(this.queue.shift()!)
-        else this.publish({ status: 'ended' })
+        else { releaseAudioFocus(this.pause); this.publish({ status: 'ended' }) }
       }
       audio.onerror = () => {
         if (epoch !== this.epoch) return
         const badURL = task.urls.get(index)
         if (badURL) URL.revokeObjectURL(badURL)
         task.urls.delete(index)
+        releaseAudioFocus(this.pause)
         this.publish({ status: 'error', error: 'speech.error.audio' })
       }
       if (!this.paused) await this.play(epoch)
     } catch (error) {
       if (epoch !== this.epoch || abort.signal.aborted) return
+      releaseAudioFocus(this.pause)
       const code = error instanceof APIError ? error.code : error instanceof Error ? error.message : ''
       const key = code?.startsWith('speech.error.') ? code : 'speech.error.network'
       console.warn('[speech] Synthesis failed', { reason: key, segment: index + 1 })
@@ -181,13 +187,15 @@ export class SpeechPlayer {
       }
     } catch (error) {
       if (epoch !== this.epoch) return
+      releaseAudioFocus(this.pause)
       const blocked = (error instanceof Error || error instanceof DOMException) && error.name === 'NotAllowedError'
       this.publish({ status: blocked ? 'blocked' : 'error', error: blocked ? '' : 'speech.error.audio' })
     }
   }
-  pause = () => { this.paused = true; this.audio?.pause(); this.publish({ status: 'paused' }) }
+  pause = () => { releaseAudioFocus(this.pause); this.paused = true; this.audio?.pause(); this.publish({ status: 'paused' }) }
   resume = () => {
     this.paused = false
+    claimAudioFocus(this.pause)
     if (this.abort) this.publish({ status: 'loading' })
     else if (this.state.status === 'error' || !this.audio?.getAttribute('src')) void this.loadSegment()
     else void this.play()
@@ -198,6 +206,7 @@ export class SpeechPlayer {
     this.queue.forEach(task => this.release(task))
     this.queue = []
     this.paused = false
+    claimAudioFocus(this.pause)
     this.index = 0
     void this.loadSegment()
   }

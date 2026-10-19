@@ -17,7 +17,7 @@ permissions:
 jobs:
   github-release:
     name: Build GitHub Release assets
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 

@@ -23,6 +23,7 @@ const (
 	StoryEventTypeBranch                           = "branch"
 	StoryEventTypeHotChoices                       = "hot_choices"
 	StoryEventTypeTurnVersionSelected              = "turn_version_selected"
+	StoryEventTypeTurnPresentationRevised          = "turn_presentation_revised"
 	StoryEventTypeTurnBackgroundRevised            = "turn_background_revised"
 	StoryEventTypeTurnNarrativeRevised             = "turn_narrative_revised"
 	StoryEventTypeTurnDisplayAppended              = "turn_display_appended"
@@ -50,20 +51,21 @@ var persistedStoryEventModelContextChanges = map[string]bool{
 	StoryEventTypeModelContextProviderContinuation: false,
 	// The parent Turn already advances the context revision in the same atomic
 	// transaction. This side event only carries its opaque provider state.
-	StoryEventTypeProviderContinuation:  false,
-	StoryEventTypeTurn:                  true,
-	StoryEventTypeStateDelta:            true,
-	StoryEventTypeBranch:                true,
-	StoryEventTypeHotChoices:            false,
-	StoryEventTypeTurnVersionSelected:   true,
-	StoryEventTypeTurnBackgroundRevised: true,
-	StoryEventTypeTurnNarrativeRevised:  true,
-	StoryEventTypeTurnDisplayAppended:   false,
-	StoryEventTypeTurnStateRevised:      true,
-	StoryEventTypeStoryConfigUpdated:    true,
-	StoryEventTypeBranchSwitched:        false,
-	StoryEventTypeBranchArchived:        false,
-	StoryEventTypeBranchHeadMoved:       true,
+	StoryEventTypeProviderContinuation:    false,
+	StoryEventTypeTurn:                    true,
+	StoryEventTypeStateDelta:              true,
+	StoryEventTypeBranch:                  true,
+	StoryEventTypeHotChoices:              false,
+	StoryEventTypeTurnVersionSelected:     true,
+	StoryEventTypeTurnBackgroundRevised:   true,
+	StoryEventTypeTurnPresentationRevised: true,
+	StoryEventTypeTurnNarrativeRevised:    true,
+	StoryEventTypeTurnDisplayAppended:     false,
+	StoryEventTypeTurnStateRevised:        true,
+	StoryEventTypeStoryConfigUpdated:      true,
+	StoryEventTypeBranchSwitched:          false,
+	StoryEventTypeBranchArchived:          false,
+	StoryEventTypeBranchHeadMoved:         true,
 	// The owning Turn already advances the model-context revision in the same
 	// atomic transaction. This private event only carries its next-turn plan.
 	StoryEventTypeBranchPlanUpdated: false,

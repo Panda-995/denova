@@ -177,7 +177,7 @@ describe('NewStorySetupPanel', () => {
     await user.click(screen.getByRole('button', { name: '开始故事' }))
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1))
     expect(onCreate.mock.calls[0][0].presentation_settings).toEqual({
-      background: false, characters: false,
+      background: false, characters: false, ambient: false,
       default_background: { item_id: 'station', asset_id: 'day', path: 'assets/day.png', name: '白昼' },
     })
   })
@@ -317,6 +317,47 @@ describe('NewStorySetupPanel', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '开始故事' })).toBeEnabled())
     expect(screen.getByRole('combobox', { name: '模型配置' })).toHaveTextContent('默认模型')
     expect(screen.getByRole('combobox', { name: '思考强度' })).toHaveTextContent('中')
+  })
+
+  it('keeps loaded model controls stable while saving and refreshing remembered choices', async () => {
+    const controller = conversationConfigController()
+    const props = {
+      projectId: 'project-1',
+      tellers: [teller],
+      planningTemplates: [planningTemplate],
+      imagePresets: [],
+      loreItems: [loreCharacter],
+      onCancel: vi.fn(),
+      onCreate: vi.fn(),
+    }
+    const { rerender } = render(<NewStorySetupPanel {...props} conversationConfig={controller} />)
+    const model = screen.getByRole('combobox', { name: '模型配置' })
+    const thinking = screen.getByRole('combobox', { name: '思考强度' })
+    const descriptionText = '用于当前故事；模型和思考强度也会记住，用于新故事。'
+    const description = screen.getByText(descriptionText)
+    await waitFor(() => expect(model).toBeEnabled())
+    expect(screen.getByRole('button', { name: '开始故事' })).toBeEnabled()
+
+    rerender(<NewStorySetupPanel {...props} conversationConfig={{ ...controller, saving: true }} />)
+    expect(description).toHaveTextContent(descriptionText)
+    expect(screen.getByRole('combobox', { name: '模型配置' })).toBe(model)
+    expect(model).toBeDisabled()
+    expect(thinking).toBeDisabled()
+    expect(screen.getByRole('button', { name: '开始故事' })).toBeDisabled()
+
+    const updated = { ...controller, snapshot: { ...controller.snapshot!, profile_id: 'creative', thinking_level: 'high' as const } }
+    rerender(<NewStorySetupPanel {...props} conversationConfig={{ ...updated, loading: true }} />)
+    expect(description).toHaveTextContent(descriptionText)
+    expect(model).toHaveTextContent('创意模型')
+    expect(thinking).toHaveTextContent('高')
+    expect(model).toBeDisabled()
+    expect(screen.getByRole('button', { name: '开始故事' })).toBeDisabled()
+
+    rerender(<NewStorySetupPanel {...props} conversationConfig={updated} />)
+    expect(screen.getByRole('combobox', { name: '模型配置' })).toBe(model)
+    expect(description).toHaveTextContent(descriptionText)
+    expect(model).toBeEnabled()
+    expect(screen.getByRole('button', { name: '开始故事' })).toBeEnabled()
   })
 
   it('seeds book resources once and keeps explicit background clearing local', async () => {

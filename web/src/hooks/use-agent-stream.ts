@@ -1,3 +1,4 @@
+import { randomUUID } from '@/lib/uuid'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChatRequestOptions, ChatTransport, UIMessageChunk } from 'ai'
 import type { AgentUIMessage } from '@/lib/agent-ui'
@@ -35,7 +36,7 @@ export function useAgentStream(options: StreamOptions) {
   const [completion, setCompletion] = useState<AgentStreamCompletion>(null)
   const [error, setError] = useState<Error>()
   const connection = useRef<Connection | null>(null)
-  const chatID = useRef(crypto.randomUUID())
+  const chatID = useRef(randomUUID())
   const setMessages = useCallback((update: MessageUpdate) => {
     const next = typeof update === 'function' ? update(currentMessages.current) : update
     currentMessages.current = next
@@ -123,7 +124,7 @@ export function useAgentStream(options: StreamOptions) {
   }, [batcher, disconnect, setMessages])
 
   const sendMessage = useCallback((message: Omit<AgentUIMessage, 'id'> & { id?: string }, request: ChatRequestOptions = {}) => {
-    const user = { ...message, id: message.id || crypto.randomUUID() }
+    const user = { ...message, id: message.id || randomUUID() }
     setMessages(current => [...current, user])
     return connect('submit', active => options.transport.sendMessages({
       ...request, trigger: 'submit-message', chatId: chatID.current, messageId: user.id,

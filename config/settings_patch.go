@@ -97,6 +97,9 @@ func ApplySettingsMergePatch(existing Settings, changes json.RawMessage) (Settin
 	if err := next.Market.Validate(); err != nil {
 		return Settings{}, err
 	}
+	if err := next.WebAccess.Validate(); err != nil {
+		return Settings{}, fmt.Errorf("%w: %v", ErrInvalidSettingsPatch, err)
+	}
 	switch next.InteractiveStageCharacterLayout {
 	case "", "center", "left", "right", "sides":
 	default:

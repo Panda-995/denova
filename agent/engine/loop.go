@@ -402,9 +402,18 @@ func (agent *modelToolLoop) run(parent context.Context, input *loopInput, option
 		}
 
 		if len(assistant.ToolCalls) == 0 {
+			var continued bool
+			ctx, continued, err = agent.continueAfterResponse(ctx, state, assistant, events)
+			if err != nil {
+				events.Send(agent.errorEvent(err))
+				return
+			}
 			if cancelErr := options.cancel.safePoint(cancelAfterModel); cancelErr != nil {
 				events.Send(agent.errorEvent(cancelErr))
 				return
+			}
+			if continued {
+				continue
 			}
 			completionReady, waitErr := waitForTrackedTaskCompletionsAtSafePoint(
 				ctx,

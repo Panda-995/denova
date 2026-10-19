@@ -33,7 +33,7 @@ func TestBackgroundFocusPersistsInOpeningAndTurnJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	background.Focus = &interactive.ImageFocus{X: 0.3, Y: 0.7}
-	if err := store.UpdateTurnBackground(story.ID, interactive.UpdateTurnBackgroundRequest{BranchID: "main", TurnID: turn.ID, Background: background}); err != nil {
+	if err := store.UpdateTurnPresentation(story.ID, interactive.UpdateTurnPresentationRequest{BranchID: "main", TurnID: turn.ID, Presentation: presentationPatch(t, background)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -50,11 +50,11 @@ func TestBackgroundFocusPersistsInOpeningAndTurnJournal(t *testing.T) {
 		t.Fatalf("focus recovery changed scene: %+v", got)
 	}
 	background.Focus = &interactive.ImageFocus{X: -1, Y: 0.5}
-	if err := store.UpdateTurnBackground(story.ID, interactive.UpdateTurnBackgroundRequest{BranchID: "main", TurnID: turn.ID, Background: background}); err == nil {
+	if err := store.UpdateTurnPresentation(story.ID, interactive.UpdateTurnPresentationRequest{BranchID: "main", TurnID: turn.ID, Presentation: presentationPatch(t, background)}); err == nil {
 		t.Fatal("invalid focus accepted")
 	}
 	background.Focus = nil
-	if err := store.UpdateTurnBackground(story.ID, interactive.UpdateTurnBackgroundRequest{BranchID: "main", TurnID: turn.ID, Background: background}); err != nil {
+	if err := store.UpdateTurnPresentation(story.ID, interactive.UpdateTurnPresentationRequest{BranchID: "main", TurnID: turn.ID, Presentation: presentationPatch(t, background)}); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, err = store.Snapshot(story.ID, "main")

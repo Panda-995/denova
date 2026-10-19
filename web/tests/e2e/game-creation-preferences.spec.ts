@@ -13,13 +13,17 @@ for (const [theme, locale] of [['dark', 'zh-CN'], ['light', 'en-US']] as const) 
       id: 'hero', name: 'Book protagonist', type: 'character', content: 'A traveler at an old station.', tags: ['主角'],
     } })
     expect(hero.ok(), await hero.text()).toBe(true)
+    const companion = await request.post(`/api/projects/${book.projectId}/book/lore/items`, { data: {
+      id: 'companion', name: 'Remembered companion', type: 'character', content: 'An engineer traveling with the protagonist.', tags: ['同伴'],
+    } })
+    expect(companion.ok(), await companion.text()).toBe(true)
 
     const defaults = { narrative_style_id: 'classic', planning_template_id: 'default', event_package_ids: [], default_background: { mode: 'none' } }
     const saved = await request.patch(settingsURL, { data: { layer: 'workspace', changes: { game_creation_defaults: defaults } } })
     expect(saved.ok(), await saved.text()).toBe(true)
     const input = {
       title: 'Original creation', custom_agent_id: '',
-      protagonist: { mode: 'custom', name: 'Previous protagonist', profile: 'Do not reuse story content.' },
+      protagonist: { mode: 'custom', name: 'Previous protagonist', profile: 'A traveler searching for a lost friend.' },
       opening: { mode: 'custom', custom_text: 'Previous opening content.' },
       planning_template_id: 'directed-longform', planning_mode: 'disabled', reply_target_chars: 1200, choice_count: 4,
       module_refs: { narrative_style_id: 'classic', actor_state_id: 'default', rule_system_id: 'default', image_preset_id: 'game-cg', event_packages_disabled: true },
@@ -36,8 +40,8 @@ for (const [theme, locale] of [['dark', 'zh-CN'], ['light', 'en-US']] as const) 
       planning_enabled: false, reply_target_chars: 1200, choice_count: 4, image_interval_turns: 7,
       difficulty_shift: 1, roll_modifier: 3, state_schema_mode: 'fixed_template', background: false, characters: false,
       resources: { ...defaults, planning_template_id: 'directed-longform' },
+      protagonist: input.protagonist,
     })
-    expect(remembered).not.toHaveProperty('protagonist')
     expect(remembered).not.toHaveProperty('opening')
 
     // A failed creation and later tuning of an existing Story do not change the seed.
@@ -68,12 +72,13 @@ for (const [theme, locale] of [['dark', 'zh-CN'], ['light', 'en-US']] as const) 
     await expect(length).toHaveText('1200')
     await expect(background).not.toBeChecked()
     await expect(page.getByTestId('story-creation-preferences')).toContainText(zh ? '已沿用本书上次成功创建时的配置。' : 'Using the settings from this book’s last successful creation.')
-    const opening = page.locator('textarea').first()
+    const opening = page.getByPlaceholder(zh ? '可选。写下必须保留的场景、人物处境或第一事件；留空则自动生成。' : 'Optional. Write a scene, character situation, or first event to preserve, or leave this blank to generate the opening.')
     await expect(opening).toHaveValue('')
-    await expect(page.getByRole('radio', { name: zh ? '自定义角色' : 'Custom character', exact: true })).not.toBeChecked()
+    await expect(page.getByRole('radio', { name: zh ? '自定义角色' : 'Custom character', exact: true })).toBeChecked()
 
-    await page.getByRole('radio', { name: zh ? '自定义角色' : 'Custom character', exact: true }).check()
     const name = page.getByRole('textbox', { name: zh ? '角色名称' : 'Character name', exact: true })
+    await expect(name).toHaveValue(input.protagonist.name)
+    await expect(page.getByRole('textbox', { name: zh ? '角色设定' : 'Character profile', exact: true })).toHaveValue(input.protagonist.profile)
     await name.fill('Current protagonist')
     const customOpening = page.locator('textarea[placeholder]').last()
     const longOpening = 'A new opening that must survive reset. '.repeat(40)
@@ -123,8 +128,12 @@ for (const [theme, locale] of [['dark', 'zh-CN'], ['light', 'en-US']] as const) 
     await page.setViewportSize({ width: 1440, height: 900 })
     await openNew()
     await expect(choice).toHaveValue('4')
+    await expect(name).toHaveValue(input.protagonist.name)
 
     // A subsequent successful UI creation replaces the remembered snapshot.
+    await page.getByRole('radio', { name: zh ? '从资料库选择' : 'Choose from Lore', exact: true }).check()
+    await page.getByRole('button', { name: zh ? '更换' : 'Change', exact: true }).click()
+    await page.getByRole('option', { name: /Remembered companion/ }).click()
     await choice.fill('2')
     await choice.press('Enter')
     const creating = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/interactive/stories')
@@ -137,9 +146,10 @@ for (const [theme, locale] of [['dark', 'zh-CN'], ['light', 'en-US']] as const) 
       planning_template_id: input.planning_template_id, planning_mode: 'disabled', reply_target_chars: 1200, choice_count: 2,
       module_refs: input.module_refs, image_settings: input.image_settings, check_settings: input.check_settings,
       presentation_settings: input.presentation_settings, state_schema_policy: input.state_schema_policy,
-      protagonist: { mode: 'lore', source_lore_item_id: 'hero' }, opening: { mode: 'ai' },
+      protagonist: { mode: 'lore', source_lore_item_id: 'companion' }, opening: { mode: 'ai' },
     })
-    expect((await readSettings()).game_last_creation).toMatchObject({ ...remembered, choice_count: 2 })
+    const secondRemembered = { ...remembered, choice_count: 2, protagonist: { mode: 'lore', source_lore_item_id: 'companion' } }
+    expect((await readSettings()).game_last_creation).toEqual(secondRemembered)
     expect((await readSettings()).game_creation_defaults).toEqual(updatedDefaults)
     await expect.poll(async () => (await (await request.get(`/api/interactive/stories/${second.id}/snapshot?branch=main`)).json()).turn_count).toBe(1)
     // The opening finishes its image-policy check after the turn is durable.
@@ -160,5 +170,14 @@ for (const [theme, locale] of [['dark', 'zh-CN'], ['light', 'en-US']] as const) 
     await page.reload()
     await openNew()
     await expect(choice).toHaveValue('2')
+    await expect(page.getByText('Remembered companion', { exact: true })).toBeVisible()
+
+    // An unavailable remembered character falls back to the tagged character.
+    const removed = await request.delete(`/api/projects/${book.projectId}/book/lore/items/companion`)
+    expect(removed.ok(), await removed.text()).toBe(true)
+    await page.reload()
+    await openNew()
+    await expect(page.getByText('Book protagonist', { exact: true })).toBeVisible()
+    expect((await readSettings()).game_last_creation).toEqual(secondRemembered)
   })
 }

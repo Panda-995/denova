@@ -550,7 +550,7 @@ func storyHistoryProjectionRecords(pathNewestFirst, candidates []locatedStoryRec
 			// A bounded recent graph may include neighboring branches. Only the
 			// active ancestry contributes snapshot.Turns or model context.
 			include = record.Envelope.BranchID != branchID || versionKeys[turnVersionKey(branchID, parentIDFromRaw(record.Raw))]
-		case StoryEventTypeTurnBackgroundRevised, StoryEventTypeTurnNarrativeRevised, StoryEventTypeTurnDisplayAppended, StoryEventTypeTurnStateRevised:
+		case StoryEventTypeTurnPresentationRevised, StoryEventTypeTurnBackgroundRevised, StoryEventTypeTurnNarrativeRevised, StoryEventTypeTurnDisplayAppended, StoryEventTypeTurnStateRevised:
 			include = pathIDs[storyRevisionTurnID(record)]
 		case StoryEventTypeHotChoices:
 			include = pathIDs[parentIDFromRaw(record.Raw)]
@@ -591,6 +591,10 @@ func storyHistoryProjectionRecords(pathNewestFirst, candidates []locatedStoryRec
 
 func storyRevisionTurnID(record StoryEventRecord) string {
 	switch record.Envelope.Type {
+	case StoryEventTypeTurnPresentationRevised:
+		var event TurnPresentationRevisedEvent
+		_ = mapToStruct(record.Raw, &event)
+		return event.TurnID
 	case StoryEventTypeTurnBackgroundRevised:
 		var event TurnBackgroundRevisedEvent
 		_ = mapToStruct(record.Raw, &event)
@@ -615,7 +619,7 @@ func storyRevisionTurnID(record StoryEventRecord) string {
 func isStoryHistorySideCandidate(eventType string) bool {
 	switch eventType {
 	case StoryEventTypeTurn, StoryEventTypePlayerInput, StoryEventTypeTurnInterrupted, StoryEventTypeModelContextBatch, StoryEventTypeModelContextProviderContinuation, StoryEventTypeProviderContinuation, StoryEventTypeHotChoices,
-		StoryEventTypeTurnBackgroundRevised, StoryEventTypeTurnNarrativeRevised, StoryEventTypeTurnDisplayAppended, StoryEventTypeTurnStateRevised:
+		StoryEventTypeTurnPresentationRevised, StoryEventTypeTurnBackgroundRevised, StoryEventTypeTurnNarrativeRevised, StoryEventTypeTurnDisplayAppended, StoryEventTypeTurnStateRevised:
 		return true
 	default:
 		return false

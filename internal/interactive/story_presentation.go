@@ -14,6 +14,8 @@ type StoryPresentationSettings struct {
 	Background        bool                  `json:"background"`
 	DefaultBackground *PresentationMaterial `json:"default_background,omitempty"`
 	Characters        bool                  `json:"characters"`
+	Ambient           bool                  `json:"ambient"`
+	DefaultAmbient    *PresentationMaterial `json:"default_ambient,omitempty"`
 }
 
 func NormalizeStoryPresentationSettings(settings *StoryPresentationSettings) *StoryPresentationSettings {
@@ -25,11 +27,15 @@ func NormalizeStoryPresentationSettings(settings *StoryPresentationSettings) *St
 		background := settings.DefaultBackground.clone()
 		copy.DefaultBackground = &background
 	}
+	if settings.DefaultAmbient != nil {
+		ambient := settings.DefaultAmbient.clone()
+		copy.DefaultAmbient = &ambient
+	}
 	return &copy
 }
 
-// PresentationMaterial pins a Lore association to its concrete project-relative
-// file. History must not resolve the item's current cover or current materials.
+// PresentationMaterial pins a Lore image or audio association to its concrete
+// project-relative file. History never resolves the item's current materials.
 type PresentationMaterial struct {
 	ItemID  string `json:"item_id"`
 	AssetID string `json:"asset_id"`
@@ -61,6 +67,7 @@ func (f *ImageFocus) valid() bool {
 type TurnPresentation struct {
 	Background *PresentationMaterial  `json:"background,omitempty"`
 	Characters []PresentationMaterial `json:"characters,omitempty"`
+	Ambient    *PresentationMaterial  `json:"ambient,omitempty"`
 }
 
 func (p *TurnPresentation) Clone() *TurnPresentation {
@@ -71,6 +78,10 @@ func (p *TurnPresentation) Clone() *TurnPresentation {
 	if p.Background != nil {
 		background := p.Background.clone()
 		copy.Background = &background
+	}
+	if p.Ambient != nil {
+		ambient := p.Ambient.clone()
+		copy.Ambient = &ambient
 	}
 	copy.Characters = append([]PresentationMaterial(nil), p.Characters...)
 	for i := range copy.Characters {
@@ -84,11 +95,12 @@ func (p *TurnPresentation) Clone() *TurnPresentation {
 type PresentationPatchSchema struct {
 	Background *PresentationReferenceSchema  `json:"background,omitempty" jsonschema_description:"Replace the background with an enabled Lore image reference. null clears it; omission preserves it."`
 	Characters []PresentationReferenceSchema `json:"characters,omitempty" jsonschema_description:"Patch characters by Lore item_id. Omitted characters and an empty array preserve the cast. Existing characters keep their position; new ones append. At most 16 characters can be on stage."`
+	Ambient    *PresentationReferenceSchema  `json:"ambient,omitempty" jsonschema_description:"Replace the single looping ambience with an enabled local Lore audio reference. null clears it; omission preserves it. Select for the final scene, not mentions or memories."`
 }
 
 type PresentationReferenceSchema struct {
 	ItemID  string  `json:"item_id" jsonschema_description:"Exact enabled Lore item ID, not an Actor ID."`
-	AssetID *string `json:"asset_id" jsonschema_description:"Exact associated image asset ID. For a character only, explicit null removes that character. Missing or invalid IDs preserve the previous slot."`
+	AssetID *string `json:"asset_id" jsonschema_description:"Exact associated asset ID: an image for background/characters or audio for ambient. For a character only, explicit null removes that character. Missing or invalid IDs preserve the previous slot."`
 }
 
 type PresentationReceipt struct {
@@ -97,10 +109,10 @@ type PresentationReceipt struct {
 	Reasons []string `json:"reasons,omitempty"`
 }
 
-// ApplyPresentationPatch accepts independent visual changes without affecting
+// ApplyPresentationPatch accepts independent media changes without affecting
 // turn readiness. resolve must validate enabled Lore ownership and a readable
-// image file; it must never accept an arbitrary model-provided path.
-func ApplyPresentationPatch(base *TurnPresentation, raw json.RawMessage, settings *StoryPresentationSettings, resolve func(string, string) (PresentationMaterial, error)) (*TurnPresentation, *PresentationReceipt) {
+// file of the requested MIME prefix; it never accepts a model-provided path.
+func ApplyPresentationPatch(base *TurnPresentation, raw json.RawMessage, settings *StoryPresentationSettings, resolve func(itemID, assetID, mimePrefix string) (PresentationMaterial, error)) (*TurnPresentation, *PresentationReceipt) {
 	result := base.Clone()
 	if result == nil {
 		result = &TurnPresentation{}
@@ -121,18 +133,21 @@ func ApplyPresentationPatch(base *TurnPresentation, raw json.RawMessage, setting
 		return result, receipt
 	}
 	settings = NormalizeStoryPresentationSettings(settings)
-	apply := func(raw json.RawMessage, index int) {
-		background := index < 0
-		label := "background"
-		if !background {
+	apply := func(raw json.RawMessage, layer string, index int) {
+		label := layer
+		if layer == "characters" {
 			label = fmt.Sprintf("characters[%d]", index)
 		}
-		if (background && !settings.Background) || (!background && !settings.Characters) {
+		if (layer == "background" && !settings.Background) || (layer == "characters" && !settings.Characters) || (layer == "ambient" && !settings.Ambient) {
 			ignore(label + ": layer disabled")
 			return
 		}
-		if background && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-			result.Background = nil
+		if layer != "characters" && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			if layer == "background" {
+				result.Background = nil
+			} else {
+				result.Ambient = nil
+			}
 			receipt.Applied++
 			return
 		}
@@ -151,7 +166,7 @@ func ApplyPresentationPatch(base *TurnPresentation, raw json.RawMessage, setting
 				break
 			}
 		}
-		if !background && bytes.Equal(bytes.TrimSpace(ref.AssetID), []byte("null")) {
+		if layer == "characters" && bytes.Equal(bytes.TrimSpace(ref.AssetID), []byte("null")) {
 			if position >= 0 {
 				result.Characters = append(result.Characters[:position], result.Characters[position+1:]...)
 			}
@@ -163,16 +178,22 @@ func ApplyPresentationPatch(base *TurnPresentation, raw json.RawMessage, setting
 			ignore(label + ": invalid asset_id")
 			return
 		}
-		material, err := resolve(ref.ItemID, assetID)
+		mimePrefix := "image/"
+		if layer == "ambient" {
+			mimePrefix = "audio/"
+		}
+		material, err := resolve(ref.ItemID, assetID, mimePrefix)
 		if err != nil {
 			ignore(label + ": " + err.Error())
 			return
 		}
-		if background {
+		if layer == "background" {
 			if previous := result.Background; previous != nil && previous.ItemID == material.ItemID && previous.AssetID == material.AssetID && previous.Path == material.Path {
 				material.Focus = previous.Focus
 			}
 			result.Background = &material
+		} else if layer == "ambient" {
+			result.Ambient = &material
 		} else if position >= 0 {
 			result.Characters[position] = material
 		} else if len(result.Characters) < 16 {
@@ -184,7 +205,10 @@ func ApplyPresentationPatch(base *TurnPresentation, raw json.RawMessage, setting
 		receipt.Applied++
 	}
 	if background, exists := patch["background"]; exists {
-		apply(background, -1)
+		apply(background, "background", 0)
+	}
+	if ambient, exists := patch["ambient"]; exists {
+		apply(ambient, "ambient", 0)
 	}
 	if rawCharacters, exists := patch["characters"]; exists {
 		var characters []json.RawMessage
@@ -192,7 +216,7 @@ func ApplyPresentationPatch(base *TurnPresentation, raw json.RawMessage, setting
 			ignore("characters must be an array; previous cast retained")
 		} else {
 			for i, character := range characters {
-				apply(character, i)
+				apply(character, "characters", i)
 			}
 		}
 	}

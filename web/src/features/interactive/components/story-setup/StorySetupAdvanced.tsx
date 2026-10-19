@@ -51,6 +51,7 @@ interface StorySetupAdvancedProps {
   value: StorySetupSettings
   onChange: (value: StorySetupSettings) => void
   runtimeConfigLoading?: boolean
+  runtimeConfigPending?: boolean
   runtimeConfigError?: string | null
   onRuntimeConfigReload?: () => void
   onOpenPresets?: () => void
@@ -69,6 +70,7 @@ export function StorySetupAdvanced({
   value,
   onChange,
   runtimeConfigLoading = false,
+  runtimeConfigPending = false,
   runtimeConfigError,
   onRuntimeConfigReload,
   onOpenPresets,
@@ -138,8 +140,8 @@ export function StorySetupAdvanced({
     return options
   }, [modelCatalog, t, value.modelProfileId])
   const ruleEnabled = !refs.rule_system_disabled
-  const modelSelectionUnavailable = runtimeConfigLoading || Boolean(runtimeConfigError) || modelCatalogLoading || modelCatalogFailed
-  const runtimeSelectionUnavailable = runtimeConfigLoading || Boolean(runtimeConfigError)
+  const runtimeSelectionUnavailable = runtimeConfigLoading || runtimeConfigPending || Boolean(runtimeConfigError)
+  const modelSelectionUnavailable = runtimeSelectionUnavailable || modelCatalogLoading || modelCatalogFailed
   let modelDescription = t('storyPicker.setup.model.description')
   if (runtimeConfigLoading) modelDescription = t('storyPicker.setup.model.loading')
   if (modelCatalogFailed) modelDescription = t('storyPicker.setup.model.catalogFailed')

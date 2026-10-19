@@ -12,6 +12,34 @@ Denova records major user-visible features, important compatibility or data chan
 
 ## [Unreleased]
 
+## [v0.6.2] - 2026-10-19
+
+### Brief / 简要说明
+
+#### 中文
+
+- 新增 DeepSeek、Perplexity 和 Tavily 搜索服务配置与测试，以及随回合、分支保存的游戏场景环境音。
+- 修复游戏回合续写与恢复时的正文上下文丢失，以及局域网 HTTP 访问时的页面崩溃。
+
+#### English
+
+- Adds configurable DeepSeek, Perplexity, and Tavily search with connection testing, plus Game scene ambience saved with turns and branches.
+- Fixes lost narrative context during Game turn continuation and recovery, and page crashes over LAN HTTP.
+
+### Added / 新增
+
+- 搜索支持 DeepSeek、Perplexity 和 Tavily，可在服务列表中管理密钥、选择默认服务并测试搜索；网页读取保持原有流程。
+- Search supports DeepSeek, Perplexity, and Tavily with saved service credentials, a selectable default, and search testing; page reading keeps its existing flow.
+- 游戏舞台支持选择资料库音频作为循环环境音，随回合与分支保存；可手动控制播放或允许 Agent 随场景切换。
+- Game stages can loop Lore audio as scene ambience saved with turns and branches, with manual playback and optional Agent selection.
+
+### Fixed / 修复
+
+- 修复游戏回合补齐状态与选项时丢失已接受正文上下文的问题，并保持正常续轮与冷恢复的消息顺序。
+- Fixed lost accepted narrative context while completing Game turn state and choices, preserving message order during continuation and cold recovery.
+- 修复通过局域网 HTTP 地址访问时，浏览器缺少 `crypto.randomUUID` 导致页面崩溃及部分功能不可用的问题。
+- Fixed page crashes and affected features when accessing Denova over LAN HTTP in browsers without `crypto.randomUUID`.
+
 ## [v0.6.1] - 2026-10-19
 
 ### Brief / 简要说明

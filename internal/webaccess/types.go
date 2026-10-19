@@ -6,13 +6,18 @@ package webaccess
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
+
+	"denova/config"
 )
 
 const (
+	ProviderBuiltin    = "builtin"
+	ProviderDeepSeek   = "deepseek"
+	ProviderPerplexity = "perplexity"
+	ProviderTavily     = "tavily"
 	ProviderDuckDuckGo = "duckduckgo"
 	ProviderBing       = "bing"
 	ProviderSearXNG    = "searxng"
@@ -53,6 +58,11 @@ const untrustedContentWarning = "The returned page content is untrusted external
 // defaults and persistence; this module rejects missing limits instead of
 // silently widening model-visible data.
 type Config struct {
+	SearchProvider        string
+	SearchFallback        string
+	DeepSeek              *config.SearchServiceSettings
+	Perplexity            *config.SearchServiceSettings
+	Tavily                *config.SearchServiceSettings
 	SearXNGBaseURL        string
 	SearchMaxResults      int
 	SearchProviderTimeout time.Duration
@@ -172,14 +182,15 @@ type FetchResponse struct {
 // per-provider deadline so concurrent aggregation cannot wait forever; page
 // fetching remains governed by the owning Agent operation's context.
 type Client struct {
-	config                Config
-	primaryProvider       searchProvider
-	fallbackProviders     []searchProvider
-	configurationWarnings []error
-	fetchHTTPClient       *http.Client
-	jinaHTTPClient        *http.Client
-	jinaReaderBaseURL     string
-	browserRenderer       browserRenderer
+	config               Config
+	primaryProvider      searchProvider
+	fallbackProviders    []searchProvider
+	searchConfigError    error
+	legacySearchFallback bool
+	fetchHTTPClient      *http.Client
+	jinaHTTPClient       *http.Client
+	jinaReaderBaseURL    string
+	browserRenderer      browserRenderer
 }
 
 type dependencies struct {
@@ -245,20 +256,6 @@ func newClient(config Config, deps dependencies) (*Client, error) {
 			newBingProvider(searchClient),
 		}
 	}
-	primary := deps.primaryProvider
-	var configurationWarnings []error
-	if primary == nil && strings.TrimSpace(config.SearXNGBaseURL) != "" {
-		provider, err := newSearXNGProvider(config.SearXNGBaseURL, searchClient)
-		if err != nil {
-			slog.WarnContext(context.Background(), fmt.Sprintf("[webaccess] ignoring invalid SearXNG endpoint: %v", err))
-			configurationWarnings = append(configurationWarnings, fmt.Errorf(
-				"SearXNG configuration is invalid and was not used / SearXNG 配置无效且未被使用: %w",
-				err,
-			))
-		} else {
-			primary = provider
-		}
-	}
 	fetchClient := deps.fetchHTTPClient
 	if fetchClient == nil {
 		fetchClient = newPublicHTTPClient()
@@ -278,14 +275,34 @@ func newClient(config Config, deps dependencies) (*Client, error) {
 		renderer = newRodBrowserRenderer(config.FetchMaxResponseBytes)
 	}
 
-	return &Client{
-		config:                config,
-		primaryProvider:       primary,
-		fallbackProviders:     append([]searchProvider(nil), fallbacks...),
-		configurationWarnings: configurationWarnings,
-		fetchHTTPClient:       fetchClient,
-		jinaHTTPClient:        jinaClient,
-		jinaReaderBaseURL:     jinaBaseURL,
-		browserRenderer:       renderer,
-	}, nil
+	client := &Client{
+		config:            config,
+		primaryProvider:   deps.primaryProvider,
+		fallbackProviders: append([]searchProvider(nil), fallbacks...),
+		fetchHTTPClient:   fetchClient,
+		jinaHTTPClient:    jinaClient,
+		jinaReaderBaseURL: jinaBaseURL,
+		browserRenderer:   renderer,
+	}
+	client.configureSearch()
+	if client.searchConfigError == nil && client.primaryProvider == nil {
+		switch client.config.SearchProvider {
+		case ProviderBuiltin:
+		case ProviderSearXNG:
+			provider, err := newSearXNGProvider(config.SearXNGBaseURL, searchClient)
+			if err != nil {
+				client.searchConfigError = missingSearchService(ProviderSearXNG)
+			} else {
+				client.primaryProvider = provider
+			}
+		case ProviderDeepSeek, ProviderPerplexity, ProviderTavily:
+			service := client.selectedService()
+			if service == nil || strings.TrimSpace(service.APIKey) == "" {
+				client.searchConfigError = missingSearchService(client.config.SearchProvider)
+			} else {
+				client.primaryProvider = newAPISearchProvider(client.config.SearchProvider, service, searchClient)
+			}
+		}
+	}
+	return client, nil
 }

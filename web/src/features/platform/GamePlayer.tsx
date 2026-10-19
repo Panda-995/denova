@@ -1,3 +1,4 @@
+import { randomUUID } from '@/lib/uuid'
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react'
 import { flushSync } from 'react-dom'
 import { useTranslation } from 'react-i18next'
@@ -75,7 +76,7 @@ export function GamePlayer({
     try {
       if (!force && exitGuard.current && frame.current?.contentWindow) {
         const ready = await new Promise<boolean>(resolve => {
-          const id = crypto.randomUUID()
+          const id = randomUUID()
           // This bounds a frame handshake, never the Agent's execution time.
           const timer = window.setTimeout(() => { exitReply.current = null; resolve(false) }, 45000)
           exitReply.current = { id, finish: ok => { clearTimeout(timer); exitReply.current = null; resolve(ok) } }

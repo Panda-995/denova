@@ -1,3 +1,4 @@
+import { randomUUID } from '@/lib/uuid'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
@@ -34,7 +35,7 @@ export function BuildTerminal({
   const { t } = useTranslation()
   const [tab] = useState<AgentChatTerminalTab>({
     kind: 'terminal',
-    id: crypto.randomUUID(),
+    id: randomUUID(),
     projectId,
     workspace: '',
     group: 'primary',

@@ -8,7 +8,7 @@ vi.mock('@/features/settings/api', () => ({ patchProjectSettings: vi.fn(), patch
 vi.mock('../story-stage/use-stage-preferences', () => ({
   useStagePreferences: () => ({ scrimOpacity: 0.75, textMaxWidth: 896, lineHeight: 1.78, characterLayout: 'center', characterSize: 0.7 }),
 }))
-vi.mock('./StoryBackgroundSelect', () => ({ StoryBackgroundSelect: () => null }))
+vi.mock('./StoryMaterialSelect', () => ({ StoryMaterialSelect: () => null }))
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }))
 
 describe('StoryPresentationControls text width', () => {

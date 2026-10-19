@@ -7,6 +7,13 @@ import { GLOBAL_SETTINGS_TARGET, projectSettingsTarget, settingsQueryKeys, setti
 import type { SettingsTarget } from './query'
 import { SettingsSaveError, settingsSaveFiles } from './save-error'
 import type { SettingsPatch } from './merge-patch'
+import type { WebAccessSettings, WebSearchTestResult } from './types'
+
+export function testWebSearch(settings: WebAccessSettings, query: string, signal: AbortSignal): Promise<WebSearchTestResult> {
+  return requestJSON('/api/settings/web-search/test', {
+    method: 'POST', headers: jsonHeaders, body: JSON.stringify({ settings, query }), signal,
+  })
+}
 
 export { GLOBAL_SETTINGS_TARGET, projectSettingsTarget }
 export type { SettingsTarget }

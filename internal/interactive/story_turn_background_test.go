@@ -14,13 +14,14 @@ func TestManualBackgroundPersistsWithoutChangingTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stage := &TurnPresentation{Background: &PresentationMaterial{ItemID: "room", AssetID: "day", Path: "assets/day.png", Name: "Day"}, Characters: []PresentationMaterial{{ItemID: "hero", AssetID: "calm", Path: "assets/hero.png", Name: "Hero"}}}
+	ambient := &PresentationMaterial{ItemID: "room", AssetID: "rain", Path: "assets/rain.wav", Name: "Rain"}
+	stage := &TurnPresentation{Ambient: ambient, Background: &PresentationMaterial{ItemID: "room", AssetID: "day", Path: "assets/day.png", Name: "Day"}, Characters: []PresentationMaterial{{ItemID: "hero", AssetID: "calm", Path: "assets/hero.png", Name: "Hero"}}}
 	turn, _, err := store.AppendTurnWithState(story.ID, AppendTurnWithStateRequest{BranchID: "main", Narrative: "Original", TurnResult: &TurnResult{Choices: testTurnChoices(), Presentation: stage}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := UpdateTurnBackgroundRequest{BranchID: "main", TurnID: turn.ID}
-	if err := store.UpdateTurnBackground(story.ID, req); err != nil {
+	req := UpdateTurnPresentationRequest{BranchID: "main", TurnID: turn.ID, Presentation: []byte(`{"background":null}`)}
+	if err := store.UpdateTurnPresentation(story.ID, req); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -61,15 +62,15 @@ func TestManualBackgroundPersistsWithoutChangingTurn(t *testing.T) {
 	if !reflect.DeepEqual(scene.Turn.TurnResult, &want) {
 		t.Fatal("scene lost manual background")
 	}
-	req.Background = &PresentationMaterial{ItemID: "missing", AssetID: "missing", Path: "assets/fake.png"}
-	if err := store.UpdateTurnBackground(story.ID, req); err == nil {
+	req.Presentation = []byte(`{"background":{"item_id":"missing","asset_id":"missing"}}`)
+	if err := store.UpdateTurnPresentation(story.ID, req); err == nil {
 		t.Fatal("invalid material accepted")
 	}
 	if _, err := store.AppendTurn(story.ID, AppendTurnRequest{BranchID: "main", Narrative: "Next"}); err != nil {
 		t.Fatal(err)
 	}
-	req.Background = nil
-	if err := store.UpdateTurnBackground(story.ID, req); err == nil {
+	req.Presentation = []byte(`{"background":null}`)
+	if err := store.UpdateTurnPresentation(story.ID, req); err == nil {
 		t.Fatal("stale turn accepted")
 	}
 }

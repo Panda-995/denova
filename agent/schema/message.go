@@ -110,6 +110,14 @@ type TaskCompletionMessageMeta struct {
 	Recipient    string `json:"recipient"`
 }
 
+// ExtraKeyAgentContinuation marks backend feedback that continues an accepted
+// response. It remains ordinary user history, distinct from human input.
+const ExtraKeyAgentContinuation = "agent_continuation"
+
+func IsAgentContinuationMessage(message *Message) bool {
+	return message != nil && message.Role == User && message.Extra[ExtraKeyAgentContinuation] == true
+}
+
 // ToolResultSummary preserves transcript pairing and bounded context policy
 // metadata without persisting display content or the full durability payload.
 type ToolResultSummary struct {

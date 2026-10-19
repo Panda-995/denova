@@ -8,6 +8,7 @@ import (
 
 	"denova/config"
 	"denova/internal/agents"
+	agentinteractive "denova/internal/agents/interactive"
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
 	"denova/internal/agents/toolresult"
@@ -178,9 +179,6 @@ func interactiveContextMessageFromSchema(msg *agents.Message) (interactive.Model
 	}
 	switch cloned.Role {
 	case agents.RoleAssistant:
-		if len(cloned.ToolCalls) == 0 {
-			return interactive.ModelContextMessage{}, false
-		}
 		return interactive.ModelContextMessageFromAgent(cloned, continuation), true
 	case agents.RoleTool:
 		if strings.TrimSpace(cloned.ToolCallID) == "" && strings.TrimSpace(cloned.ToolName) == "" {
@@ -188,7 +186,7 @@ func interactiveContextMessageFromSchema(msg *agents.Message) (interactive.Model
 		}
 		return interactive.ModelContextMessageFromAgent(cloned, continuation), true
 	case agents.RoleUser:
-		if cloned.TaskCompletion == nil && !agentcontext.IsContextStateMessage(cloned) {
+		if cloned.TaskCompletion == nil && !agentcontext.IsContextStateMessage(cloned) && !agentschema.IsAgentContinuationMessage(cloned) {
 			return interactive.ModelContextMessage{}, false
 		}
 		return interactive.ModelContextMessageFromAgent(cloned, continuation), true
@@ -325,6 +323,11 @@ func (c *Conversation) CommitAgentCanonicalContext(ctx context.Context, request 
 	if c == nil || c.store == nil {
 		return "", fmt.Errorf("game conversation is unavailable")
 	}
+	c.turnCheckMu.Lock()
+	defer c.turnCheckMu.Unlock()
+	if err := c.loadTurnDraft(); err != nil {
+		return "", err
+	}
 	converted := make([]interactive.ModelContextMessage, 0, len(request.Messages))
 	for index := range request.Messages {
 		message := request.Messages[index].Clone()
@@ -362,9 +365,21 @@ func (c *Conversation) CommitAgentCanonicalContext(ctx context.Context, request 
 		return "", err
 	}
 	intent.Checkpoint = request.Checkpoint
+	c.mu.Lock()
+	draft := c.turnDraft
+	c.mu.Unlock()
+	if draft.Narrative == "" && len(request.Messages) > 0 && agentinteractive.OutputContainsNarrativeCandidate(&request.Messages[0]) {
+		draft.Narrative, draft.NarrativeSource = request.Messages[0].Content, "canonical_model_message"
+		intent.Draft = &draft
+	}
 	receipt, err := c.store.AppendModelContextBatch(c.storyID, intent)
 	if err != nil {
 		return "", err
+	}
+	if intent.Draft != nil {
+		c.mu.Lock()
+		c.turnDraft = draft
+		c.mu.Unlock()
 	}
 	if request.Sequence >= currentSequence {
 		c.mu.Lock()

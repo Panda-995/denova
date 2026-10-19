@@ -61,6 +61,7 @@ export function NewStorySetupPanel({
   const initialProtagonist = story?.protagonist || defaultStoryProtagonist(loreItems)
   const [planningTemplateId, setPlanningTemplateId] = useState(story?.planning_template_id || 'default')
   const [protagonist, setProtagonist] = useState<StoryProtagonist>(initialProtagonist)
+  const [rememberedProtagonist, setRememberedProtagonist] = useState<StoryProtagonist>()
   const [opening, setOpening] = useState<StoryOpeningConfig>(() => story?.opening || { mode: 'custom' })
   const [settings, setSettings] = useState<StorySetupSettings>(() => initialSettings(story, conversationConfig.snapshot))
   const [advancedOpen, setAdvancedOpen] = useState(!isMobile)
@@ -83,7 +84,10 @@ export function NewStorySetupPanel({
     checks: settings.moduleRefs.rule_system_disabled ? t('storyPicker.setup.advanced.checksOff') : t('storyPicker.setup.advanced.checksOn'),
     images: settings.imageSettings.mode === 'interval' ? t('storyPicker.setup.advanced.imagesOn') : t('storyPicker.setup.advanced.imagesOff'),
   }), [settings.imageSettings.mode, settings.moduleRefs.rule_system_disabled, settings.planningEnabled, t])
-  const runtimeConfigLoading = conversationConfig.loading || (!conversationConfig.error && !settings.modelProfileId)
+  // Keep the loaded form stable when remembered settings refresh after a save.
+  const runtimeConfigLoading = (conversationConfig.loading && !conversationConfig.initialized)
+    || (!conversationConfig.error && !settings.modelProfileId)
+  const runtimeConfigPending = conversationConfig.loading || conversationConfig.saving
   const runtimeConfigReady = conversationConfig.initialized && Boolean(settings.modelProfileId)
   const startButtonLoading = creating || runtimeConfigLoading || defaultsLoading
   let startButtonLabel = t('storyPicker.setup.start')
@@ -140,6 +144,7 @@ export function NewStorySetupPanel({
       if (cancelled) return
       const defaults = snapshot.workspace?.game_creation_defaults
       const previous = snapshot.workspace?.game_last_creation
+      setRememberedProtagonist(previous?.protagonist)
       applyCreationPreferences(defaults, previous)
       setPrefillSource(previous ? 'remembered' : defaults && Object.keys(defaults).length ? 'prefilled' : 'newStoryHelp')
       setDefaultsLoaded(projectId)
@@ -203,10 +208,11 @@ export function NewStorySetupPanel({
   }, [conversationConfig.snapshot])
 
   useEffect(() => {
-    if (protagonistSelectionTouchedRef.current || protagonist.mode !== 'default') return
-    const tagged = defaultStoryProtagonist(loreItems)
-    if (tagged.mode === 'lore') setProtagonist(tagged)
-  }, [loreItems, protagonist.mode])
+    // Late preferences and Lore loads may seed the draft until the user chooses.
+    if (protagonistSelectionTouchedRef.current || (story && protagonist.mode !== 'default')) return
+    const selected = defaultStoryProtagonist(loreItems, rememberedProtagonist)
+    setProtagonist(current => sameProtagonist(current, selected) ? current : selected)
+  }, [loreItems, rememberedProtagonist, protagonist.mode, story])
 
   const changeProtagonist = (next: StoryProtagonist) => {
     protagonistSelectionTouchedRef.current = true
@@ -345,7 +351,8 @@ export function NewStorySetupPanel({
                   imagePresets={imagePresets}
                   value={settings}
                   onChange={(next) => { void changeSettings(next) }}
-                  runtimeConfigLoading={runtimeConfigLoading || conversationConfig.saving}
+                  runtimeConfigLoading={runtimeConfigLoading}
+                  runtimeConfigPending={runtimeConfigPending}
                   runtimeConfigError={conversationConfig.error}
                   onRuntimeConfigReload={() => void conversationConfig.reload()}
                   onOpenPresets={onOpenPresets}
@@ -362,7 +369,7 @@ export function NewStorySetupPanel({
           {!story ? <Button type="button" variant="ghost" disabled={creating} onClick={onCancel}>{t('common.cancel')}</Button> : null}
           <Button
             type="button"
-            disabled={creating || defaultsLoading || defaultsError || runtimeConfigLoading || conversationConfig.saving || !runtimeConfigReady}
+            disabled={creating || defaultsLoading || defaultsError || runtimeConfigPending || !runtimeConfigReady}
             onClick={() => void submit()}
           >
             {startButtonLoading ? <Spinner /> : <Play data-icon="inline-start" />}
@@ -411,15 +418,18 @@ function validateDraft(protagonist: StoryProtagonist, opening: StoryOpeningConfi
   return ''
 }
 
-function defaultStoryProtagonist(loreItems: LoreItem[]): StoryProtagonist {
-  const tagged = loreItems.find((item) => item.enabled && item.type === 'character' && hasLoreProtagonistTag(item.tags))
-  if (!tagged) return { mode: 'default' }
+function defaultStoryProtagonist(loreItems: LoreItem[], remembered?: StoryProtagonist): StoryProtagonist {
+  if (remembered?.mode === 'custom') return remembered
+  const characters = loreItems.filter(item => item.enabled && item.type === 'character')
+  const selected = characters.find(item => item.id === remembered?.source_lore_item_id)
+    || characters.find(item => hasLoreProtagonistTag(item.tags))
+  if (!selected) return { mode: 'default' }
   return {
     mode: 'lore',
-    name: tagged.name,
-    profile: tagged.content || tagged.brief_description,
-    source_lore_item_id: tagged.id,
-    source_lore_updated_at: tagged.updated_at,
+    name: selected.name,
+    profile: selected.content || selected.brief_description,
+    source_lore_item_id: selected.id,
+    source_lore_updated_at: selected.updated_at,
   }
 }
 

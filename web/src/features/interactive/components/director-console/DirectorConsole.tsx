@@ -10,7 +10,7 @@ import type {
   InteractiveStoryUpdateInput,
   Snapshot,
   StorySummary,
-  PresentationMaterial,
+  TurnPresentationPatch,
   Teller,
 } from '../../types'
 import type { StoryStateDisplayPreference } from '../story-state/display-preference'
@@ -38,7 +38,7 @@ export interface DirectorConsoleProps {
   branches: BranchSummary[]
   snapshot: Snapshot | null
   branchPlanEditingDisabled?: boolean
-  onBackgroundChange?: (turnId: string, background?: PresentationMaterial) => Promise<void>
+  onPresentationChange?: (turnId: string, patch: TurnPresentationPatch) => Promise<void>
   onBranchPlanUpdate?: (markdown: string, baseRevision: string) => void | Promise<void>
   stateError?: string
   stateDisplayPreference: StoryStateDisplayPreference
@@ -62,7 +62,7 @@ export function DirectorConsole({
   branches,
   snapshot,
   branchPlanEditingDisabled = false,
-  onBackgroundChange,
+  onPresentationChange,
   onBranchPlanUpdate,
   stateError,
   stateDisplayPreference,
@@ -104,8 +104,8 @@ export function DirectorConsole({
       <StoryTuningView
         fallback={<LoadingState label={t('common.loading')} variant="panel" />}
         currentTurn={snapshot?.current_turn}
-        onBackgroundChange={onBackgroundChange}
-        backgroundDisabled={branchPlanEditingDisabled}
+        onPresentationChange={onPresentationChange}
+        presentationDisabled={branchPlanEditingDisabled}
         projectId={projectId}
         story={story}
         planningTemplates={planningTemplates}

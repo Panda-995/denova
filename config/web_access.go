@@ -1,6 +1,9 @@
 package config
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 const (
 	DefaultWebSearchMaxResults             = 10
@@ -16,22 +19,76 @@ const (
 // Pointer limits preserve the layered-settings distinction between inheritance
 // and an explicit value. Workspace settings intentionally cannot override it.
 type WebAccessSettings struct {
-	SearXNGBaseURL               string `toml:"searxng_base_url,omitempty" json:"searxng_base_url,omitempty"`
-	SearchMaxResults             *int   `toml:"search_max_results,omitempty" json:"search_max_results,omitempty"`
-	SearchProviderTimeoutSeconds *int   `toml:"search_provider_timeout_seconds,omitempty" json:"search_provider_timeout_seconds,omitempty"`
-	FetchMaxResponseKB           *int   `toml:"fetch_max_response_kb,omitempty" json:"fetch_max_response_kb,omitempty"`
-	FetchMaxContentChars         *int   `toml:"fetch_max_content_chars,omitempty" json:"fetch_max_content_chars,omitempty"`
+	SearchProvider               string                 `toml:"search_provider,omitempty" json:"search_provider,omitempty"`
+	SearchFallback               string                 `toml:"search_fallback,omitempty" json:"search_fallback,omitempty"`
+	DeepSeek                     *SearchServiceSettings `toml:"deepseek,omitempty" json:"deepseek,omitempty"`
+	Perplexity                   *SearchServiceSettings `toml:"perplexity,omitempty" json:"perplexity,omitempty"`
+	Tavily                       *SearchServiceSettings `toml:"tavily,omitempty" json:"tavily,omitempty"`
+	SearXNGBaseURL               string                 `toml:"searxng_base_url,omitempty" json:"searxng_base_url,omitempty"`
+	SearchMaxResults             *int                   `toml:"search_max_results,omitempty" json:"search_max_results,omitempty"`
+	SearchProviderTimeoutSeconds *int                   `toml:"search_provider_timeout_seconds,omitempty" json:"search_provider_timeout_seconds,omitempty"`
+	FetchMaxResponseKB           *int                   `toml:"fetch_max_response_kb,omitempty" json:"fetch_max_response_kb,omitempty"`
+	FetchMaxContentChars         *int                   `toml:"fetch_max_content_chars,omitempty" json:"fetch_max_content_chars,omitempty"`
 }
 
 // WebAccessConfig is the resolved runtime configuration consumed by the
 // web-access module. Data-size limits are positive and bounded; a zero provider
 // timeout explicitly allows an unlimited external search request.
 type WebAccessConfig struct {
-	SearXNGBaseURL               string `toml:"searxng_base_url" json:"searxng_base_url"`
-	SearchMaxResults             int    `toml:"search_max_results" json:"search_max_results"`
-	SearchProviderTimeoutSeconds int    `toml:"search_provider_timeout_seconds" json:"search_provider_timeout_seconds"`
-	FetchMaxResponseKB           int    `toml:"fetch_max_response_kb" json:"fetch_max_response_kb"`
-	FetchMaxContentChars         int    `toml:"fetch_max_content_chars" json:"fetch_max_content_chars"`
+	SearchProvider               string                 `toml:"search_provider,omitempty" json:"search_provider,omitempty"`
+	SearchFallback               string                 `toml:"search_fallback,omitempty" json:"search_fallback,omitempty"`
+	DeepSeek                     *SearchServiceSettings `toml:"deepseek,omitempty" json:"deepseek,omitempty"`
+	Perplexity                   *SearchServiceSettings `toml:"perplexity,omitempty" json:"perplexity,omitempty"`
+	Tavily                       *SearchServiceSettings `toml:"tavily,omitempty" json:"tavily,omitempty"`
+	SearXNGBaseURL               string                 `toml:"searxng_base_url" json:"searxng_base_url"`
+	SearchMaxResults             int                    `toml:"search_max_results" json:"search_max_results"`
+	SearchProviderTimeoutSeconds int                    `toml:"search_provider_timeout_seconds" json:"search_provider_timeout_seconds"`
+	FetchMaxResponseKB           int                    `toml:"fetch_max_response_kb" json:"fetch_max_response_kb"`
+	FetchMaxContentChars         int                    `toml:"fetch_max_content_chars" json:"fetch_max_content_chars"`
+}
+
+// SearchServiceSettings stores one account per hosted search service. Mode is
+// service-specific: Perplexity web/fast, Tavily basic/advanced; DeepSeek has none.
+// Presence represents a saved service, including an unfinished configuration.
+type SearchServiceSettings struct {
+	APIKey string `toml:"api_key,omitempty" json:"api_key,omitempty"`
+	Mode   string `toml:"mode,omitempty" json:"mode,omitempty"`
+}
+
+// Validate permits unfinished credentials while rejecting unknown routing and
+// billing modes. An unfinished service must never prevent Agent/Fetch startup.
+func (settings WebAccessSettings) Validate() error {
+	switch settings.SearchProvider {
+	case "", "builtin", "searxng", "deepseek", "perplexity", "tavily":
+	default:
+		return fmt.Errorf("unsupported search provider %q", settings.SearchProvider)
+	}
+	switch settings.SearchFallback {
+	case "", "none", "builtin":
+	default:
+		return fmt.Errorf("unsupported search fallback %q", settings.SearchFallback)
+	}
+	for _, service := range []struct {
+		name     string
+		settings *SearchServiceSettings
+		modes    []string
+	}{
+		{"deepseek", settings.DeepSeek, []string{""}},
+		{"perplexity", settings.Perplexity, []string{"", "web", "fast"}},
+		{"tavily", settings.Tavily, []string{"", "basic", "advanced"}},
+	} {
+		if service.settings == nil {
+			continue
+		}
+		valid := false
+		for _, mode := range service.modes {
+			valid = valid || service.settings.Mode == mode
+		}
+		if !valid {
+			return fmt.Errorf("unsupported %s search mode %q", service.name, service.settings.Mode)
+		}
+	}
+	return nil
 }
 
 func DefaultWebAccessConfig() WebAccessConfig {
@@ -55,6 +112,21 @@ func DefaultWebAccessSettings() WebAccessSettings {
 
 func MergeWebAccessSettings(parent, child WebAccessSettings) WebAccessSettings {
 	out := parent
+	if child.SearchProvider != "" {
+		out.SearchProvider = child.SearchProvider
+	}
+	if child.SearchFallback != "" {
+		out.SearchFallback = child.SearchFallback
+	}
+	if child.DeepSeek != nil {
+		out.DeepSeek = child.DeepSeek
+	}
+	if child.Perplexity != nil {
+		out.Perplexity = child.Perplexity
+	}
+	if child.Tavily != nil {
+		out.Tavily = child.Tavily
+	}
 	if strings.TrimSpace(child.SearXNGBaseURL) != "" {
 		out.SearXNGBaseURL = child.SearXNGBaseURL
 	}
@@ -77,6 +149,8 @@ func ResolveWebAccessSettings(settings WebAccessSettings) WebAccessConfig {
 	settings = sanitizeWebAccessSettings(settings)
 	defaults := DefaultWebAccessConfig()
 	return WebAccessConfig{
+		SearchProvider: settings.SearchProvider, SearchFallback: settings.SearchFallback,
+		DeepSeek: settings.DeepSeek, Perplexity: settings.Perplexity, Tavily: settings.Tavily,
 		SearXNGBaseURL:               settings.SearXNGBaseURL,
 		SearchMaxResults:             boundedSettingsInt(settings.SearchMaxResults, defaults.SearchMaxResults, 1, MaxWebSearchMaxResults),
 		SearchProviderTimeoutSeconds: settingsNonNegativeInt(settings.SearchProviderTimeoutSeconds, defaults.SearchProviderTimeoutSeconds),
@@ -92,7 +166,11 @@ func ResolveWebAccessConfig(runtime WebAccessConfig) WebAccessConfig {
 }
 
 func settingsFromWebAccessConfig(runtime WebAccessConfig) WebAccessSettings {
-	settings := WebAccessSettings{SearXNGBaseURL: strings.TrimSpace(runtime.SearXNGBaseURL)}
+	settings := WebAccessSettings{
+		SearXNGBaseURL: strings.TrimSpace(runtime.SearXNGBaseURL),
+		SearchProvider: runtime.SearchProvider, SearchFallback: runtime.SearchFallback,
+		DeepSeek: runtime.DeepSeek, Perplexity: runtime.Perplexity, Tavily: runtime.Tavily,
+	}
 	if runtime.SearchMaxResults > 0 {
 		settings.SearchMaxResults = intPtr(runtime.SearchMaxResults)
 	}
@@ -109,6 +187,16 @@ func settingsFromWebAccessConfig(runtime WebAccessConfig) WebAccessSettings {
 }
 
 func sanitizeWebAccessSettings(settings WebAccessSettings) WebAccessSettings {
+	settings.SearchProvider = strings.TrimSpace(settings.SearchProvider)
+	settings.SearchFallback = strings.TrimSpace(settings.SearchFallback)
+	for _, service := range []**SearchServiceSettings{&settings.DeepSeek, &settings.Perplexity, &settings.Tavily} {
+		if *service != nil {
+			copy := **service
+			copy.APIKey = strings.TrimSpace(copy.APIKey)
+			copy.Mode = strings.TrimSpace(copy.Mode)
+			*service = &copy
+		}
+	}
 	settings.SearXNGBaseURL = normalizeSearXNGBaseURL(settings.SearXNGBaseURL)
 	settings.SearchMaxResults = normalizeBoundedPositiveInt(settings.SearchMaxResults, MaxWebSearchMaxResults)
 	settings.SearchProviderTimeoutSeconds = normalizeNonNegativeInt(settings.SearchProviderTimeoutSeconds)

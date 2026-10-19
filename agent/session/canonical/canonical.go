@@ -164,8 +164,8 @@ func (adapter CanonicalAdapterFuncs) CommitOutput(ctx context.Context, request O
 }
 
 // ValidateContextCommitMessages derives and validates the one supported batch
-// shape from its messages. A context-state batch, a complete tool batch, and a
-// delegated task-completion batch are deliberately mutually exclusive.
+// shape from its messages. Context state, complete tool batches, accepted
+// response continuations, and delegated task completions remain distinct.
 func ValidateContextCommitMessages(messages []*agentschema.Message) error {
 	if len(messages) == 0 || messages[0] == nil {
 		return errors.New("canonical context commit requires messages")
@@ -174,6 +174,16 @@ func ValidateContextCommitMessages(messages []*agentschema.Message) error {
 	switch {
 	case first.Role == agentschema.Assistant && len(first.ToolCalls) > 0:
 		return validateCanonicalToolBatch(messages)
+	case first.Role == agentschema.Assistant:
+		if len(messages) < 2 || first.ToolCallID != "" || first.TaskCompletion != nil {
+			return errors.New("canonical continuation requires an assistant response and user feedback")
+		}
+		for index, message := range messages[1:] {
+			if !agentschema.IsAgentContinuationMessage(message) || len(message.ToolCalls) != 0 || message.ToolCallID != "" || message.TaskCompletion != nil || agenthistory.IsContextStateMessage(message) {
+				return fmt.Errorf("canonical continuation message %d is invalid", index)
+			}
+		}
+		return nil
 	case first.Role == agentschema.User && agenthistory.IsContextStateMessage(first):
 		for index, message := range messages {
 			if message == nil || message.Role != agentschema.User || !agenthistory.IsContextStateMessage(message) || message.TaskCompletion != nil ||

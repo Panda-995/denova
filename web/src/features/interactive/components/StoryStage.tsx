@@ -1,6 +1,7 @@
 import { visibleStoryPresentation } from '../presentation'
 import { Eye, EyeOff, Maximize2, Square } from 'lucide-react'
 import { StoryStageArtwork } from './story-stage/StoryStageArtwork'
+import { StoryAmbientPlayback } from './story-stage/StoryAmbientPlayback'
 import { useGameStories } from '@/features/platform/game-story-context'
 import { GameStorySetup } from '@/features/platform/GameStorySetup'
 import { useStorySpeech } from '../use-story-speech'
@@ -673,7 +674,10 @@ export function StoryStage({ active = true, projectId, workspace, styleSceneSugg
       {!storySetupVisible && <StoryStageArtwork key={`${projectId}:${stageKey}`} previousTurnId={previousPresentationTurnId} projectId={projectId} turn={presentationTurn} latest={historyWindow.followLatest && presentationTurn?.id === snapshot?.current_turn?.id} settings={story?.presentation_settings} textHidden={artworkOnly} scrimOpacity={stagePreferences.scrimOpacity} characterLayout={stagePreferences.characterLayout} characterSize={stagePreferences.characterSize} />}
       <div data-testid="story-stage-card" className="nova-story-stage-card relative flex min-h-0 flex-1 flex-col overflow-hidden">
         <StoryStageHeader isMobile={isMobile} controls={stageControls} />
-        <div className="nova-story-speech-playback shrink-0 px-3" style={{ visibility: artworkOnly ? 'hidden' : undefined }} inert={artworkOnly}><SpeechPlayback owner={stageKey} /></div>
+        <div className="nova-story-speech-playback flex shrink-0 flex-col gap-2 px-3">
+          <StoryAmbientPlayback key={stageKey} projectId={projectId} material={visibleStoryPresentation(snapshot?.current_turn?.turn_result?.presentation, story?.presentation_settings).ambient} turnId={snapshot?.current_turn?.id} previousTurnId={snapshot?.turns?.at(-2)?.id} active={active && !storySetupVisible} />
+          <SpeechPlayback owner={stageKey} />
+        </div>
 
         <div className="nova-story-stage-content flex min-h-0 flex-1 overflow-hidden" data-setup={storySetupVisible || undefined} data-artwork={hasStageArtwork ? 'true' : undefined} style={{ visibility: artworkOnly ? 'hidden' : undefined }} inert={artworkOnly} aria-hidden={artworkOnly || undefined}>
           {!isMobile && <TurnNavigator items={turnNavigationItems} activeAnchorId={activeTurnAnchorId} onSelect={handleTurnNavigationSelect} earlierCount={displaySnapshot?.turn_start || 0} loadingEarlier={historyLoading} onSelectEarlier={loadHistoryThroughTurn} />}

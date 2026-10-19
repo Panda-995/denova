@@ -5,7 +5,7 @@ import type {
   InteractiveStoryUpdateInput,
   Snapshot,
   StorySummary,
-  PresentationMaterial,
+  TurnPresentationPatch,
   Teller,
 } from '../types'
 import { DirectorConsole } from './director-console/DirectorConsole'
@@ -27,7 +27,7 @@ interface DirectorPanelProps {
   branches: BranchSummary[]
   snapshot: Snapshot | null
   branchPlanEditingDisabled?: boolean
-  onBackgroundChange?: (turnId: string, background?: PresentationMaterial) => Promise<void>
+  onPresentationChange?: (turnId: string, patch: TurnPresentationPatch) => Promise<void>
   onBranchPlanUpdate?: (markdown: string, baseRevision: string) => void | Promise<void>
   stateDisplayPreference?: StoryStateDisplayPreference
   onStateDisplayPreferenceChange?: (value: StoryStateDisplayPreference) => void
@@ -50,7 +50,7 @@ export function DirectorPanel({
   branches,
   snapshot,
   branchPlanEditingDisabled = false,
-  onBackgroundChange,
+  onPresentationChange,
   onBranchPlanUpdate,
   stateDisplayPreference = DEFAULT_STORY_STATE_DISPLAY,
   onStateDisplayPreferenceChange = noopStateDisplayPreferenceChange,
@@ -73,7 +73,7 @@ export function DirectorPanel({
       branches={branches}
       snapshot={snapshot}
       branchPlanEditingDisabled={branchPlanEditingDisabled}
-      onBackgroundChange={onBackgroundChange}
+      onPresentationChange={onPresentationChange}
       onBranchPlanUpdate={onBranchPlanUpdate}
       stateError={snapshot?.current_turn?.state_error || ''}
       stateDisplayPreference={stateDisplayPreference}

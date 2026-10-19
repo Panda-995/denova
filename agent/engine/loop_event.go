@@ -155,12 +155,20 @@ type loopOutput struct {
 	ToolBatch        *toolBatchBoundary
 	NestedEvent      *agentevent.NestedEvent
 	TaskCompletions  *taskCompletionBoundary
+	Continuation     *modelContinuationBoundary
 	CustomizedOutput any
 }
 
 type modelAttemptBoundary struct {
 	Ordinal int
 	Receipt chan error
+}
+
+// modelContinuationBoundary commits an accepted assistant response and its
+// follow-up instructions together before another request or pause safe point.
+type modelContinuationBoundary struct {
+	messages []*agentschema.Message
+	receipt  chan error
 }
 
 type toolBatchPhase string

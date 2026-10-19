@@ -15,6 +15,8 @@ func TestAssemblerKeepsTurnContextAfterToolResults(t *testing.T) {
 	state.Extra = map[string]any{"agent.context_state": "v1"}
 	completion := agentschema.UserMessage("research complete")
 	completion.TaskCompletion = &agentschema.TaskCompletionMessageMeta{CompletionID: "completion-1", Author: "researcher", Recipient: "writer"}
+	feedback := agentschema.UserMessage("Continue the accepted response")
+	feedback.Extra = map[string]any{agentschema.ExtraKeyAgentContinuation: true}
 	assistant := agentschema.AssistantMessage("checking", []agentschema.ToolCall{{
 		ID: "call-1", Type: "function", Function: agentschema.FunctionCall{Name: "inspect", Arguments: `{}`},
 	}})
@@ -28,7 +30,7 @@ func TestAssemblerKeepsTurnContextAfterToolResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, trailing := range [][]*agentschema.Message{{assistant, tool}, {state, assistant, tool}, {assistant, tool, state, completion}} {
+	for _, trailing := range [][]*agentschema.Message{{assistant, tool}, {state, assistant, tool}, {assistant, tool, state, completion}, {assistant, tool, feedback, state}} {
 		messages := append([]*agentschema.Message{request}, trailing...)
 		resumed, err := assembler.Assemble(t.Context(), AssembleRequest{Messages: messages, Fragments: fragments})
 		if err != nil {

@@ -475,6 +475,14 @@ const server = createServer(async (request, response) => {
     writeChatCompletion(response, chatCompletionFrames(gameBranchPlanNarrative, planningTurnSubmission))
     return
   }
+  if (latestUserMessageIncludesMarker(body, 'E2E_AMBIENT_SELECT:') && requestIncludesTool(body, 'submit_interactive_turn')) {
+    const selected = [...JSON.stringify(body.messages).matchAll(/E2E_AMBIENT_SELECT:([a-zA-Z0-9_-]+):([a-zA-Z0-9_-]+)/g)].at(-1)
+    const presentation = selected && requestIncludesMarker(body, 'audio/wav')
+      ? { ambient: { item_id: selected[1], asset_id: selected[2] } }
+      : {}
+    writeChatCompletion(response, chatCompletionFrames(narrative, JSON.stringify({ ...turnSubmissionPayload, presentation })))
+    return
+  }
   if (latestUserMessageIncludesMarker(body, gameOpeningMarker) && requestIncludesTool(body, 'submit_interactive_turn')) {
     writeChatCompletion(response, chatCompletionFrames(gameOpeningNarrative, openingTurnSubmission))
     return

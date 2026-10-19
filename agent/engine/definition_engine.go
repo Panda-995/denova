@@ -735,6 +735,37 @@ func (engine *Engine) Run(
 			}
 			continue
 		}
+		if boundary := event.Output.Continuation; boundary != nil {
+			var continuationErr error
+			if !rootEvent {
+				continuationErr = errors.New("nested Agent emitted a continuation into the root transcript")
+			} else if len(transcript) == 0 || transcript[len(transcript)-1].Role != agentschema.Assistant || pendingToolTranscriptIndex >= 0 {
+				continuationErr = errors.New("Agent continuation has no accepted assistant response")
+			} else {
+				continuationErr = agentcanonical.ValidateContextCommitMessages(boundary.messages)
+			}
+			if continuationErr == nil {
+				// The ordinary response event already appended this assistant. The
+				// canonical batch records it once together with the new user feedback.
+				transcript = append(transcript[:len(transcript)-1], agentschema.CloneMessages(boundary.messages)...)
+				sequence := prepared.contextSequence
+				prepared.contextSequence++
+				var checkpoint json.RawMessage
+				checkpoint, continuationErr = encodeActiveEngineTranscript(prepared, transcript, activeModelUser, activeUserIndex)
+				if continuationErr == nil {
+					continuationErr = engine.commitCanonicalContext(ctx, request, prepared.definition.Canonical, sequence, boundary.messages, TranscriptUpdated{State: checkpoint})
+				}
+				if continuationErr == nil {
+					continuationErr = emit(TranscriptUpdated{State: checkpoint})
+				}
+			}
+			boundary.receipt <- continuationErr
+			if continuationErr != nil {
+				controls.stop()
+				return Result{}, continuationErr
+			}
+			continue
+		}
 		if boundary := event.Output.ToolBatch; boundary != nil {
 			if !rootEvent {
 				err := errors.New("nested Agent emitted a canonical tool batch boundary into the root transcript")

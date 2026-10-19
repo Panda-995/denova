@@ -73,7 +73,7 @@ func (provider *searXNGProvider) searchJSON(ctx context.Context, request provide
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", response.StatusCode)
+		return nil, searchHTTPError(response.StatusCode)
 	}
 	data, err := readSearXNGResponse(response.Body)
 	if err != nil {
@@ -117,7 +117,7 @@ func (provider *searXNGProvider) searchHTML(ctx context.Context, request provide
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", response.StatusCode)
+		return nil, searchHTTPError(response.StatusCode)
 	}
 	data, err := readSearXNGResponse(response.Body)
 	if err != nil {

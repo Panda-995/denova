@@ -6,6 +6,7 @@ on:
     paths-ignore: ['docs/**', '*.md']
 permissions:
   contents: read
+  actions: read
   packages: write
 concurrency:
   group: docker-publish-${{ github.ref }}
@@ -24,7 +25,7 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Read application version
         id: version
         run: echo "value=$(jq -r .version web/package.json)" >> "$GITHUB_OUTPUT"
@@ -101,7 +102,14 @@ jobs:
   manifest:
     needs: build
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
+      - uses: actions/checkout@v7
+      - name: Require successful source CI before promoting latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: node .github/scripts/image-ci.mjs wait
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:

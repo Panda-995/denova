@@ -36,16 +36,22 @@ type searchOutcome struct {
 }
 
 func (client *Client) Search(ctx context.Context, request SearchRequest) (SearchResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return SearchResponse{}, err
+	}
+	if client.searchConfigError != nil && !client.legacySearchFallback {
+		return SearchResponse{}, client.searchConfigError
+	}
 	query := strings.TrimSpace(request.Query)
 	if query == "" {
-		return SearchResponse{}, fmt.Errorf("web search query is required")
+		return SearchResponse{}, searchError("invalid_request", "Web search query is required.")
 	}
 	if len([]rune(query)) > maxSearchQueryChars {
-		return SearchResponse{}, fmt.Errorf("web search query exceeds %d-character safety limit", maxSearchQueryChars)
+		return SearchResponse{}, searchError("invalid_request", "Web search query exceeds the 4096-character safety limit.")
 	}
 	timeRange, err := normalizeTimeRange(request.TimeRange)
 	if err != nil {
-		return SearchResponse{}, err
+		return SearchResponse{}, searchError("invalid_request", err.Error())
 	}
 	maxResults := request.MaxResults
 	if maxResults <= 0 || maxResults > client.config.SearchMaxResults {
@@ -53,18 +59,34 @@ func (client *Client) Search(ctx context.Context, request SearchRequest) (Search
 	}
 	providerRequest := providerSearchRequest{Query: query, TimeRange: timeRange, MaxResults: maxResults}
 
-	failures := append([]error(nil), client.configurationWarnings...)
+	var failures []error
+	if client.searchConfigError != nil {
+		failures = append(failures, client.searchConfigError)
+		slog.WarnContext(ctx, "[webaccess] legacy search configuration failed; trying free fallbacks", "code", SearchErrorCode(client.searchConfigError))
+	}
 	hadReachableProvider := false
 	if client.primaryProvider != nil {
+		started := time.Now()
 		outcome := runSearchProviderWithin(ctx, client.primaryProvider, providerRequest, client.config.SearchProviderTimeout)
+		if err := ctx.Err(); err != nil {
+			return SearchResponse{}, err
+		}
 		failures = append(failures, outcome.warnings...)
 		if outcome.err == nil {
+			slog.InfoContext(ctx, "[webaccess] search completed", "provider", outcome.provider, "results", len(outcome.results), "elapsed_ms", time.Since(started).Milliseconds())
 			hadReachableProvider = true
 			if len(outcome.results) > 0 {
 				return successfulSearchResponse(query, outcome.provider, outcome.results, maxResults, nil), nil
 			}
+			if !client.legacySearchFallback {
+				return emptySearchResponse(query, outcome.provider, nil), nil
+			}
 			slog.WarnContext(ctx, fmt.Sprintf("[webaccess] search provider=%s returned no usable results; trying free fallbacks", outcome.provider))
 		} else {
+			if client.config.SearchFallback != ProviderBuiltin || (!client.legacySearchFallback && !canFallbackAfter(outcome.err)) {
+				slog.ErrorContext(ctx, "[webaccess] search failed", "provider", outcome.provider, "code", SearchErrorCode(outcome.err))
+				return SearchResponse{}, outcome.err
+			}
 			failures = append(failures, outcome.err)
 			slog.ErrorContext(ctx, fmt.Sprintf("[webaccess] search provider=%s failed; trying free fallbacks: %v", outcome.provider, outcome.err))
 		}
@@ -80,15 +102,7 @@ func (client *Client) Search(ctx context.Context, request SearchRequest) (Search
 		return SearchResponse{}, err
 	}
 	if hadReachableProvider {
-		return SearchResponse{
-			Schema:          SearchResponseSchema,
-			Query:           query,
-			Status:          SearchStatusNoResults,
-			Message:         "No usable web search results were found. 未找到可用的网页搜索结果。",
-			Warnings:        searchWarningMessages(failures),
-			RetryStrategy:   SearchRetryChangeQuery,
-			SuggestedAction: "Do not immediately repeat the same query. Change the keywords, remove overly narrow qualifiers, or use a known URL with web_fetch. 不要立即重复相同查询；请调整关键词、移除过窄限定，或用 web_fetch 打开已知网址。",
-		}, nil
+		return emptySearchResponse(query, client.config.SearchProvider, failures), nil
 	}
 	if len(failures) == 0 {
 		failures = append(failures, fmt.Errorf("web search has no configured providers"))
@@ -97,11 +111,20 @@ func (client *Client) Search(ctx context.Context, request SearchRequest) (Search
 		Schema:          SearchResponseSchema,
 		Query:           query,
 		Status:          SearchStatusProvidersUnavailable,
-		Message:         "All web search providers are unavailable. 所有网页搜索提供方当前均不可用。",
+		Message:         "All web search providers are unavailable.",
 		Warnings:        searchWarningMessages(failures),
 		RetryStrategy:   SearchRetryWaitOrReconfigure,
-		SuggestedAction: "Do not immediately repeat the same query. Wait before retrying, verify the configured SearXNG endpoint, or continue from a known URL with web_fetch. 不要立即重复相同查询；请稍后重试、检查 SearXNG 配置，或用 web_fetch 打开已知网址。",
+		SuggestedAction: "Do not immediately repeat the same query. Wait before retrying, verify the search configuration, or continue from a known URL with web_fetch.",
 	}, nil
+}
+
+func emptySearchResponse(query, provider string, failures []error) SearchResponse {
+	return SearchResponse{
+		Schema: SearchResponseSchema, Query: query, Provider: provider,
+		Status: SearchStatusNoResults, Message: "No usable web search results were found.",
+		Warnings: searchWarningMessages(failures), RetryStrategy: SearchRetryChangeQuery,
+		SuggestedAction: "Do not immediately repeat the same query. Change the keywords, remove overly narrow qualifiers, or use a known URL with web_fetch.",
+	}
 }
 
 func successfulSearchResponse(query, provider string, results []SearchResult, maximum int, warnings []error) SearchResponse {
@@ -111,7 +134,7 @@ func successfulSearchResponse(query, provider string, results []SearchResult, ma
 		Query:         query,
 		Status:        SearchStatusSuccess,
 		Provider:      provider,
-		Message:       fmt.Sprintf("Found %d result(s) via %s. 通过 %s 找到 %d 条结果。", len(results), provider, provider, len(results)),
+		Message:       fmt.Sprintf("Found %d result(s) via %s.", len(results), provider),
 		Results:       results,
 		Warnings:      searchWarningMessages(warnings),
 		RetryStrategy: SearchRetryNone,

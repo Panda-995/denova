@@ -1,3 +1,4 @@
+import { randomUUID } from '@/lib/uuid'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -65,7 +66,7 @@ export function ExportDialog({
   const [choices, setChoices] = useState<ExportResource[]>([])
   const [selected, setSelected] = useState<string[]>([])
   const [name, setName] = useState(installation?.package.name || '')
-  const [id, setID] = useState(installation?.package.id || crypto.randomUUID())
+  const [id, setID] = useState(installation?.package.id || randomUUID())
   const [native, setNative] = useState(false)
   const [definitions, setDefinitions] = useState<ExportDefinition[]>([])
   const [definitionID, setDefinitionID] = useState('')

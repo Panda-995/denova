@@ -11,7 +11,7 @@ func TestPresentationPatchPreservesInvalidAndOmittedSlots(t *testing.T) {
 	bg := PresentationMaterial{ItemID: "station", AssetID: "day", Path: "assets/day.png", Name: "Day", Focus: &ImageFocus{X: 0.2, Y: 0.8}}
 	hero := PresentationMaterial{ItemID: "hero", AssetID: "calm", Path: "assets/calm.png", Name: "Calm"}
 	base := &TurnPresentation{Background: &bg, Characters: []PresentationMaterial{hero}}
-	resolve := func(item, asset string) (PresentationMaterial, error) {
+	resolve := func(item, asset, _ string) (PresentationMaterial, error) {
 		if asset == "missing" {
 			return PresentationMaterial{}, errors.New("image unavailable")
 		}

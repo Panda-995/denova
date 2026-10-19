@@ -1,5 +1,5 @@
 import type { LoreItem } from '@/lib/api'
-import type { StoryCheckSettings, StoryDirectorModuleRefs, StoryImageSettings, StoryPresentationSettings, StoryStateSchemaMode } from './types'
+import type { StoryCheckSettings, StoryDirectorModuleRefs, StoryImageSettings, StoryPresentationSettings, StoryProtagonist, StoryStateSchemaMode } from './types'
 
 // Project-owned resource choices used only when initializing a new Story.
 // Empty IDs/lists disable modules; absent fields retain the existing defaults.
@@ -14,10 +14,11 @@ export interface GameCreationDefaults {
 }
 
 // Project-owned creation preferences, written by the server after creation.
-// Resource recommendations remain independent; content and model preferences
-// deliberately stay outside this snapshot.
+// Resource recommendations remain independent; opening content and model
+// preferences deliberately stay outside this snapshot.
 export interface GameCreationPreferences {
   resources: GameCreationDefaults
+  protagonist?: StoryProtagonist
   disabled_modules: Array<'narrative_style_disabled' | 'image_preset_disabled' | 'actor_state_disabled' | 'rule_system_disabled' | 'event_packages_disabled'>
   custom_agent_id: string
   planning_enabled: boolean

@@ -27,8 +27,8 @@ func AgentMessagesFromModelContext(messages []ModelContextMessage) []*agentschem
 	return result
 }
 
-// SettledTurnToolMessages keeps the protocol while the canonical final
-// narrative supplies assistant prose once per settled Turn.
+// SettledTurnToolMessages keeps accepted text responses and the tool protocol.
+// Tool-call commentary is cleared; the final narrative supplies the Turn output.
 func SettledTurnToolMessages(messages []ModelContextMessage) []*agentschema.Message {
 	projected := AgentMessagesFromModelContext(messages)
 	for _, message := range projected {

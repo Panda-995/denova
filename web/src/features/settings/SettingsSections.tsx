@@ -1,10 +1,11 @@
 import { EMPTY_SPEECH_SETTINGS, SpeechSettingsEditor } from './SpeechSettingsEditor'
+import { WebAccessSettingsEditor } from './WebAccessSettingsEditor'
 import { memo, useEffect, useState, useCallback } from 'react'
 import type { Dispatch, ReactNode, SetStateAction } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from '@/lib/toast'
 import { withErrorLogID } from '@/lib/api-client'
-import type { ImageAPIEndpointSettings, ImageAPIProfileSettings, LabSettings, LayeredSettings, ModelEndpointSettings, ModelProfileSettings, Settings, WebAccessSettings } from './types'
+import type { ImageAPIEndpointSettings, ImageAPIProfileSettings, LabSettings, LayeredSettings, ModelEndpointSettings, ModelProfileSettings, Settings } from './types'
 import { revokeAgentApprovalRule } from './api'
 import { FontPicker } from './FontPicker'
 import { getInteractiveTellers } from '@/features/interactive/api'
@@ -79,12 +80,6 @@ export const SettingsSections = memo(function SettingsSections({ layered, draft,
   const setField = <K extends keyof Settings>(k: K, v: Settings[K]) =>
     setDraft((d) => ({ ...d, [k]: v }))
 
-  const setWebAccessField = <K extends keyof WebAccessSettings>(key: K, value: WebAccessSettings[K]) =>
-    setDraft((current) => ({
-      ...current,
-      web_access: { ...current.web_access, [key]: value },
-    }))
-
   const setLabField = <K extends keyof LabSettings>(key: K, value: LabSettings[K]) =>
     setDraft((current) => ({
       ...current,
@@ -139,12 +134,6 @@ export const SettingsSections = memo(function SettingsSections({ layered, draft,
     const v = inherited[k]
     if (v === undefined || v === null || v === '') return t('common.notSet')
     return t('common.defaultValue', { value: String(v) })
-  }
-
-  const webAccessPlaceholderFor = (key: keyof WebAccessSettings): string => {
-    const value = inherited.web_access?.[key]
-    if (value === undefined || value === null || value === '') return t('common.notSet')
-    return t('common.defaultValue', { value: String(value) })
   }
 
   const sections: Record<SettingsSectionId, ReactNode> = {
@@ -366,33 +355,9 @@ export const SettingsSections = memo(function SettingsSections({ layered, draft,
       </>
     ),
     'web-access': (
-      <>
-        <Text label={t('settings.webAccess.searxngBaseUrl')} value={draft.web_access?.searxng_base_url}
-              placeholder={webAccessPlaceholderFor('searxng_base_url')}
-              onChange={(value) => setWebAccessField('searxng_base_url', value)} />
-        <Num label={t('settings.webAccess.searchMaxResults')} value={draft.web_access?.search_max_results ?? null}
-             placeholder={webAccessPlaceholderFor('search_max_results')}
-             min={1}
-             max={20}
-             onChange={(value) => setWebAccessField('search_max_results', value)} />
-        <Num label={t('settings.webAccess.searchProviderTimeoutSeconds')} value={draft.web_access?.search_provider_timeout_seconds ?? null}
-             placeholder={webAccessPlaceholderFor('search_provider_timeout_seconds')}
-             min={0}
-             onChange={(value) => setWebAccessField('search_provider_timeout_seconds', value)} />
-        <Num label={t('settings.webAccess.fetchMaxResponseKB')} value={draft.web_access?.fetch_max_response_kb ?? null}
-             placeholder={webAccessPlaceholderFor('fetch_max_response_kb')}
-             min={1}
-             max={65536}
-             onChange={(value) => setWebAccessField('fetch_max_response_kb', value)} />
-        <Num label={t('settings.webAccess.fetchMaxContentChars')} value={draft.web_access?.fetch_max_content_chars ?? null}
-             placeholder={webAccessPlaceholderFor('fetch_max_content_chars')}
-             min={1}
-             max={262144}
-             onChange={(value) => setWebAccessField('fetch_max_content_chars', value)} />
-        <div className="rounded-[var(--nova-radius)] border border-[var(--nova-border)] bg-[var(--nova-surface-2)] px-3 py-2 text-xs leading-5 text-[var(--nova-text-faint)]">
-          {t('settings.webAccess.hint')}
-        </div>
-      </>
+      <WebAccessSettingsEditor value={draft.web_access} inherited={inherited.web_access}
+        fieldRequest={fieldRequest?.id === 'web-access' ? fieldRequest : undefined}
+        onChange={value => setField('web_access', value)} />
     ),
     'market': (
       <MarketSettings value={draft.market} defaultURL={layered?.default.market?.registry_url || ''}

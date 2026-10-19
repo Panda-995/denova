@@ -1,111 +1,262 @@
 name: CI
+# The Full CI prefix identifies release-eligible runs in require-full-ci.sh.
+run-name: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && inputs.suite == 'full') && 'Full CI' || 'CI' }} (${{ github.event_name }} - ${{ github.ref_name }})
 
 on:
   push:
-    branches:
-      - master
+    branches: [master]
   pull_request:
+  schedule:
+    # Daily full regression at 01:17 Asia/Shanghai, away from the UTC hour.
+    - cron: '17 17 * * *'
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Browser verification scope
+        type: choice
+        options: [full, smoke]
+        default: full
 
 permissions:
   contents: read
+  actions: read
+
+concurrency:
+  # A new push may supersede smoke, but must not cancel full release/nightly CI.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && inputs.suite == 'full') && 'full' || 'smoke' }}
+  cancel-in-progress: true
 
 jobs:
-  test-build:
-    name: Test and build
-    runs-on: ubuntu-latest
-    env:
-      GO_MODULES: ". agent"
-
+  changes:
+    name: Check changed files
+    runs-on: ubuntu-24.04
+    outputs:
+      code: ${{ steps.paths.outputs.code }}
+      manifests: ${{ steps.paths.outputs.manifests }}
+      full: ${{ steps.paths.outputs.full }}
+      go_modules: ${{ steps.paths.outputs.go_modules }}
+      unit: ${{ steps.paths.outputs.unit }}
+      updater: ${{ steps.paths.outputs.updater }}
+      creative_eval: ${{ steps.paths.outputs.creative_eval }}
+      browser_shards: ${{ steps.paths.outputs.browser_shards }}
+      shard_count: ${{ steps.paths.outputs.shard_count }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 2
+      - id: paths
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CI_SUITE: ${{ inputs.suite }}
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/ci-plan.mjs
+      - run: node --test .github/scripts/*.test.mjs
+      - run: bash .github/scripts/require-full-ci_test.sh
+      - run: python3 .github/scripts/test_sync_upstream.py
 
-      - name: Setup Go
-        uses: actions/setup-go@v7
+  go:
+    name: Go (${{ matrix.module }})
+    needs: changes
+    if: needs.changes.outputs.go_modules != '[]'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.changes.outputs.go_modules) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
           cache-dependency-path: |
             go.sum
             agent/go.sum
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          version: 11.15.1
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: "22"
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
-
-      - name: Install ripgrep
-        run: sudo apt-get update && sudo apt-get install --yes ripgrep
-
-      - name: Install frontend dependencies
-        run: pnpm --dir web install --frozen-lockfile
-
-      - name: Check whitespace
-        run: git diff --check HEAD^ HEAD
-
-      - name: Test installer
-        run: scripts/install_test.sh
-
-      - name: Check Go module manifests
-        shell: bash
+      - name: Install ripgrep if needed
+        run: command -v rg || (sudo apt-get update && sudo apt-get install --yes ripgrep)
+      - name: Check changed module manifests
+        if: needs.changes.outputs.manifests == 'true'
+        working-directory: ${{ matrix.module }}
+        run: go mod tidy -diff
+      - name: Test and vet
+        working-directory: ${{ matrix.module }}
         run: |
-          set -euo pipefail
-          for module in ${GO_MODULES}; do
-            echo "==> go mod tidy -diff (${module})"
-            (cd "${module}" && go mod tidy -diff)
-          done
-
-      - name: Run Go tests
-        shell: bash
+          go test ./...
+          go vet ./...
+      - name: Test installer and packaging
+        if: matrix.module == '.'
         run: |
-          set -euo pipefail
-          for module in ${GO_MODULES}; do
-            echo "==> go test (${module})"
-            (cd "${module}" && go test ./...)
-          done
+          scripts/install_test.sh
+          bash scripts/build-github-release_test.sh
 
-      - name: Run Go vet
-        shell: bash
-        run: |
-          set -euo pipefail
-          for module in ${GO_MODULES}; do
-            echo "==> go vet (${module})"
-            (cd "${module}" && go vet ./...)
-          done
-
-      - name: Install Playwright browser
-        run: pnpm --dir web exec playwright install --with-deps chromium
-
-      - name: Check frontend translations
-        run: pnpm --dir web check:i18n
-
-      - name: Run frontend tests
-        run: pnpm --dir web test
-
-      - name: Build distribution
-        run: ./scripts/build.sh
-
-      - name: Smoke-test production frontend
-        run: pnpm --dir web smoke:production
-
-      - name: Upload Playwright report
-        if: failure()
-        uses: actions/upload-artifact@v7
+  updater:
+    name: Native updater (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.updater == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          name: playwright-report
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            agent/go.sum
+      - run: go test -tags integration ./internal/update
+      - run: go vet ./internal/update
+
+  creative-eval:
+    name: Verify evaluation harness
+    needs: changes
+    if: needs.changes.outputs.creative_eval == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            agent/go.sum
+      - uses: ./.github/actions/setup-web
+        with:
+          directory: tools/creative-eval
+      # Uses an isolated product backend and local deterministic model fixture.
+      - run: bash -n scripts/eval-creative.sh
+      - run: pnpm --dir tools/creative-eval verify
+
+  unit:
+    name: Frontend checks
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      # Apply the same cap to both Vitest projects on hosted runners.
+      VITEST_MAX_WORKERS: '2'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-web
+      # Collection catches syntax/import errors once, before any browser starts.
+      # Packaged mode includes production-only tests without starting servers.
+      - run: pnpm --dir web exec playwright test --list
+        env:
+          DENOVA_E2E_PACKAGE_DIR: ${{ github.workspace }}/output
+      - run: pnpm --dir web check:i18n
+        if: needs.changes.outputs.unit == 'true'
+      - run: pnpm --dir web test:unit --reporter=default --reporter=junit --outputFile=test-results/unit.xml
+        if: needs.changes.outputs.unit == 'true'
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() && needs.changes.outputs.unit == 'true' }}
+        with:
+          name: test-reports-unit
+          path: web/test-results/unit.xml
+          retention-days: 7
+
+  build:
+    name: Build tested distribution
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            agent/go.sum
+      - uses: ./.github/actions/setup-web
+      - run: ./scripts/build.sh
+      # Tar preserves executable permissions, including bundled ripgrep.
+      - run: |
+          # Release packaging needs the exact tested frontend as build input.
+          cp -R web/dist/. output/web/
+          tar -cf ci-distribution.tar -C output .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ci-distribution
+          path: ci-distribution.tar
+          compression-level: 0
+          retention-days: 14
+
+  browser-tests:
+    name: Playwright (${{ matrix.shard }}/${{ needs.changes.outputs.shard_count }})
+    needs: [changes, go, creative-eval, unit, build]
+    if: >-
+      ${{ !cancelled() && needs.changes.outputs.code == 'true'
+          && needs.build.result == 'success' && needs.unit.result == 'success'
+          && (needs.go.result == 'success' || needs.go.result == 'skipped')
+          && (needs.creative-eval.result == 'success' || needs.creative-eval.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      # Keep all diagnostics in full CI; ordinary smoke cancels sibling shards.
+      fail-fast: ${{ needs.changes.outputs.full != 'true' }}
+      matrix:
+        shard: ${{ fromJSON(needs.changes.outputs.browser_shards) }}
+    env:
+      DENOVA_E2E_PACKAGE_DIR: ${{ github.workspace }}/output
+      DENOVA_CI_SUITE: ${{ needs.changes.outputs.full == 'true' && 'full' || 'smoke' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-web
+      - uses: actions/download-artifact@v8
+        with:
+          name: ci-distribution
+      - run: mkdir -p output && tar -xf ci-distribution.tar -C output
+      - run: pnpm --dir web exec playwright install --with-deps chromium
+      # Smoke and full journeys use the same distribution and isolated backend.
+      - run: pnpm --dir web exec playwright test --shard=${{ matrix.shard }}/${{ needs.changes.outputs.shard_count }}
+      - name: Verify previously failing UI journeys on the production package
+        if: needs.changes.outputs.full != 'true'
+        env:
+          DENOVA_CI_SUITE: full
+        run: >-
+          pnpm --dir web exec playwright test
+          tests/e2e/lore-workspace-navigation.spec.ts
+          tests/e2e/plugin-contributions.spec.ts
+          tests/e2e/versions.spec.ts
+          --grep 'shares library destinations|project entry points preserve panel ownership|creates workspace snapshots'
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: test-reports-browser-${{ matrix.shard }}
           path: |
             web/playwright-report
+            web/test-results/playwright.json
             web/test-results/artifacts
-            web/test-results/production-artifacts
           if-no-files-found: ignore
           retention-days: 7
+
+  test-build:
+    name: Test and build
+    if: ${{ always() }}
+    needs: [changes, go, updater, creative-eval, unit, build, browser-tests]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require applicable suites to pass
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+          GO_MODULES: ${{ needs.changes.outputs.go_modules }}
+          EXPECT_UPDATER: ${{ needs.changes.outputs.updater }}
+          EXPECT_EVAL: ${{ needs.changes.outputs.creative_eval }}
+          GO: ${{ needs.go.result }}
+          UPDATER: ${{ needs.updater.result }}
+          EVAL: ${{ needs.creative-eval.result }}
+          UNIT: ${{ needs.unit.result }}
+          BUILD: ${{ needs.build.result }}
+          BROWSER: ${{ needs.browser-tests.result }}
+        run: |
+          test "$CHANGES" = success
+          if [[ "$EXPECT_EVAL" == true ]]; then test "$EVAL" = success; fi
+          if [[ "$CODE" == true ]]; then
+            if [[ "$GO_MODULES" != '[]' ]]; then test "$GO" = success; fi
+            if [[ "$EXPECT_UPDATER" == true ]]; then test "$UPDATER" = success; fi
+            for result in "$UNIT" "$BUILD" "$BROWSER"; do
+              test "$result" = success
+            done
+          fi

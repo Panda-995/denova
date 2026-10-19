@@ -110,15 +110,12 @@ func sanitizeModelContextMessages(messages []ModelContextMessage) []ModelContext
 		}
 		switch message.Role {
 		case agentschema.Assistant:
-			if len(message.ToolCalls) == 0 {
-				continue
-			}
 		case agentschema.ToolRole:
 			if strings.TrimSpace(message.ToolCallID) == "" && strings.TrimSpace(message.ToolName) == "" {
 				continue
 			}
 		case agentschema.User:
-			if message.TaskCompletion == nil && !agentcontext.IsContextStateMessage(message) && UserGuidanceCommand(message) == "" {
+			if message.TaskCompletion == nil && !agentcontext.IsContextStateMessage(message) && !agentschema.IsAgentContinuationMessage(message) && UserGuidanceCommand(message) == "" {
 				continue
 			}
 		default:

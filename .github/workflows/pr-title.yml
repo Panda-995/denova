@@ -16,7 +16,7 @@ permissions:
 jobs:
   check-title:
     name: Check English title
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Require English PR title

@@ -31,6 +31,25 @@ func projectStoryEventOverlays(lines []StoryEventRecord) ([]StoryEventRecord, er
 	for _, record := range lines {
 		var targetID string
 		switch record.Envelope.Type {
+		case StoryEventTypeTurnPresentationRevised:
+			var revision TurnPresentationRevisedEvent
+			if err := mapToStruct(record.Raw, &revision); err != nil {
+				return nil, err
+			}
+			targetID = revision.TurnID
+			index, ok := turnIndex[targetID]
+			if !ok {
+				return nil, fmt.Errorf("presentation revision target turn does not exist: %s", targetID)
+			}
+			var turn TurnEvent
+			if err := mapToStruct(projected[index].Raw, &turn); err != nil {
+				return nil, err
+			}
+			if turn.TurnResult == nil {
+				turn.TurnResult = &TurnResult{}
+			}
+			turn.TurnResult.Presentation = revision.Presentation.Clone()
+			projected[index].Raw = storyTurnRaw(turn)
 		case StoryEventTypeTurnBackgroundRevised:
 			var revision TurnBackgroundRevisedEvent
 			if err := mapToStruct(record.Raw, &revision); err != nil {

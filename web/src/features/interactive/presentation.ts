@@ -5,6 +5,7 @@ import type { StoryPresentationSettings, TurnPresentation } from './types'
 export function visibleStoryPresentation(stage?: TurnPresentation, settings?: StoryPresentationSettings): TurnPresentation {
   return {
     background: stage ? stage.background : settings?.default_background,
+    ambient: stage ? stage.ambient : settings?.default_ambient,
     characters: settings?.characters !== false ? stage?.characters : undefined,
   }
 }

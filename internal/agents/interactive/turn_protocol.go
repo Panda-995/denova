@@ -3,9 +3,7 @@ package interactive
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	producttools "denova/internal/agents/tools"
@@ -21,15 +19,11 @@ const (
 	interactiveTurnSubmissionToolName = producttools.SubmitInteractiveTurnToolName
 	legacyActorStatePatchesToolName   = "submit_actor_state_patches"
 	legacyInteractiveChoicesToolName  = "submit_choices"
-	interactiveCompletionRetryCode    = "interactive_turn_result_missing"
-	interactiveRetryDraftMaxBytes     = 16 * 1024
 	interactiveRetryFeedbackMaxBytes  = 1024
-	interactiveRetryCandidatePrefix   = "[Retained narrative candidate; source=first accepted model prose;"
 	interactiveRetryFeedbackPrefix    = "[Interactive turn protocol feedback; source=backend completion guard]"
 )
 
 const (
-	CompletionRetryCode    = interactiveCompletionRetryCode
 	TurnSubmissionToolName = interactiveTurnSubmissionToolName
 )
 
@@ -37,31 +31,7 @@ type interactiveTurnProtocolStateKey struct{}
 
 type interactiveTurnProtocolRunState struct {
 	narrativeCandidateReady atomic.Bool
-	mu                      sync.Mutex
-	narrativeCandidate      string
-	restored                bool
-}
-
-func (s *interactiveTurnProtocolRunState) retainNarrativeCandidate(content string) string {
-	if s == nil {
-		return ""
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.narrativeCandidate == "" && strings.TrimSpace(content) != "" {
-		s.narrativeCandidate = content
-		s.narrativeCandidateReady.Store(true)
-	}
-	return s.narrativeCandidate
-}
-
-func (s *interactiveTurnProtocolRunState) retainedNarrativeCandidate() string {
-	if s == nil {
-		return ""
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.narrativeCandidate
+	legacyNarrative         string
 }
 
 func interactiveTurnProtocolState(ctx context.Context) *interactiveTurnProtocolRunState {
@@ -82,15 +52,14 @@ func RequestTurnCompletion(ctx context.Context) bool {
 // producing a prose candidate.
 type TurnProtocolMiddleware struct {
 	*agentmiddleware.BaseMiddleware
-	ready           func() bool
-	loadNarrative   func(context.Context) (string, error)
-	acceptNarrative func(context.Context, string) error
+	ready         func() bool
+	loadNarrative func(context.Context) (NarrativeCandidate, error)
 }
 
 func NewTurnProtocolMiddleware(config InteractiveStoryToolContext) *TurnProtocolMiddleware {
 	return &TurnProtocolMiddleware{
 		BaseMiddleware: &agentmiddleware.BaseMiddleware{},
-		ready:          config.TurnResultReady, loadNarrative: config.LoadNarrativeCandidate, acceptNarrative: config.AcceptNarrativeCandidate,
+		ready:          config.TurnResultReady, loadNarrative: config.LoadNarrativeCandidate,
 	}
 }
 
@@ -101,23 +70,43 @@ func (m *TurnProtocolMiddleware) BeforeAgent(ctx context.Context, runCtx *agentm
 		if err != nil {
 			return ctx, runCtx, err
 		}
-		state.retainNarrativeCandidate(narrative)
-		state.restored = narrative != ""
+		state.narrativeCandidateReady.Store(narrative.Content != "")
+		if !narrative.HistoryAccepted {
+			state.legacyNarrative = narrative.Content
+		}
 	}
 	return context.WithValue(ctx, interactiveTurnProtocolStateKey{}, state), runCtx, nil
 }
 
-func (m *TurnProtocolMiddleware) BeforeModelRewriteState(ctx context.Context, state *agentmiddleware.RunState, model *agentmiddleware.ModelContext) (context.Context, *agentmiddleware.RunState, error) {
+// BeforeModelCall reads released drafts without rewriting their journals.
+// New accepted responses already have canonical history and bypass this path.
+func (m *TurnProtocolMiddleware) BeforeModelCall(ctx context.Context, call *agentmodel.ModelCall, _ *agentmiddleware.ModelContext) (context.Context, *agentmodel.ModelCall, error) {
 	progress := interactiveTurnProtocolState(ctx)
-	if progress == nil || !progress.restored || model.Iteration != 0 || (m.ready != nil && m.ready()) {
-		return ctx, state, nil
+	if progress == nil || progress.legacyNarrative == "" || (m.ready != nil && m.ready()) {
+		return ctx, call, nil
 	}
-	// The canonical draft stays complete in Story storage. Only this explicitly
-	// attributed request-local reminder uses the bounded feedback projection.
-	for _, fragment := range interactiveProtocolFeedback(progress.retainedNarrativeCandidate()) {
-		state.Messages = append(state.Messages, &agentschema.Message{Role: fragment.Role, Content: fragment.Content})
+	for _, message := range call.Messages {
+		if message.Role == agentschema.Assistant && message.Content == progress.legacyNarrative {
+			return ctx, call, nil
+		}
 	}
-	return ctx, state, nil
+	feedback, err := agentmodel.ModelFeedbackMessages(interactiveProtocolFeedback())
+	if err != nil {
+		return ctx, call, err
+	}
+	next := *call
+	next.Messages = append(agentschema.CloneMessages(call.Messages), agentschema.AssistantMessage(progress.legacyNarrative, nil))
+	next.Messages = append(next.Messages, feedback...)
+	return ctx, &next, nil
+}
+
+// BeforeAgentCompletion checks product completeness after normal response
+// acceptance. Feedback continues the same conversation without rejecting prose.
+func (m *TurnProtocolMiddleware) BeforeAgentCompletion(ctx context.Context, _ *agentmiddleware.RunState) (context.Context, []agentschema.ContextFragment, error) {
+	if m.ready == nil || m.ready() {
+		return ctx, nil, nil
+	}
+	return ctx, interactiveProtocolFeedback(), nil
 }
 
 func (m *TurnProtocolMiddleware) WrapModel(_ context.Context, wrapped agentmodel.BaseChatModel, _ *agentmiddleware.ModelContext) (agentmodel.BaseChatModel, error) {
@@ -128,11 +117,13 @@ func (m *TurnProtocolMiddleware) WrapModel(_ context.Context, wrapped agentmodel
 }
 
 func (m *TurnProtocolMiddleware) AfterModelRewriteState(ctx context.Context, state *agentmiddleware.RunState, _ *agentmiddleware.ModelContext) (context.Context, *agentmiddleware.RunState, error) {
-	if m == nil || m.ready == nil || !m.ready() || state == nil || len(state.Messages) == 0 {
-		return ctx, state, nil
-	}
 	last := state.Messages[len(state.Messages)-1]
-	if last != nil && len(last.ToolCalls) > 0 {
+	if OutputContainsNarrativeCandidate(last) {
+		if progress := interactiveTurnProtocolState(ctx); progress != nil {
+			progress.narrativeCandidateReady.Store(true)
+		}
+	}
+	if m.ready != nil && m.ready() && last != nil && len(last.ToolCalls) > 0 {
 		return ctx, state, errors.New("tools are forbidden after TurnResult acceptance")
 	}
 	return ctx, state, nil
@@ -154,60 +145,22 @@ func (m *interactiveNarrativeOnlyModel) Stream(ctx context.Context, messages []*
 	return m.BaseChatModel.Stream(ctx, messages, narrativeOpts...)
 }
 
-// ReviewModelOutput retains complete prose and asks for missing modules using
-// bounded feedback. Network failures never enter this product acceptance seam.
-func (m *TurnProtocolMiddleware) ReviewModelOutput(ctx context.Context, output agentmodel.ModelOutput) (agentmodel.ModelOutputReview, error) {
-	state := interactiveTurnProtocolState(ctx)
-	if interactiveOutputContainsNarrativeCandidate(output.Message) && state != nil {
-		if state.retainedNarrativeCandidate() == "" && m.acceptNarrative != nil {
-			if err := m.acceptNarrative(ctx, output.Message.Content); err != nil {
-				return agentmodel.ModelOutputReview{}, err
-			}
-		}
-		state.retainNarrativeCandidate(output.Message.Content)
-	}
-	if m.ready == nil || m.ready() {
-		return agentmodel.ModelOutputReview{Action: agentmodel.ModelOutputAccept}, nil
-	}
-	if output.Message != nil && len(output.Message.ToolCalls) > 0 {
-		return agentmodel.ModelOutputReview{Action: agentmodel.ModelOutputAccept}, nil
-	}
-
-	candidate := ""
-	if state != nil {
-		candidate = state.retainedNarrativeCandidate()
-	}
-	return agentmodel.ModelOutputReview{Action: agentmodel.ModelOutputRepair, Feedback: interactiveProtocolFeedback(candidate), Reason: interactiveCompletionRetryCode}, nil
-}
-
-func interactiveProtocolFeedback(candidate string) []agentschema.ContextFragment {
-	var fragments []agentschema.ContextFragment
-	if strings.TrimSpace(candidate) != "" {
-		draft := truncateUTF8StringBytes(candidate, interactiveRetryDraftMaxBytes)
-		fragments = append(fragments, agentschema.ContextFragment{
-			Source: "interactive_turn_protocol", Purpose: "retained_narrative", Role: agentschema.Assistant,
-			HardLimit: interactiveRetryDraftMaxBytes,
-			Content: truncateUTF8StringBytes(fmt.Sprintf(
-				"%s limit=%d bytes]\n%s",
-				interactiveRetryCandidatePrefix,
-				interactiveRetryDraftMaxBytes,
-				draft,
-			), interactiveRetryDraftMaxBytes)})
-	}
-	feedback := truncateUTF8StringBytes(strings.Join([]string{
+func interactiveProtocolFeedback() []agentschema.ContextFragment {
+	feedback := strings.Join([]string{
 		interactiveRetryFeedbackPrefix,
 		"You attempted to finish the turn before both state_changes and choices were accepted.",
 		"The first prose candidate is locked and already displayed. Call only submit_interactive_turn now, providing only fields named by retry_modules. Do not resubmit accepted modules, and do not repeat or rewrite prose after ready=true.",
 		"Do not finish this turn before both submission modules are accepted.",
-	}, "\n"), interactiveRetryFeedbackMaxBytes)
-	fragments = append(fragments, agentschema.ContextFragment{
+	}, "\n")
+	return []agentschema.ContextFragment{{
 		Source: "interactive_turn_protocol", Purpose: "missing_modules", Role: agentschema.User,
 		Content: feedback, HardLimit: interactiveRetryFeedbackMaxBytes,
-	})
-	return fragments
+	}}
 }
 
-func interactiveOutputContainsNarrativeCandidate(message *agentschema.Message) bool {
+// OutputContainsNarrativeCandidate identifies prose accepted by the Game turn
+// protocol. Other tool commentary is not the turn's locked narrative.
+func OutputContainsNarrativeCandidate(message *agentschema.Message) bool {
 	if message == nil || strings.TrimSpace(message.Content) == "" {
 		return false
 	}
@@ -229,14 +182,4 @@ func IsInteractiveTurnSubmissionTool(name string) bool {
 	default:
 		return false
 	}
-}
-
-func truncateUTF8StringBytes(value string, maxBytes int) string {
-	if maxBytes <= 0 || len(value) <= maxBytes {
-		return value
-	}
-	for maxBytes > 0 && (value[maxBytes]&0xC0) == 0x80 {
-		maxBytes--
-	}
-	return value[:maxBytes]
 }

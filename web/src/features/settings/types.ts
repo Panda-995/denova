@@ -129,12 +129,31 @@ export interface TerminalCommandSettings {
   enabled: boolean
 }
 
+export type WebSearchProvider = 'builtin' | 'searxng' | 'deepseek' | 'perplexity' | 'tavily'
+
+export interface SearchServiceSettings {
+  api_key?: string
+  mode?: 'web' | 'fast' | 'basic' | 'advanced'
+}
+
 export interface WebAccessSettings {
+  search_provider?: WebSearchProvider
+  search_fallback?: 'none' | 'builtin'
+  deepseek?: SearchServiceSettings
+  perplexity?: SearchServiceSettings
+  tavily?: SearchServiceSettings
   searxng_base_url?: string
   search_max_results?: number | null
   search_provider_timeout_seconds?: number | null
   fetch_max_response_kb?: number | null
   fetch_max_content_chars?: number | null
+}
+
+export interface WebSearchTestResult {
+  provider: string
+  status: 'success' | 'no_results'
+  elapsed_ms: number
+  results: { title: string; url: string; summary?: string; provider: string; published_at?: string }[] | null
 }
 
 export interface ModelProfileSettings {

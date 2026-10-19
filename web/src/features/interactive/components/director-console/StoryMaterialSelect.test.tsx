@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { getProjectLoreItems, type LoreItem } from '@/lib/api'
-import { StoryBackgroundSelect } from './StoryBackgroundSelect'
+import { StoryMaterialSelect } from './StoryMaterialSelect'
 
 vi.mock('@/lib/api', () => ({ getProjectLoreItems: vi.fn() }))
 
@@ -18,7 +18,7 @@ it('loads on every opening so newly imported cover materials become selectable',
   const user = userEvent.setup()
   const onChange = vi.fn()
   vi.mocked(getProjectLoreItems).mockResolvedValueOnce([]).mockResolvedValueOnce([location])
-  render(<StoryBackgroundSelect projectId="project-1" disabled={false} onChange={onChange} />)
+  render(<StoryMaterialSelect layer="background" projectId="project-1" disabled={false} onChange={onChange} />)
   expect(getProjectLoreItems).not.toHaveBeenCalled()
   await user.click(screen.getByRole('button', { name: '当前背景' }))
   await waitFor(() => expect(getProjectLoreItems).toHaveBeenCalledTimes(1))
@@ -32,7 +32,7 @@ it('loads on every opening so newly imported cover materials become selectable',
 it('shows a retryable error and replaces stale results after a failed refresh', async () => {
   const user = userEvent.setup()
   vi.mocked(getProjectLoreItems).mockResolvedValueOnce([location]).mockRejectedValueOnce(new Error('Offline')).mockResolvedValueOnce([])
-  render(<StoryBackgroundSelect projectId="project-1" disabled={false} onChange={vi.fn()} />)
+  render(<StoryMaterialSelect layer="background" projectId="project-1" disabled={false} onChange={vi.fn()} />)
   await user.click(screen.getByRole('button', { name: '当前背景' }))
   await user.click(await screen.findByRole('button', { name: /白昼.*长河/ }))
   await user.click(screen.getByRole('button', { name: '当前背景' }))

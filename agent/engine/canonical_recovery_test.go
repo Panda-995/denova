@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/alfredxw/denova/agent/context/history"
@@ -14,6 +15,46 @@ import (
 type recoveryHistory struct {
 	head     canonical.CanonicalHistoryHead
 	messages []*schema.Message
+}
+
+func TestContinuationKeepsContextStateOrderAcrossCanonicalRecovery(t *testing.T) {
+	feedback := schema.UserMessage("Continue the accepted work")
+	feedback.Extra = map[string]any{schema.ExtraKeyAgentContinuation: true}
+	stateMessage := history.NewContextStateMessage(schema.ContextFragment{
+		Source: "workspace", Purpose: "current workspace", Resource: "workspace", StateID: "workspace", Revision: "1",
+		Stability: schema.ContextSessionState, Placement: schema.ContextStateMessage, Content: "restored context", HardLimit: 1024,
+	}, strings.Repeat("a", 64), "initialize", "")
+	source := recoveryHistory{head: canonical.CanonicalHistoryHead{Identity: "lane", Revision: "1"}, messages: []*schema.Message{
+		schema.UserMessage("original input"), schema.AssistantMessage("accepted prose", nil), feedback, stateMessage,
+	}}
+	contextState, err := history.RebuildContextStateSnapshot(source.messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := engineTranscript{Version: 1, HistoryHead: source.head, Messages: source.messages, ContextState: contextState}
+	checkpoint, err := canonicalMessageCheckpoint(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := canonical.CanonicalContextStateOrder(source.messages); !reflect.DeepEqual(got, source.messages) {
+		t.Error("continuation feedback was reordered as a newly admitted user input")
+	}
+	raw, matched, err := RestoreCanonicalCheckpoint(t.Context(), checkpoint, source.head, source)
+	if err != nil || !matched {
+		t.Fatalf("streaming recovery changed continuation order: matched=%t error=%v", matched, err)
+	}
+	restored, err := decodeEngineTranscript(raw)
+	if err != nil || !reflect.DeepEqual(restored.Messages, source.messages) {
+		t.Fatalf("streaming recovery changed accepted messages: %v", err)
+	}
+	imported, err := PrepareCanonicalImport(t.Context(), CanonicalImportRequest{Messages: source.messages, Head: source.head, Checkpoint: checkpoint, Active: true, Canonical: true})
+	if err != nil {
+		t.Fatalf("canonical import changed continuation order: %v", err)
+	}
+	importedState, err := decodeEngineTranscript(imported.State)
+	if err != nil || !reflect.DeepEqual(importedState.Messages, source.messages) {
+		t.Fatalf("canonical import changed accepted messages: %v", err)
+	}
 }
 
 func (s recoveryHistory) CanonicalHistoryHead(context.Context) (canonical.CanonicalHistoryHead, error) {

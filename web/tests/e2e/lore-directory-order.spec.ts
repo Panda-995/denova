@@ -4,8 +4,8 @@ import { createAndOpenBook } from '../support/api'
 async function drag(page: Page, source: Locator, target: Locator, screenshotPath?: string) {
   await source.scrollIntoViewIfNeeded()
   await source.hover()
-  await expect(source).toHaveCSS('transform', 'none')
-  await expect(target).toHaveCSS('transform', 'none')
+  await expect(source.locator('..')).toHaveCSS('transform', 'none')
+  await expect(target.locator('..')).toHaveCSS('transform', 'none')
   const from = (await source.boundingBox())!
   const to = (await target.boundingBox())!
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
@@ -19,6 +19,13 @@ async function drag(page: Page, source: Locator, target: Locator, screenshotPath
   expect(Math.abs(moving.x - from.x)).toBeLessThan(2)
   expect(Math.abs(moving.y - to.y)).toBeLessThan(2)
   expect(Math.abs(moving.width - from.width)).toBeLessThan(2)
+  // Geometry alone does not detect rows clipped by their paint-containing slot.
+  for (const row of [source, target]) {
+    await expect.poll(() => row.evaluate(node => {
+      const rect = node.getBoundingClientRect()
+      return node.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2))
+    })).toBe(true)
+  }
   if (screenshotPath) await page.screenshot({ path: screenshotPath })
   await page.mouse.up()
   // Check the first frames after drop, not just the eventual DOM order.
@@ -57,6 +64,9 @@ for (const theme of ['dark', 'light']) {
     await expect.poll(names).toEqual(['Alpha', 'Beta', gamma])
     await expect(row(gamma)).toHaveCSS('cursor', 'default')
     await expect(row(gamma)).toHaveAttribute('title', gamma)
+    await drag(page, row(gamma), row('Alpha'), testInfo.outputPath(`directory-${theme}-dragging.png`))
+    await expect.poll(names).toEqual([gamma, 'Alpha', 'Beta'])
+    await expect(library).toBeVisible()
     // Sorting persistence and Project isolation run once. Keep long-name
     // directory rendering in both themes, including the mobile drawer.
     if (theme === 'light') {
@@ -68,9 +78,6 @@ for (const theme of ['dark', 'light']) {
       await page.screenshot({ path: testInfo.outputPath(`directory-${theme}-narrow.png`) })
       return
     }
-    await drag(page, row(gamma), row('Alpha'))
-    await expect.poll(names).toEqual([gamma, 'Alpha', 'Beta'])
-    await expect(library).toBeVisible()
     await page.reload()
     await expect.poll(names).toEqual([gamma, 'Alpha', 'Beta'])
     // Space sorts; Enter still opens a resource. Escape cancels without saving.
@@ -155,7 +162,7 @@ test('sorts a scrolling directory using only the original row', async ({ page, r
   // The first row has moved aside during sorting; drop into its original slot.
   const to = await target.evaluate(node => {
     const rect = node.getBoundingClientRect()
-    const transform = new DOMMatrixReadOnly(getComputedStyle(node).transform)
+    const transform = new DOMMatrixReadOnly(getComputedStyle(node.parentElement!).transform)
     return rect.y - transform.m42 + rect.height / 2
   })
   await page.mouse.move(x, to, { steps: 3 })

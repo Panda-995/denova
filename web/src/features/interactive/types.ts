@@ -411,6 +411,9 @@ export interface StoryPresentationSettings {
   /** Initial background before the first committed stage; never overrides a saved turn. */
   default_background?: PresentationMaterial
   characters: boolean
+  /** Allow Agent ambient changes; playback remains an explicit device action. */
+  ambient?: boolean
+  default_ambient?: PresentationMaterial
 }
 
 export interface PresentationMaterial {
@@ -422,9 +425,16 @@ export interface PresentationMaterial {
   focus?: { x: number; y: number }
 }
 
+/** Explicit creator edits; omitted layers retain their committed selection. */
+export type TurnPresentationPatch = {
+  background?: PresentationMaterial | null
+  ambient?: PresentationMaterial | null
+}
+
 export interface TurnPresentation {
   background?: PresentationMaterial
   characters?: PresentationMaterial[]
+  ambient?: PresentationMaterial
 }
 
 export interface TurnResult {

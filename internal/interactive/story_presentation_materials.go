@@ -14,11 +14,25 @@ import (
 )
 
 var ErrDefaultBackground = errors.New("default background must be an enabled associated local image")
+var ErrDefaultAmbient = errors.New("default ambient must be an enabled associated local audio file")
 
 // resolveStoryPresentationSettings pins new selections server-side. Unchanged
 // selections retain their saved locator even after their Lore association changes.
 func (s *Store) resolveStoryPresentationSettings(input, current *StoryPresentationSettings) (*StoryPresentationSettings, error) {
 	settings := NormalizeStoryPresentationSettings(input)
+	if selected := settings.DefaultAmbient; selected != nil {
+		if current != nil && current.DefaultAmbient != nil && selected.ItemID == current.DefaultAmbient.ItemID && selected.AssetID == current.DefaultAmbient.AssetID {
+			settings.DefaultAmbient = NormalizeStoryPresentationSettings(current).DefaultAmbient
+		} else {
+			raw, _ := json.Marshal(map[string]any{"ambient": selected})
+			stage, receipt := ResolvePresentationPatch(s.root, nil, raw, &StoryPresentationSettings{Ambient: true})
+			if receipt.Ignored > 0 {
+				slog.Warn("[interactive-presentation] default ambient rejected", "item_id", selected.ItemID, "asset_id", selected.AssetID, "reasons", receipt.Reasons)
+				return nil, ErrDefaultAmbient
+			}
+			settings.DefaultAmbient = stage.Ambient
+		}
+	}
 	selected := settings.DefaultBackground
 	if selected == nil {
 		return settings, nil
@@ -48,7 +62,7 @@ func ResolvePresentationPatch(workspace string, base *TurnPresentation, raw json
 	var items []lore.Item
 	var loadErr error
 	loaded := false
-	return ApplyPresentationPatch(base, raw, settings, func(itemID, assetID string) (PresentationMaterial, error) {
+	return ApplyPresentationPatch(base, raw, settings, func(itemID, assetID, mimePrefix string) (PresentationMaterial, error) {
 		if !loaded {
 			items, loadErr = lore.NewStore(workspace).List()
 			loaded = true
@@ -62,7 +76,7 @@ func ResolvePresentationPatch(workspace string, base *TurnPresentation, raw json
 				continue
 			}
 			for _, material := range item.ResolvedMaterials {
-				if material.ID != assetID || !strings.HasPrefix(material.MIMEType, "image/") {
+				if material.ID != assetID || !strings.HasPrefix(material.MIMEType, mimePrefix) {
 					continue
 				}
 				full, err := book.SafePath(workspace, material.Path)
@@ -89,6 +103,6 @@ func ResolvePresentationPatch(workspace string, base *TurnPresentation, raw json
 			}
 			break
 		}
-		return PresentationMaterial{}, fmt.Errorf("enabled associated image or file unavailable")
+		return PresentationMaterial{}, fmt.Errorf("enabled associated %s material or local file unavailable", mimePrefix)
 	})
 }

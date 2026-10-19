@@ -24,7 +24,7 @@ func CanonicalContextStateOrder(messages []*agentschema.Message) []*agentschema.
 	result := make([]*agentschema.Message, 0, len(input))
 	for index := 0; index < len(input); {
 		message := input[index]
-		if message == nil || message.Role != agentschema.User || agenthistory.IsContextStateMessage(message) {
+		if message == nil || message.Role != agentschema.User || agenthistory.IsContextStateMessage(message) || agentschema.IsAgentContinuationMessage(message) {
 			result = append(result, message)
 			index++
 			continue

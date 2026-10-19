@@ -149,7 +149,7 @@ func (a *Assembler) Assemble(ctx stdcontext.Context, req AssembleRequest) (Resul
 	finalUserIndex := -1
 	for index := len(messages) - 1; index >= 0; index-- {
 		message := messages[index]
-		if message != nil && message.Role == agentschema.User && !IsContextStateMessage(message) && message.TaskCompletion == nil {
+		if message != nil && message.Role == agentschema.User && !IsContextStateMessage(message) && message.TaskCompletion == nil && !agentschema.IsAgentContinuationMessage(message) {
 			finalUserIndex = index
 			break
 		}

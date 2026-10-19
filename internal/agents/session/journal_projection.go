@@ -797,7 +797,7 @@ func (projection *sessionJournalProjection) rememberCanonicalMessage(message *ag
 	if !projection.CanonicalPendingUser && (len(projection.CanonicalAnchors) == 0 || projection.CanonicalCount-projection.CanonicalAnchors[len(projection.CanonicalAnchors)-1].Index >= 256) {
 		projection.CanonicalAnchors = append(projection.CanonicalAnchors, canonicalAnchor{Index: projection.CanonicalCount, Cursor: location.Cursor, RecordIndex: location.RecordIndex, BatchIndex: batchIndex})
 	}
-	if message.Role == agentschema.User && !contextState {
+	if message.Role == agentschema.User && !contextState && !agentschema.IsAgentContinuationMessage(message) {
 		projection.CanonicalPendingUser = true
 	} else {
 		projection.CanonicalCount++

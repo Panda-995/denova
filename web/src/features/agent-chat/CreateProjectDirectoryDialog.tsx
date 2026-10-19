@@ -1,3 +1,4 @@
+import { randomUUID } from '@/lib/uuid'
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -54,7 +55,7 @@ export function CreateProjectDirectoryDialog({ open, onOpenChange, extension = f
           try {
             await management('/development', 'POST', {
               kind, projectId: project.id,
-              relativePath: '.', id: packageId.trim() || `extension.${crypto.randomUUID()}`,
+              relativePath: '.', id: packageId.trim() || `extension.${randomUUID()}`,
               name: { 'zh-CN': name.trim(), 'en-US': name.trim() },
             })
             project.hasGuide = true

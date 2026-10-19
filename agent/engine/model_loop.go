@@ -153,7 +153,7 @@ func (agent *modelToolLoop) callModelWithRetry(
 				case agentretry.ModelOutputAccept:
 					continue
 				case agentretry.ModelOutputRepair:
-					feedback, feedbackErr := agentmodel.ModelRepairMessages(review)
+					feedback, feedbackErr := agentmodel.ModelFeedbackMessages(review.Feedback)
 					if feedbackErr != nil {
 						return result, feedbackErr
 					}

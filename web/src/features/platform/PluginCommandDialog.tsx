@@ -1,3 +1,4 @@
+import { randomUUID } from '@/lib/uuid'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useTheme } from 'next-themes'
@@ -40,7 +41,7 @@ export function PluginCommandDialog({ selection, onClose }: { selection: PluginA
       // Await admission even after cancellation so a late runtime is released.
       runtime = await management<RuntimeSnapshot>('/plugin-actions/open', 'POST', {
         projectId: selection.projectId, pluginId: selection.plugin.id, releaseId: selection.plugin.releaseId, context: selection.context,
-        kind: 'command', actionId: selection.action.id, consumerId: crypto.randomUUID(), locale: i18n.language, theme: resolvedTheme,
+        kind: 'command', actionId: selection.action.id, consumerId: randomUUID(), locale: i18n.language, theme: resolvedTheme,
       })
       activeRuntime.current = runtime
       controller.signal.throwIfAborted()

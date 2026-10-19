@@ -174,7 +174,7 @@ func sceneTurnsFromJournal(ctx context.Context, handle *storyJournalHandle, bran
 				}
 			}
 			selected[record.Envelope.ID] = StoryEventRecord{Envelope: record.Envelope, Raw: raw}
-		case StoryEventTypeTurnBackgroundRevised, StoryEventTypeTurnNarrativeRevised, StoryEventTypeTurnStateRevised:
+		case StoryEventTypeTurnPresentationRevised, StoryEventTypeTurnBackgroundRevised, StoryEventTypeTurnNarrativeRevised, StoryEventTypeTurnStateRevised:
 			targetID, _ := record.Raw["turn_id"].(string)
 			base, ok := selected[targetID]
 			if !ok {

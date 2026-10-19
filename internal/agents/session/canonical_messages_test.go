@@ -88,6 +88,13 @@ func TestColdCanonicalWindowPreservesSemanticCoordinates(t *testing.T) {
 		}
 		ordered = append(ordered, state, user, answer)
 	}
+	feedback := agentschema.UserMessage("Continue accepted work")
+	feedback.Extra = map[string]any{agentschema.ExtraKeyAgentContinuation: true}
+	restoredState := agenthistory.NewContextStateMessage(agentschema.ContextFragment{StateID: "workspace", Revision: "restored", Content: "Restored workspace state"}, "fingerprint", "set", "")
+	if err := sess.AppendContextMessages(feedback, restoredState); err != nil {
+		t.Fatal(err)
+	}
+	ordered = append(ordered, feedback, restoredState)
 	path := sess.filePath
 	if err := store.Close(); err != nil {
 		t.Fatal(err)

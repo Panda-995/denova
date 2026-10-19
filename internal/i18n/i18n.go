@@ -77,6 +77,15 @@ func stringify(v any) string {
 }
 
 var catalogZH = map[string]string{
+	"settings.webAccess.error.configuration":    "请填写所选搜索服务的 API 密钥或实例地址，并检查搜索模式。",
+	"settings.webAccess.error.invalid_request":  "搜索请求无效，请调整关键词或搜索选项。",
+	"settings.webAccess.error.query_too_long":   "DeepSeek 查询最多 128 个字符，包含时间筛选（占用 17 个字符），请缩短关键词。",
+	"settings.webAccess.error.authentication":   "搜索服务认证失败，请检查 API 密钥和账户权限。",
+	"settings.webAccess.error.quota":            "搜索服务余额或配额不足，请检查服务账户。",
+	"settings.webAccess.error.rate_limit":       "搜索服务请求过于频繁，请稍后重试。",
+	"settings.webAccess.error.unavailable":      "搜索服务暂时不可用或请求超时，请检查网络后重试。",
+	"settings.webAccess.error.invalid_response": "搜索服务返回了无效响应，请稍后重试。",
+
 	"api.agentChat.searchFailed":               "搜索对话历史失败，请重试。",
 	"api.agentChat.exportFailed":               "导出对话失败，请重试。",
 	"api.agentChat.untitled":                   "未命名会话",
@@ -87,9 +96,10 @@ var catalogZH = map[string]string{
 	"lore.index.invalid":                       "章节名称不能为空或重复（最多 256 UTF-8 字节），导航摘要最多 1024 字节；最多 256 个章节，总说明最多 64 KiB。",
 	"lore.index.previewFailed":                 "预览暂不可用，请检查分组名称和说明。",
 	"interactive.contextTooLarge":              "游戏上下文超过完整载入上限（{{bytes}} / {{limit}} 字节），已在生成正文前停止。请检查状态或分支计划中是否有冗长、重复内容；状态手册不会被截断。",
-	"api.interactive.backgroundUpdateFailed":   "无法切换当前背景，请刷新后重试，并选择资料库中已启用的本地图片。",
+	"api.interactive.presentationUpdateFailed": "无法保存舞台素材，请刷新后选择资料库中已启用的本地图片或音频。",
 	"api.interactive.executionDetailsFailed":   "无法加载执行详情，请刷新后重试。",
 	"api.interactive.invalidDefaultBackground": "背景不可用，请重新选择资料库中已启用并保存到本地的图片素材。",
+	"api.interactive.invalidDefaultAmbient":    "环境音不可用，请重新选择资料库中已启用的本地音频素材。",
 
 	"market.errors.resourceOwned":       "此资源属于另一个正在跟踪的安装，请先管理或停止该来源跟踪，再替换内容。",
 	"market.errors.creatorInvalid":      "创作规则必须是非空 UTF-8 文本，且不能超过目标项目的 Agent 上下文片段容量上限。",
@@ -323,6 +333,15 @@ var catalogZH = map[string]string{
 }
 
 var catalogEN = map[string]string{
+	"settings.webAccess.error.configuration":    "Enter the selected search service's API key or instance URL and check its search mode.",
+	"settings.webAccess.error.invalid_request":  "Invalid search request. Adjust the query or search options.",
+	"settings.webAccess.error.query_too_long":   "DeepSeek queries allow up to 128 characters, including time filters (17 characters). Shorten the query.",
+	"settings.webAccess.error.authentication":   "Search authentication failed. Check the API key and account permissions.",
+	"settings.webAccess.error.quota":            "Search service balance or quota is exhausted. Check the service account.",
+	"settings.webAccess.error.rate_limit":       "Search rate limit reached. Try again later.",
+	"settings.webAccess.error.unavailable":      "Search is unavailable or timed out. Check connectivity and try again.",
+	"settings.webAccess.error.invalid_response": "The search service returned an invalid response. Try again later.",
+
 	"api.agentChat.searchFailed":               "Failed to search conversation history. Please try again.",
 	"api.agentChat.exportFailed":               "Failed to export the conversation. Please try again.",
 	"api.agentChat.untitled":                   "Untitled conversation",
@@ -333,9 +352,10 @@ var catalogEN = map[string]string{
 	"lore.index.invalid":                       "Use unique, nonempty section names (up to 256 UTF-8 bytes), short purposes (1024 bytes), at most 256 sections and a 64 KiB introduction.",
 	"lore.index.previewFailed":                 "Preview unavailable. Check group names and notes.",
 	"interactive.contextTooLarge":              "Game context exceeds the complete-input limit ({{bytes}} / {{limit}} bytes). Generation stopped before prose. Check state or the branch plan for lengthy, redundant content; the state handbook will not be truncated.",
-	"api.interactive.backgroundUpdateFailed":   "Could not change the current background. Reload and select an enabled local Lore image.",
+	"api.interactive.presentationUpdateFailed": "Could not save stage media. Reload and select enabled local Lore images or audio.",
 	"api.interactive.executionDetailsFailed":   "Could not load execution details. Reload and try again.",
 	"api.interactive.invalidDefaultBackground": "Background unavailable. Select an enabled Lore image saved locally.",
+	"api.interactive.invalidDefaultAmbient":    "Ambience unavailable. Select an enabled local Lore audio file.",
 
 	"market.errors.resourceOwned":       "This resource belongs to another tracked installation. Manage or detach its source before replacing it.",
 	"market.errors.creatorInvalid":      "Creative instructions must be non-empty UTF-8 text within the target Project’s Agent context fragment limits.",

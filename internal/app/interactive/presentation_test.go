@@ -108,8 +108,8 @@ func TestManualBackgroundSeedsNextTurnAndAllowsDynamicReplacement(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpdateTurnBackground(story.ID, interactive.UpdateTurnBackgroundRequest{
-		BranchID: "main", TurnID: turn.ID, Background: &interactive.PresentationMaterial{ItemID: "station", AssetID: material.ID, Path: "/untrusted/path"},
+	if err := store.UpdateTurnPresentation(story.ID, interactive.UpdateTurnPresentationRequest{
+		BranchID: "main", TurnID: turn.ID, Presentation: presentationPatch(t, &interactive.PresentationMaterial{ItemID: "station", AssetID: material.ID, Path: "/untrusted/path"}),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestPresentationCatalogAndResolverUseEnabledAssociatedImages(t *testing.T) 
 		t.Fatal(err)
 	}
 	disabled := buildPresentationContext(workspace, &interactive.StoryPresentationSettings{}, stage, nil, "hero")
-	if strings.Contains(disabled.Content, "image catalog") || !strings.Contains(disabled.Content, "Both layers are disabled") {
+	if strings.Contains(disabled.Content, "image catalog") || !strings.Contains(disabled.Content, "All layers are disabled") {
 		t.Fatal("disabled layers injected a catalog")
 	}
 }
@@ -185,7 +185,7 @@ func TestPresentationCatalogSkipsOversizeCompleteItems(t *testing.T) {
 	}
 	presentationLoreFixture(t, workspace, "small")
 	source := buildPresentationContext(workspace, nil, nil, nil, "oversize")
-	if len(source.Content) > presentationContextMaxBytes || !source.Truncated || !strings.Contains(source.Content, `"item_id":"small"`) || strings.Contains(source.Content, `"item_id":"oversize"`) || !strings.Contains(source.Content, "1 items (1 images) omitted") {
+	if len(source.Content) > presentationContextMaxBytes || !source.Truncated || !strings.Contains(source.Content, `"item_id":"small"`) || strings.Contains(source.Content, `"item_id":"oversize"`) || !strings.Contains(source.Content, "1 items (1 materials) omitted") {
 		t.Fatalf("bounded catalog=%s", source.Content)
 	}
 }
@@ -222,4 +222,13 @@ func TestPresentationSubmissionRecoversAcceptedStageAndIgnoresBadReferences(t *t
 	if snapshot.CurrentTurn == nil || snapshot.CurrentTurn.TurnResult.Presentation.Characters[0].AssetID != material.ID {
 		t.Fatal("recovered turn lost accepted sprite")
 	}
+}
+
+func presentationPatch(t *testing.T, background *interactive.PresentationMaterial) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{"background": background})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }

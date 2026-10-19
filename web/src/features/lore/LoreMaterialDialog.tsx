@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Copy, Download, ImageIcon, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -18,8 +18,7 @@ import { loreMaterialURL, type LoreMaterial, type LoreMaterialMutation } from '@
 import { MaterialImage } from './MaterialImage'
 import { LoreMaterialRemoteDialog } from './LoreMaterialRemoteDialog'
 import { speechPlayer } from '@/features/speech/player'
-
-let activePreview: HTMLAudioElement | null = null
+import { claimAudioFocus, releaseAudioFocus } from '@/features/speech/audio-focus'
 
 export function MaterialAudio({
   src,
@@ -32,17 +31,14 @@ export function MaterialAudio({
 }) {
   const { t } = useTranslation()
   const audio = useRef<HTMLAudioElement>(null)
+  const pause = useCallback(() => audio.current?.pause(), [])
   useEffect(() => {
     const element = audio.current
-    const unsubscribe = speechPlayer.subscribe(() => {
-      if (['loading', 'playing'].includes(speechPlayer.getSnapshot().status)) element?.pause()
-    })
     return () => {
-      unsubscribe()
       element?.pause()
-      if (activePreview === element) activePreview = null
+      releaseAudioFocus(pause)
     }
-  }, [])
+  }, [pause])
   return (
     <audio
       ref={audio}
@@ -52,10 +48,11 @@ export function MaterialAudio({
       aria-label={name}
       className="w-full min-w-0"
       onError={() => toast.error(t('lore.materials.previewFailed'))}
-      onPlay={(event) => {
-        if (activePreview !== event.currentTarget) activePreview?.pause()
+      onPause={() => releaseAudioFocus(pause)}
+      onEnded={() => releaseAudioFocus(pause)}
+      onPlay={() => {
         speechPlayer.stop()
-        activePreview = event.currentTarget
+        claimAudioFocus(pause)
       }}
     />
   )
@@ -81,12 +78,6 @@ export function LoreMaterialDialog({
   onInspect?: (material: LoreMaterial) => void
 }) {
   const { t } = useTranslation()
-  useEffect(() => {
-    activePreview?.pause()
-    return () => {
-      activePreview?.pause()
-    }
-  }, [])
   const id = useId()
   const [name, setName] = useState(material.name)
   const [description, setDescription] = useState(material.description ?? '')

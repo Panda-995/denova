@@ -9,8 +9,8 @@ import { Field, FieldTitle } from '@/components/ui/field'
 import { patchProjectSettings, patchSettings } from '@/features/settings/api'
 import { toast } from '@/lib/toast'
 import { visibleStoryPresentation } from '../../presentation'
-import { StoryBackgroundSelect } from './StoryBackgroundSelect'
-import type { PresentationMaterial, TurnEvent, StoryPresentationSettings } from '../../types'
+import { StoryMaterialSelect } from './StoryMaterialSelect'
+import type { TurnPresentationPatch, PresentationMaterial, TurnEvent, StoryPresentationSettings } from '../../types'
 import { useStagePreferences } from '../story-stage/use-stage-preferences'
 import { ControlSection, NumberSettingInput, TuningRow } from './StoryTuningControls'
 
@@ -20,11 +20,11 @@ interface StoryPresentationControlsProps {
   disabled: boolean
   onChange: (settings: StoryPresentationSettings) => void
   currentTurn?: TurnEvent
-  onBackgroundChange?: (turnId: string, background?: PresentationMaterial) => Promise<void>
-  backgroundDisabled?: boolean
+  onPresentationChange?: (turnId: string, patch: TurnPresentationPatch) => Promise<void>
+  presentationDisabled?: boolean
 }
 
-export function StoryPresentationControls({ projectId, value, disabled, onChange, currentTurn, onBackgroundChange, backgroundDisabled = false }: StoryPresentationControlsProps) {
+export function StoryPresentationControls({ projectId, value, disabled, onChange, currentTurn, onPresentationChange, presentationDisabled = false }: StoryPresentationControlsProps) {
   const { t } = useTranslation()
   const { scrimOpacity, textMaxWidth, lineHeight, characterLayout, characterSize } = useStagePreferences(projectId || '')
   const [savingLayout, setSavingLayout] = useState(false)
@@ -42,31 +42,36 @@ export function StoryPresentationControls({ projectId, value, disabled, onChange
       setSavingLayout(false)
     }
   }
-  const [savingBackground, setSavingBackground] = useState(false)
-  const changeCurrentBackground = async (background?: PresentationMaterial) => {
-    if (!currentTurn || !onBackgroundChange) return
-    setSavingBackground(true)
+  const [savingPresentation, setSavingPresentation] = useState(false)
+  const changeCurrentPresentation = async (layer: 'background' | 'ambient', material?: PresentationMaterial) => {
+    if (!currentTurn || !onPresentationChange) return
+    setSavingPresentation(true)
     try {
-      await onBackgroundChange(currentTurn.id, background)
+      await onPresentationChange(currentTurn.id, { [layer]: material ?? null })
     } catch (error) {
-      console.warn('[story-presentation] failed to change current background', error)
-      toast.error(t('storyStage.presentation.backgroundUpdateFailed'))
+      console.warn('[story-presentation] failed to change current presentation', error)
+      toast.error(t('storyStage.presentation.updateFailed'))
     } finally {
-      setSavingBackground(false)
+      setSavingPresentation(false)
     }
   }
-  const settings = { background: true, characters: true, ...value }
+  const settings = { background: true, characters: true, ambient: false, ...value }
   return (
     <ControlSection icon={<Images className="size-4" />} title={t('storyStage.presentation.title')}>
-      <StoryBackgroundSelect
+      {(['background', 'ambient'] as const).map(layer => <StoryMaterialSelect
+        key={layer}
+        layer={layer}
         projectId={projectId}
-        value={visibleStoryPresentation(currentTurn?.turn_result?.presentation, settings).background}
-        disabled={disabled || savingBackground || (!!currentTurn && (backgroundDisabled || !onBackgroundChange))}
-        onChange={background => {
-          if (currentTurn) void changeCurrentBackground(background)
-          else onChange({ ...settings, default_background: background })
+        value={visibleStoryPresentation(currentTurn?.turn_result?.presentation, settings)[layer]}
+        disabled={disabled || savingPresentation || (!!currentTurn && (presentationDisabled || !onPresentationChange))}
+        onChange={material => {
+          if (currentTurn) void changeCurrentPresentation(layer, material)
+          else onChange({ ...settings, [layer === 'background' ? 'default_background' : 'default_ambient']: material })
         }}
-      />
+      />)}
+      <TuningRow title={t('storyStage.presentation.ambient')}>
+        <Switch aria-label={t('storyStage.presentation.ambient')} checked={settings.ambient} disabled={disabled} onCheckedChange={ambient => onChange({ ...settings, ambient })} />
+      </TuningRow>
       <TuningRow title={t('storyStage.presentation.background')}>
         <Switch aria-label={t('storyStage.presentation.background')} checked={settings.background} disabled={disabled} onCheckedChange={background => onChange({ ...settings, background })} />
       </TuningRow>

@@ -2,7 +2,7 @@ name: Sync upstream and ensure image publication
 
 on:
   schedule:
-    - cron: '17 * * * *'
+    - cron: '11,41 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -16,29 +16,24 @@ concurrency:
 jobs:
   sync:
     if: github.repository == 'Panda-995/denova'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: master
+      - name: Verify synchronization and publication decisions
+        run: |
+          python3 .github/scripts/test_sync_upstream.py
+          node --test .github/scripts/image-ci.test.mjs
       - name: Sync upstream while preserving fork workflows
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           bash .github/scripts/sync-upstream.sh
-      - name: Ensure the current commit has a published image
+      - name: Ensure source CI and image publication
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Token pushes do not trigger push workflows. Also retry failed builds
-          # when upstream has no further commits; never cancel a running build.
-          head="$(git rev-parse HEAD)"
-          runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/docker-publish.yml/runs?head_sha=${head}&per_page=100")"
-          if jq -e 'any(.workflow_runs[]; .conclusion == "success" or .status != "completed")' <<< "$runs" >/dev/null; then
-            echo "Image publication already succeeded or is running for ${head}."
-          else
-            gh workflow run docker-publish.yml --ref master -R "$GITHUB_REPOSITORY"
-            echo "Dispatched image publication for ${head}."
-          fi
+          SOURCE_SHA="$(git rev-parse HEAD)" node .github/scripts/image-ci.mjs ensure

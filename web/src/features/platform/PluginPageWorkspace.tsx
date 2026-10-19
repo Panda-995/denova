@@ -1,3 +1,4 @@
+import { randomUUID } from '@/lib/uuid'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -115,7 +116,7 @@ function ProjectPluginPage({ page, projectId, visible, loreReferenceLabels, lore
       context: 'general',
       kind: 'page',
       actionId: page.id,
-      consumerId: crypto.randomUUID(),
+      consumerId: randomUUID(),
       locale: i18n.language,
       theme: resolvedTheme,
     })

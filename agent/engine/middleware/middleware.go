@@ -120,6 +120,11 @@ type RunState struct {
 type Middleware interface {
 	BeforeAgent(context.Context, *RunContext) (context.Context, *RunContext, error)
 	AfterAgent(context.Context, *RunState) (context.Context, error)
+	// BeforeAgentCompletion runs after an accepted response with no tool calls.
+	// Empty feedback allows completion. Nonempty, bounded user feedback is
+	// appended as ordinary history and durably committed with that response
+	// before the loop continues; it does not consume model retry attempts.
+	BeforeAgentCompletion(context.Context, *RunState) (context.Context, []agentschema.ContextFragment, error)
 	BeforeModelRewriteState(context.Context, *RunState, *ModelContext) (context.Context, *RunState, error)
 	AfterModelRewriteState(context.Context, *RunState, *ModelContext) (context.Context, *RunState, error)
 	WrapModel(context.Context, agentmodel.BaseChatModel, *ModelContext) (agentmodel.BaseChatModel, error)
@@ -139,6 +144,10 @@ func (*BaseMiddleware) BeforeAgent(ctx context.Context, run *RunContext) (contex
 
 func (*BaseMiddleware) AfterAgent(ctx context.Context, _ *RunState) (context.Context, error) {
 	return ctx, nil
+}
+
+func (*BaseMiddleware) BeforeAgentCompletion(ctx context.Context, _ *RunState) (context.Context, []agentschema.ContextFragment, error) {
+	return ctx, nil, nil
 }
 
 func (*BaseMiddleware) BeforeModelRewriteState(ctx context.Context, state *RunState, _ *ModelContext) (context.Context, *RunState, error) {

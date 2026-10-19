@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 
+	agentinteractive "denova/internal/agents/interactive"
 	"denova/internal/interactive"
 
 	agentschema "github.com/alfredxw/denova/agent/schema"
@@ -80,14 +81,19 @@ func (c *Conversation) persistDraftDisplay(event interactive.DisplayEvent) error
 }
 
 func (c *Conversation) LoadNarrativeCandidate(ctx context.Context) (string, error) {
+	candidate, err := c.LoadAgentNarrativeCandidate(ctx)
+	return candidate.Content, err
+}
+
+func (c *Conversation) LoadAgentNarrativeCandidate(ctx context.Context) (agentinteractive.NarrativeCandidate, error) {
 	c.turnCheckMu.Lock()
 	defer c.turnCheckMu.Unlock()
 	if err := c.loadTurnDraft(); err != nil {
-		return "", err
+		return agentinteractive.NarrativeCandidate{}, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.turnDraft.Narrative, nil
+	return agentinteractive.NarrativeCandidate{Content: c.turnDraft.Narrative, HistoryAccepted: c.turnDraft.NarrativeSource == "canonical_model_message"}, nil
 }
 
 func (c *Conversation) AcceptNarrativeCandidate(ctx context.Context, narrative string) error {

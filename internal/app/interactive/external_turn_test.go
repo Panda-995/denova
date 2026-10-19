@@ -53,7 +53,7 @@ func externalGameForTest(t *testing.T, store *interactive.Store, story string, c
 	}
 	assembly, err := agents.BuildExternalGameAssembly(t.Context(), &cfg, nil, prompts.InteractiveStorySystemInstructionInput{}, agents.AgentHostCapabilities{Interactive: true}, agentinteractive.InteractiveStoryToolContext{
 		Store: store, StoryID: story, BranchID: "main", PrepareTurn: c.PrepareInteractiveTurn, SubmitTurnResult: c.SubmitTurnResult,
-		TurnResultReady: c.InteractiveNarrativeReady, LoadNarrativeCandidate: c.LoadNarrativeCandidate, AcceptNarrativeCandidate: c.AcceptNarrativeCandidate,
+		TurnResultReady: c.InteractiveNarrativeReady, LoadNarrativeCandidate: c.LoadAgentNarrativeCandidate,
 	})
 	if err != nil {
 		t.Fatal(err)

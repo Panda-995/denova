@@ -1,3 +1,4 @@
+import { randomUUID } from '@/lib/uuid'
 import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useTheme } from 'next-themes'
@@ -59,7 +60,7 @@ export function PluginWorkspaceProvider({ children }: { children: ReactNode }) {
     try {
       const runtime = await management<RuntimeSnapshot>('/plugin-actions/open', 'POST', {
         projectId: selection.projectId, pluginId: selection.plugin.id, releaseId: selection.plugin.releaseId, context: selection.context,
-        kind: selection.action.kind, actionId: selection.action.id, consumerId: crypto.randomUUID(),
+        kind: selection.action.kind, actionId: selection.action.id, consumerId: randomUUID(),
         locale: i18n.language, theme: resolvedTheme,
       })
       if (!mounted.current) { await releasePluginConsumer(runtime); return }
