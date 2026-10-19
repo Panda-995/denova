@@ -115,7 +115,10 @@ jobs:
           # GITHUB_TOKEN 的 push 不触发 docker-publish.yml 的 push 事件，须显式
           # dispatch。docker-publish 自带完整冒烟门禁（启动/认证/持久化/重启），
           # 构建不过不会发布镜像，latest 保持上一个可用版本。
-          gh workflow run docker-publish.yml --ref master
+          # 必须显式 -R：checkout 里加过名为 upstream 的 remote，gh 会优先按
+          # upstream remote 解析仓库（alfredxw/denova 上没有 docker-publish.yml，
+          # 实测 404 "workflow not found on the default branch"）。
+          gh workflow run docker-publish.yml --ref master -R "${GITHUB_REPOSITORY}"
           echo "已触发镜像构建: https://github.com/${GITHUB_REPOSITORY}/actions/workflows/docker-publish.yml"
 
       # 不同步上游标签：本 fork 的镜像标签是 sha/latest，不依赖版本 tag；
