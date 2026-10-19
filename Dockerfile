@@ -1,10 +1,13 @@
 # syntax=docker/dockerfile:1
 FROM node:22-bookworm AS node
-FROM golang:1.26.6-bookworm AS build
+# 浮动 minor 标签 + GOTOOLCHAIN=auto：上游 go.mod 会随版本演进升 Go 要求
+# （实测 211 个上游提交把要求从 1.26.6 提到 1.26.9，死钉补丁版直接构建失败）；
+# 浮动标签自动跟最新 1.26.x，auto 兜底将来跳 1.27 也自动下载工具链，无需改本文件。
+FROM golang:1.26-bookworm AS build
 COPY --from=node /usr/local/ /usr/local/
 RUN npm install -g pnpm@11.15.1
 WORKDIR /src
-ENV CGO_ENABLED=0
+ENV CGO_ENABLED=0 GOTOOLCHAIN=auto
 COPY go.mod go.sum ./
 COPY agent/go.mod agent/go.sum ./agent/
 RUN go mod download && cd agent && go mod download
