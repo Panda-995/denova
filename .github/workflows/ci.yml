@@ -99,7 +99,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-24.04]
+        # The macOS ARM pool can abandon queued jobs when capacity is exhausted.
+        # Keep native macOS checks on the supported standard Intel runner pool.
+        os: [windows-latest, macos-15-intel, ubuntu-24.04]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
