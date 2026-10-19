@@ -171,6 +171,18 @@ func TestSessionAttachReplaysScrollback(t *testing.T) {
 	}
 	history, out, detach := session.Attach(16)
 	collect(t, history, out, "replay-marker")
+	// Seeing the marker or process exit does not mean the PTY reader has drained
+	// its final bytes. A closed subscription is the session completion signal.
+	outputClosed := false
+	deadline := time.After(2 * time.Second)
+	for !outputClosed {
+		select {
+		case _, open := <-out:
+			outputClosed = !open
+		case <-deadline:
+			t.Fatal("timed out waiting for terminal output to finish")
+		}
+	}
 	detach()
 
 	select {

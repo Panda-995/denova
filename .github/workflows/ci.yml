@@ -87,6 +87,9 @@ jobs:
         run: |
           scripts/install_test.sh
           bash scripts/build-github-release_test.sh
+      - name: Stress terminal completion and scrollback replay
+        if: matrix.module == '.'
+        run: go test -race ./internal/terminal -run '^TestSessionAttachReplaysScrollback$' -count=100
 
   updater:
     name: Native updater (${{ matrix.os }})
