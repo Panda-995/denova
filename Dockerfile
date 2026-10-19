@@ -16,6 +16,7 @@ COPY web/patches ./web/patches
 RUN pnpm --dir web install --frozen-lockfile
 COPY . .
 RUN go mod tidy -diff && (cd agent && go mod tidy -diff)
+ARG DENOVA_VERSION=dev
 RUN bash scripts/build.sh \
     && go build -trimpath -o output/denova-container-init ./docker/init-config.go
 
