@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { expect, test } from '../support/fixtures'
-import { createAndOpenBook, createStartedStory, getStoryBranches } from '../support/api'
+import { createAndOpenBook, createStartedStory } from '../support/api'
 import { submitAgentChatMessage } from '../support/agent-chat'
 import type { LoreItem } from '../../src/lib/api'
 import type { Snapshot } from '../../src/features/interactive/types'
@@ -151,17 +151,19 @@ for (const theme of ['dark', 'light']) {
       await player.getByRole('button', { name: '播放环境音' }).click()
       await expect(player).toHaveAttribute('data-status', 'playing')
 
-      // Create and switch through the UI so its persisted branch selection is
-      // updated too. Reloading after an API-only switch can restore the old
-      // client selection and send the next action to main.
-      await page.getByRole('button', { name: '从此处创建分支' }).last().click()
+      // Create through the UI so reload restores the selected branch instead of
+      // the previously remembered main branch.
+      await page.getByRole('button', { name: '从此处创建分支', exact: true }).last().click()
       const branchDialog = page.getByRole('dialog')
       await branchDialog.getByLabel('剧情线名称').fill('Side scene')
+      const branchCreated = page.waitForResponse(response => response.request().method() === 'POST'
+        && new URL(response.url()).pathname === `/api/interactive/stories/${story.id}/branches`)
       await branchDialog.getByRole('button', { name: '创建并切换', exact: true }).click()
-      await expect.poll(() => getStoryBranches(request, story.id)).toContainEqual(
-        expect.objectContaining({ title: 'Side scene', current: true }),
-      )
-      const branch = (await getStoryBranches(request, story.id)).find(item => item.title === 'Side scene')!
+      const branchResponse = await branchCreated
+      expect(branchResponse.ok(), await branchResponse.text()).toBe(true)
+      const branch: { id: string } = await branchResponse.json()
+      await expect(branchDialog).toBeHidden()
+      await page.reload()
       await submitAgentChatMessage(page, page.getByPlaceholder(/你要做什么/), `E2E_AMBIENT_SELECT:station:${rain.id}`)
       await expect.poll(async () => (await readSnapshot(branch.id)).current_turn?.turn_result?.presentation?.ambient?.asset_id).toBe(rain.id)
       expect((await readSnapshot()).current_turn?.turn_result?.presentation?.ambient?.asset_id).toBe(tavern.id)
