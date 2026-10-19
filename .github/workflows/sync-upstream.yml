@@ -1,0 +1,122 @@
+name: Sync upstream (merge from alfredxw/denova)
+
+# 定时检查上游 alfredxw/denova：有新提交就合并进本 fork 并触发镜像构建，
+# 让 ghcr.io/panda-995/denova:latest 始终跟随上游最新版本。
+# fork 自有的 4 个 Docker 提交（Dockerfile/compose.yaml/docker/ 等）全程保留。
+on:
+  schedule:
+    - cron: "17 19 * * *" # 每天 19:17 UTC = 北京时间 03:17
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  # GITHUB_TOKEN 推送不会触发其它工作流的 push 事件（平台防递归硬规则），
+  # 合并后必须显式 dispatch docker-publish.yml，因此需要 actions: write。
+  # 注意：不能声明 workflows: write——GITHUB_TOKEN 永远拿不到 workflows 权限
+  # （平台硬性安全边界），推送 .github/workflows/ 变更只能靠 SYNC_TOKEN（PAT），
+  # 本工作流未配置 SYNC_TOKEN，走"回退 workflow 文件"路线（见 Push 前步骤）。
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    # 只在本 fork 里运行；上游仓库自身无需自同步
+    if: github.repository != 'alfredxw/denova'
+    env:
+      UPSTREAM_REPO: alfredxw/denova
+      UPSTREAM_BRANCH: master
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: master
+
+      - name: Git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream and fetch
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" || git remote set-url upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream --prune
+
+      - name: Anything to sync?
+        id: changes
+        run: |
+          tip="$(git rev-parse "upstream/${UPSTREAM_BRANCH}")"
+          base="$(git merge-base HEAD "upstream/${UPSTREAM_BRANCH}")"
+          if [ "$tip" = "$base" ]; then
+            echo "up-to-date: fork 已包含上游全部提交，无需同步"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "待合并上游提交数: $(git rev-list --count HEAD..upstream/${UPSTREAM_BRANCH})"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge upstream -> fork
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          set -e
+          if git merge --no-edit "upstream/${UPSTREAM_BRANCH}"; then
+            echo "merge 干净，无冲突"
+          else
+            # 冲突自动解决，否则卡死每日同步循环。规则：
+            # - fork 自有 Docker 文件与 .github/ 一律保留 fork 版本（ours）——
+            #   上游从未有过这些文件，常规不冲突；规则只兜底上游将来自加
+            #   同名文件的极端情况，防止 fork 的镜像构建被上游覆盖。
+            # - 其余文件采纳上游（theirs）。
+            echo "merge 有冲突，按规则自动解决"
+            while IFS= read -r -d '' f; do
+              case "$f" in
+                .github/*|Dockerfile|compose.yaml|.dockerignore|docker/*|docs/docker.md)
+                  git checkout --ours -- "$f" 2>/dev/null || git rm -q -f -- "$f" 2>/dev/null || true
+                  echo "  保留 fork 版本(ours): $f"
+                  ;;
+                *)
+                  git checkout --theirs -- "$f" 2>/dev/null || git rm -q -f -- "$f" 2>/dev/null || true
+                  echo "  采纳上游版本(theirs): $f"
+                  ;;
+              esac
+            done < <(git diff --name-only --diff-filter=U -z)
+            git add -A
+            git commit --no-edit
+          fi
+
+      - name: Keep local workflow files before push
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          # GITHUB_TOKEN 推送任何 .github/workflows 变更（改/增/删）会被 GitHub
+          # 整次拒绝（refusing to allow a GitHub App to create or update
+          # workflow ... without workflows permission）。镜像法回退到
+          # origin/master 的版本：先删目录再从 origin/master 恢复，上游新增的
+          # workflow 文件也不会残留。代价：上游的 workflow 更新不进本 fork
+          # （fork 的 ci/release 一直用本地版本，docker-publish 本就是 fork 自有）。
+          # 想连 workflow 一起同步：配 SYNC_TOKEN secret（带 workflow 权限的
+          # fine-grained PAT，勾选 Contents+Workflows 读写）。
+          rm -rf .github/workflows
+          git checkout origin/master -- .github/workflows
+          git add -A -- .github/workflows
+          git commit --no-edit -m "chore(ci): keep local workflow files (no SYNC_TOKEN)" 2>/dev/null || true
+
+      - name: Push merged result
+        if: steps.changes.outputs.changed == 'true'
+        run: git push origin master
+
+      - name: Trigger docker image build
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # GITHUB_TOKEN 的 push 不触发 docker-publish.yml 的 push 事件，须显式
+          # dispatch。docker-publish 自带完整冒烟门禁（启动/认证/持久化/重启），
+          # 构建不过不会发布镜像，latest 保持上一个可用版本。
+          gh workflow run docker-publish.yml --ref master
+          echo "已触发镜像构建: https://github.com/${GITHUB_REPOSITORY}/actions/workflows/docker-publish.yml"
+
+      # 不同步上游标签：本 fork 的镜像标签是 sha/latest，不依赖版本 tag；
+      # 且 GITHUB_TOKEN 推送指向"含 workflow 变更提交"的标签同样会被整条拒收。
