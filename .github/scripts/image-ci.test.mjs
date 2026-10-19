@@ -69,3 +69,35 @@ test('permission or API failures cannot silently count as successful verificatio
   const api = githubAPI({ repository: 'Panda-995/denova', token: 'test-token', fetcher: async () => ({ ok: false, status: 403 }) })
   await assert.rejects(ensureWorkflow(api, 'ci.yml', sha), /HTTP 403/)
 })
+
+test('transient read failures are retried before accepting a verified response', async () => {
+  let calls = 0
+  const waits = []
+  const api = githubAPI({ repository: 'Panda-995/denova', token: 'test-token', sleep: async ms => waits.push(ms), fetcher: async () => {
+    calls++
+    return calls < 3 ? { ok: false, status: 502 } : { ok: true, json: async () => ({ workflow_runs: [run('completed', 'success')] }) }
+  } })
+  assert.match(await ensureWorkflow(api, 'ci.yml', sha), /Already successful/)
+  assert.equal(calls, 3)
+  assert.deepEqual(waits, [1000, 2000])
+})
+
+test('persistent service failures remain failures after a bounded retry budget', async () => {
+  let calls = 0
+  const api = githubAPI({ repository: 'Panda-995/denova', token: 'test-token', sleep: async () => {}, fetcher: async () => {
+    calls++
+    return { ok: false, status: 503 }
+  } })
+  await assert.rejects(ensureWorkflow(api, 'ci.yml', sha), /HTTP 503/)
+  assert.equal(calls, 4)
+})
+
+test('a failed dispatch is not automatically duplicated', async () => {
+  let calls = 0
+  const api = githubAPI({ repository: 'Panda-995/denova', token: 'test-token', sleep: async () => {}, fetcher: async () => {
+    calls++
+    return { ok: false, status: 502 }
+  } })
+  await assert.rejects(api('ci.yml', 'POST', { ref: 'master' }), /HTTP 502/)
+  assert.equal(calls, 1)
+})

@@ -5,17 +5,31 @@ export function currentRun(runs, sha) {
     && ['push', 'workflow_dispatch', 'schedule'].includes(run.event))
 }
 
-export function githubAPI({ repository, token, fetcher = fetch, apiURL = 'https://api.github.com' }) {
+export function githubAPI({ repository, token, fetcher = fetch, apiURL = 'https://api.github.com', sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
   return async (workflow, method = 'GET', body, sha) => {
     const suffix = method === 'POST' ? 'dispatches' : `runs?head_sha=${sha}&per_page=100`
-    const response = await fetcher(`${apiURL}/repos/${repository}/actions/workflows/${workflow}/${suffix}`, {
+    const url = `${apiURL}/repos/${repository}/actions/workflows/${workflow}/${suffix}`
+    const options = {
       method,
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
       ...(body ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(30_000),
-    })
-    if (!response.ok) throw new Error(`GitHub ${method} ${workflow}: HTTP ${response.status}`)
-    return method === 'GET' ? response.json() : undefined
+    }
+    // Retry only reads: retrying a dispatch after a lost response could start
+    // duplicate workflows. The next scheduled poll can reconcile that case.
+    const attempts = method === 'GET' ? 4 : 1
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      let response
+      try {
+        response = await fetcher(url, { ...options, signal: AbortSignal.timeout(30_000) })
+      } catch (error) {
+        if (attempt === attempts - 1) throw error
+      }
+      if (response?.ok) return method === 'GET' ? response.json() : undefined
+      if (response && (![429, 500, 502, 503, 504].includes(response.status) || attempt === attempts - 1)) {
+        throw new Error(`GitHub ${method} ${workflow}: HTTP ${response.status}`)
+      }
+      await sleep(1000 * 2 ** attempt)
+    }
   }
 }
 

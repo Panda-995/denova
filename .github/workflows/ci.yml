@@ -235,7 +235,7 @@ jobs:
 
   test-build:
     name: Test and build
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     needs: [changes, go, updater, creative-eval, unit, build, browser-tests]
     runs-on: ubuntu-24.04
     steps:
