@@ -219,7 +219,9 @@ jobs:
           tests/e2e/lore-workspace-navigation.spec.ts
           tests/e2e/plugin-contributions.spec.ts
           tests/e2e/versions.spec.ts
-          --grep 'shares library destinations|project entry points preserve panel ownership|creates workspace snapshots'
+          tests/browser/story-background.spec.ts
+          tests/e2e/game-ambient.spec.ts
+          --grep 'shares library destinations|project entry points preserve panel ownership|creates workspace snapshots|manually replaces a dynamic background|scene ambience persists'
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:

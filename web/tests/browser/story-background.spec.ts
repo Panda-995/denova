@@ -29,8 +29,8 @@ for (const theme of ['dark', 'light']) {
     const snapshotURL = `/api/interactive/stories/${story.id}/snapshot?branch=main`
     const snapshot = await (await request.get(snapshotURL)).json()
     const turn = snapshot.current_turn
-    const changed = await request.patch(`/api/interactive/stories/${story.id}/turns/${turn.id}/background`, {
-      data: { branch_id: 'main', background: { item_id: 'station', asset_id: assets[0].id } },
+    const changed = await request.patch(`/api/interactive/stories/${story.id}/turns/${turn.id}/presentation`, {
+      data: { branch_id: 'main', presentation: { background: { item_id: 'station', asset_id: assets[0].id } } },
     })
     expect(changed.ok(), await changed.text()).toBe(true)
     await page.goto('/')
