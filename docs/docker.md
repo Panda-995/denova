@@ -20,7 +20,7 @@ docker compose up -d
 
 构建流程在 GitHub 的 amd64 与 arm64 原生运行器上分别完整构建，并验证页面、登录保护、登录、内置工具、重启后的配置和会话保留，通过后合并发布双架构标签。运行镜像和下载镜像均不需要个人 GitHub 令牌。
 
-仓库每半小时（每小时第 11、41 分钟，UTC）检查 `alfredxw/denova` 的 `master` 分支，合并上游代码后显式触发源码 CI。源码检查通过后，由 CI 直接调用可复用的双架构镜像工作流。`latest` 跟随上游开发分支，可能包含尚未发布的改动。程序版本和 OCI version 标签来自上游 `web/package.json`，具体构建由 `sha-xxxxxxxxxxxx` 标签及 OCI revision 标签标识。
+仓库每半小时（每小时第 23、53 分钟，UTC）检查 `alfredxw/denova` 的 `master` 分支，合并上游代码后显式触发源码 CI。源码检查通过后，由 CI 直接调用可复用的双架构镜像工作流。`latest` 跟随上游开发分支，可能包含尚未发布的改动。程序版本和 OCI version 标签来自上游 `web/package.json`，具体构建由 `sha-xxxxxxxxxxxx` 标签及 OCI revision 标签标识。
 
 同步使用 GitHub 自带的 `GITHUB_TOKEN`，无需保存个人令牌。上游的工作流文件不合入，保留本 fork 的自动化；Docker 文件发生冲突时保留 fork 版本，其余源码冲突采用上游版本。即使没有新的上游提交，也会检查当前提交的 CI（含镜像发布）：已成功或仍在运行则跳过，失败或取消则下次检查重试。源码 CI 和两个架构的容器检查全部通过后，才发布新的 `latest`；失败时保留上一次可用的版本。
 

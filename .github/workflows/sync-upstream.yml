@@ -2,7 +2,7 @@ name: Sync upstream and ensure image publication
 
 on:
   schedule:
-    - cron: '11,41 * * * *'
+    - cron: '23,53 * * * *'
   workflow_dispatch:
 
 permissions:
