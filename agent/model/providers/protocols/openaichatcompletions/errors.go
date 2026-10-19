@@ -1,0 +1,34 @@
+package openaichatcompletions
+
+import (
+	"errors"
+	"strings"
+
+	"github.com/alfredxw/denova/agent/model/providers"
+	sdk "github.com/openai/openai-go/v3"
+)
+
+func adaptAPIError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var adapterError *providers.APIError
+	if errors.As(err, &adapterError) {
+		return err
+	}
+	var sdkError *sdk.Error
+	if !errors.As(err, &sdkError) {
+		return err
+	}
+	requestID := ""
+	if sdkError.Response != nil {
+		requestID = responseRequestID(sdkError.Response)
+	}
+	return &providers.APIError{
+		StatusCode: sdkError.StatusCode,
+		Code:       sdkError.Code, Kind: sdkError.Type, RetryAfter: providers.RetryAfterDelay(sdkError.Response),
+		RequestID: requestID,
+		Message:   strings.TrimSpace(err.Error()),
+		Cause:     err,
+	}
+}

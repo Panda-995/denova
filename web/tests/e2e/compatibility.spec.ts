@@ -1,9 +1,11 @@
+import { runtimeRoot } from '../../scripts/e2e-paths.mjs'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { expect, test } from '../support/fixtures'
 import { getCurrentWorkspace, getProjectLoreItems, getStorySnapshot } from '../support/api'
+import { submitAgentChatMessage } from '../support/agent-chat'
 
-const legacyWorkspace = path.resolve('test-results/runtime/denova/projects/Legacy E2E Book')
+const legacyWorkspace = path.join(runtimeRoot, 'denova/projects/Legacy E2E Book')
 const legacyLorePath = path.join(legacyWorkspace, '.nova', 'lore', 'items.json')
 const legacyWritingSessionPath = path.join(
   legacyWorkspace,
@@ -33,7 +35,7 @@ test('opens and continues the released v0.3.3 Writing, Book, Lore, and Game data
   await page.getByRole('button', { name: /^legacy chapter\b/ }).click()
   await expect(page.locator('.editor-content .ProseMirror')).toContainText('这是 v0.3.3 保留的正文。')
 
-  const writingComposer = page.getByPlaceholder(/输入消息/)
+  const writingComposer = page.getByPlaceholder(/输入消息/).filter({ visible: true })
   if (!(await writingComposer.isVisible())) {
     await page.getByRole('button', { name: '显示创作 Agent', exact: true }).click()
   }
@@ -46,14 +48,14 @@ test('opens and continues the released v0.3.3 Writing, Book, Lore, and Game data
   await expect(page.getByRole('option', { name: '切换到会话 v0.3.3 备用会话' })).toBeVisible()
   await page.keyboard.press('Escape')
 
-  await writingComposer.fill('请继续旧会话。E2E_V033_WRITING_CONTINUE')
-  await writingComposer.press('Enter')
+  await submitAgentChatMessage(page, writingComposer, '请继续旧会话。E2E_V033_WRITING_CONTINUE')
   await expect(page.getByText('v0.3.3 写作历史续聊成功。', { exact: true })).toBeVisible()
   expect(await readFile(legacyWritingSessionPath, 'utf8')).toBe(originalWritingSession)
 
   await sidebar.getByRole('button', { name: '资料库', exact: true }).click()
   await expect(page.getByText('林川', { exact: true }).first()).toBeVisible()
-  await expect(page.getByText('旧资料库正文', { exact: true }).first()).toBeVisible()
+  await page.getByTestId('lore-card-hero').getByRole('button', { name: '林川', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '正文', exact: true })).toContainText('旧资料库正文')
   await expect.poll(async () => getProjectLoreItems(request, current.project_id)).toContainEqual(
     expect.objectContaining({ id: 'hero', name: '林川', content: '旧资料库正文' }),
   )
@@ -66,8 +68,7 @@ test('opens and continues the released v0.3.3 Writing, Book, Lore, and Game data
   })
 
   const composer = page.getByPlaceholder(/你要做什么/)
-  await composer.fill('继续探索旧车站')
-  await composer.press('Enter')
+  await submitAgentChatMessage(page, composer, '继续探索旧车站')
   await expect.poll(async () => getStorySnapshot(request, legacyStoryID)).toMatchObject({
     turns: [
       { user: '查看旧车站', narrative: '这是 v0.3.3 保存的游戏正文。' },

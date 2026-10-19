@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
+
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 func TestEvaluateStructuredTools(t *testing.T) {
@@ -19,32 +19,32 @@ func TestEvaluateStructuredTools(t *testing.T) {
 	tests := []struct {
 		name       string
 		mode       config.AgentApprovalMode
-		descriptor agent.ToolDescriptor
+		descriptor agenttool.ToolDescriptor
 		want       Action
 	}{
 		{
 			name: "workspace write is automatic in ask", mode: config.AgentApprovalAsk,
-			descriptor: agent.ToolDescriptor{Source: agent.ToolSourceWrite, MutationScope: agent.ToolMutationWorkspace},
+			descriptor: agenttool.ToolDescriptor{Source: agenttool.ToolSourceWrite, MutationScope: agenttool.ToolMutationWorkspace},
 			want:       ActionAllow,
 		},
 		{
 			name: "network read prompts in ask", mode: config.AgentApprovalAsk,
-			descriptor: agent.ToolDescriptor{Source: agent.ToolSourceWeb, MutationScope: agent.ToolMutationNone},
+			descriptor: agenttool.ToolDescriptor{Source: agenttool.ToolSourceWeb, MutationScope: agenttool.ToolMutationNone},
 			want:       ActionPrompt,
 		},
 		{
 			name: "network read is automatic in write", mode: config.AgentApprovalWrite,
-			descriptor: agent.ToolDescriptor{Source: agent.ToolSourceWeb, MutationScope: agent.ToolMutationNone},
+			descriptor: agenttool.ToolDescriptor{Source: agenttool.ToolSourceWeb, MutationScope: agenttool.ToolMutationNone},
 			want:       ActionAllow,
 		},
 		{
 			name: "external mutation prompts in write", mode: config.AgentApprovalWrite,
-			descriptor: agent.ToolDescriptor{Source: agent.ToolSourceOther, MutationScope: agent.ToolMutationExternal},
+			descriptor: agenttool.ToolDescriptor{Source: agenttool.ToolSourceOther, MutationScope: agenttool.ToolMutationExternal},
 			want:       ActionPrompt,
 		},
 		{
 			name: "external mutation is automatic in full access", mode: config.AgentApprovalFullAccess,
-			descriptor: agent.ToolDescriptor{Source: agent.ToolSourceOther, MutationScope: agent.ToolMutationExternal},
+			descriptor: agenttool.ToolDescriptor{Source: agenttool.ToolSourceOther, MutationScope: agenttool.ToolMutationExternal},
 			want:       ActionAllow,
 		},
 	}
@@ -75,10 +75,10 @@ func TestAttachedFileReadIsAuthorizedWithoutOpeningItsDirectory(t *testing.T) {
 	if err := os.WriteFile(sibling, []byte("sibling"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	descriptor := agent.ToolDescriptor{
+	descriptor := agenttool.ToolDescriptor{
 		Capability:    config.AgentToolFilesystemRead,
-		Source:        agent.ToolSourceRead,
-		MutationScope: agent.ToolMutationNone,
+		Source:        agenttool.ToolSourceRead,
+		MutationScope: agenttool.ToolMutationNone,
 	}
 	request := func(path string) Decision {
 		arguments, err := json.Marshal(map[string]string{"path": path})
@@ -116,7 +116,7 @@ func TestAttachedFilePathExtendsOnlyTheShellReadBoundary(t *testing.T) {
 		}
 		return Evaluate(Request{
 			Mode: mode, Workspace: workspace, ToolName: toolName, Arguments: string(arguments),
-			Descriptor:      agent.ToolDescriptor{Source: agent.ToolSourceShell, MutationScope: agent.ToolMutationExternal},
+			Descriptor:      agenttool.ToolDescriptor{Source: agenttool.ToolSourceShell, MutationScope: agenttool.ToolMutationExternal},
 			AttachmentPaths: []string{attached},
 		})
 	}
@@ -156,7 +156,7 @@ func TestEvaluateBrowserModeMatrix(t *testing.T) {
 			t.Parallel()
 			got := Evaluate(Request{
 				Mode: test.mode, Workspace: workspace, ToolName: "browser", Arguments: test.arguments,
-				Descriptor: agent.ToolDescriptor{Source: agent.ToolSourceWeb, MutationScope: agent.ToolMutationExternal},
+				Descriptor: agenttool.ToolDescriptor{Source: agenttool.ToolSourceWeb, MutationScope: agenttool.ToolMutationExternal},
 			})
 			if got.Action != test.want {
 				t.Fatalf("action = %q (%s), want %q", got.Action, got.RuleID, test.want)
@@ -338,7 +338,7 @@ func TestEvaluateShellEnvironmentOverridesCannotBypassPolicy(t *testing.T) {
 	for _, mode := range []config.AgentApprovalMode{config.AgentApprovalAsk, config.AgentApprovalWrite, config.AgentApprovalFullAccess} {
 		got := Evaluate(Request{
 			Mode: mode, Workspace: workspace, ToolName: "bash", Arguments: string(arguments),
-			Descriptor: agent.ToolDescriptor{Source: agent.ToolSourceShell, MutationScope: agent.ToolMutationExternal},
+			Descriptor: agenttool.ToolDescriptor{Source: agenttool.ToolSourceShell, MutationScope: agenttool.ToolMutationExternal},
 		})
 		if got.Action != ActionDeny || got.RuleID != "critical_shell_environment_override" {
 			t.Fatalf("mode=%s action=%s rule=%s", mode, got.Action, got.RuleID)
@@ -354,7 +354,7 @@ func TestEvaluateShellEnvironmentOverridesCannotBypassPolicy(t *testing.T) {
 	}
 	got := Evaluate(Request{
 		Mode: config.AgentApprovalAsk, Workspace: workspace, ToolName: "bash", Arguments: string(arguments),
-		Descriptor: agent.ToolDescriptor{Source: agent.ToolSourceShell, MutationScope: agent.ToolMutationExternal},
+		Descriptor: agenttool.ToolDescriptor{Source: agenttool.ToolSourceShell, MutationScope: agenttool.ToolMutationExternal},
 	})
 	if got.Action != ActionPrompt || got.RuleID != "shell_environment_override" {
 		t.Fatalf("ordinary environment override = %s/%s", got.Action, got.RuleID)
@@ -403,7 +403,7 @@ func TestEvaluateMalformedShellArgumentsFailsClosed(t *testing.T) {
 	t.Parallel()
 	got := Evaluate(Request{
 		Mode: config.AgentApprovalFullAccess, Workspace: t.TempDir(), ToolName: "bash",
-		Arguments: `{`, Descriptor: agent.ToolDescriptor{Source: agent.ToolSourceShell},
+		Arguments: `{`, Descriptor: agenttool.ToolDescriptor{Source: agenttool.ToolSourceShell},
 	})
 	if got.Action != ActionDeny {
 		t.Fatalf("action = %q, want deny", got.Action)
@@ -418,7 +418,7 @@ func TestWorkspaceCommandRuleMatchesValidatedCommandFamily(t *testing.T) {
 	first := Evaluate(Request{
 		Mode: config.AgentApprovalAsk, ProjectID: projectID, Workspace: workspace,
 		ToolName: "bash", Arguments: firstArgs,
-		Descriptor: agent.ToolDescriptor{Source: agent.ToolSourceShell, MutationScope: agent.ToolMutationExternal},
+		Descriptor: agenttool.ToolDescriptor{Source: agenttool.ToolSourceShell, MutationScope: agenttool.ToolMutationExternal},
 	})
 	if first.Action != ActionPrompt || first.Remember == nil || first.Remember.DisplayPattern != "go test ..." {
 		t.Fatalf("first approval = %#v", first)
@@ -437,7 +437,7 @@ func TestWorkspaceCommandRuleMatchesValidatedCommandFamily(t *testing.T) {
 	second := Evaluate(Request{
 		Mode: config.AgentApprovalAsk, ProjectID: projectID, Workspace: workspace,
 		ToolName: "bash", Arguments: secondArgs, Rules: []config.AgentApprovalRule{rule},
-		Descriptor: agent.ToolDescriptor{Source: agent.ToolSourceShell, MutationScope: agent.ToolMutationExternal},
+		Descriptor: agenttool.ToolDescriptor{Source: agenttool.ToolSourceShell, MutationScope: agenttool.ToolMutationExternal},
 	})
 	if second.Action != ActionAllow || second.RuleID != rule.ID {
 		t.Fatalf("same command family = %#v", second)
@@ -446,7 +446,7 @@ func TestWorkspaceCommandRuleMatchesValidatedCommandFamily(t *testing.T) {
 	risky := Evaluate(Request{
 		Mode: config.AgentApprovalAsk, ProjectID: projectID, Workspace: workspace,
 		ToolName: "bash", Arguments: riskyArgs, Rules: []config.AgentApprovalRule{rule},
-		Descriptor: agent.ToolDescriptor{Source: agent.ToolSourceShell, MutationScope: agent.ToolMutationExternal},
+		Descriptor: agenttool.ToolDescriptor{Source: agenttool.ToolSourceShell, MutationScope: agenttool.ToolMutationExternal},
 	})
 	if risky.Action != ActionPrompt || risky.Remember != nil {
 		t.Fatalf("command-launching test flag inherited rule: %#v", risky)
@@ -454,7 +454,7 @@ func TestWorkspaceCommandRuleMatchesValidatedCommandFamily(t *testing.T) {
 	otherProject := Evaluate(Request{
 		Mode: config.AgentApprovalAsk, ProjectID: "other-project", Workspace: workspace,
 		ToolName: "bash", Arguments: secondArgs, Rules: []config.AgentApprovalRule{rule},
-		Descriptor: agent.ToolDescriptor{Source: agent.ToolSourceShell, MutationScope: agent.ToolMutationExternal},
+		Descriptor: agenttool.ToolDescriptor{Source: agenttool.ToolSourceShell, MutationScope: agenttool.ToolMutationExternal},
 	})
 	if otherProject.Action != ActionPrompt {
 		t.Fatalf("cross-project rule leaked: %#v", otherProject)
@@ -462,7 +462,7 @@ func TestWorkspaceCommandRuleMatchesValidatedCommandFamily(t *testing.T) {
 	otherWorkspace := Evaluate(Request{
 		Mode: config.AgentApprovalAsk, ProjectID: projectID, Workspace: t.TempDir(),
 		ToolName: "bash", Arguments: secondArgs, Rules: []config.AgentApprovalRule{rule},
-		Descriptor: agent.ToolDescriptor{Source: agent.ToolSourceShell, MutationScope: agent.ToolMutationExternal},
+		Descriptor: agenttool.ToolDescriptor{Source: agenttool.ToolSourceShell, MutationScope: agenttool.ToolMutationExternal},
 	})
 	if otherWorkspace.Action != ActionPrompt {
 		t.Fatalf("rule survived a project workspace relink: %#v", otherWorkspace)
@@ -503,7 +503,7 @@ func TestWorkspaceCommandRuleRevalidatesRiskyVariants(t *testing.T) {
 		return Evaluate(Request{
 			Mode: config.AgentApprovalWrite, ProjectID: projectID, Workspace: workspace,
 			ToolName: "bash", Arguments: string(arguments), Rules: rules,
-			Descriptor: agent.ToolDescriptor{Source: agent.ToolSourceShell, MutationScope: agent.ToolMutationExternal},
+			Descriptor: agenttool.ToolDescriptor{Source: agenttool.ToolSourceShell, MutationScope: agenttool.ToolMutationExternal},
 		})
 	}
 	first := request("git push origin main", nil)
@@ -557,6 +557,6 @@ func evaluateShellCommandForOS(t *testing.T, workspace, tool, goos string, mode 
 	return Evaluate(Request{
 		Mode: mode, Workspace: workspace, ToolName: tool, Arguments: string(arguments),
 		GOOS:       goos,
-		Descriptor: agent.ToolDescriptor{Source: agent.ToolSourceShell, MutationScope: agent.ToolMutationExternal},
+		Descriptor: agenttool.ToolDescriptor{Source: agenttool.ToolSourceShell, MutationScope: agenttool.ToolMutationExternal},
 	})
 }

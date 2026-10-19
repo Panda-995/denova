@@ -6,7 +6,7 @@ import (
 
 	agenttool "denova/internal/agents/tool"
 
-	agent "github.com/alfredxw/denova/agent"
+	sdktool "github.com/alfredxw/denova/agent/tool"
 )
 
 func TestAgentToolMutationEffectRoundTripsCommittedReceipt(t *testing.T) {
@@ -15,9 +15,9 @@ func TestAgentToolMutationEffectRoundTripsCommittedReceipt(t *testing.T) {
 		Workspace: "/workspace/book", Target: "chapters/one.md",
 		ChangeGroupID: "group-1", ChangeSetID: "change-1",
 		MutationReceiptSchema: agenttool.MutationReceiptWorkspaceChange,
-		Descriptor: agent.ToolDescriptor{
-			Source: agent.ToolSourceWrite, MutationScope: agent.ToolMutationWorkspace,
-			PostCheck: agent.ToolPostCheckWorkspaceChange,
+		Descriptor: sdktool.ToolDescriptor{
+			Source: sdktool.ToolSourceWrite, MutationScope: sdktool.ToolMutationWorkspace,
+			PostCheck: sdktool.ToolPostCheckWorkspaceChange,
 		},
 	}
 
@@ -43,7 +43,7 @@ func TestAgentToolMutationEffectRoundTripsCommittedReceipt(t *testing.T) {
 func TestAgentToolMutationEffectIgnoresUncommittedResult(t *testing.T) {
 	effect, present, err := AgentToolMutationEffect(agenttool.ExecutionRecord{
 		ToolName: "write", ExecutionID: "write-1", Status: "success",
-		Descriptor: agent.ToolDescriptor{MutationScope: agent.ToolMutationWorkspace},
+		Descriptor: sdktool.ToolDescriptor{MutationScope: sdktool.ToolMutationWorkspace},
 	})
 	if err != nil || present || effect.Kind != "" {
 		t.Fatalf("uncommitted result effect = %#v, present=%v, err=%v", effect, present, err)

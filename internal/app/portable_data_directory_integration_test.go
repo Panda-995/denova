@@ -15,7 +15,7 @@ import (
 	"denova/internal/automation"
 	"denova/internal/interactive"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestManagedDataDirectoryRunsAfterCopyingToAnotherRoot(t *testing.T) {
@@ -69,7 +69,7 @@ func TestManagedDataDirectoryRunsAfterCopyingToAnotherRoot(t *testing.T) {
 		firstApp.Close()
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.UserMessageWithAttachments("Keep this conversation", attachments)); err != nil {
+	if err := sess.Append(agentschema.UserMessageWithAttachments("Keep this conversation", attachments)); err != nil {
 		firstApp.Close()
 		t.Fatal(err)
 	}

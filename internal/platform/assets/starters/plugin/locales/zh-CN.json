@@ -1,0 +1,13 @@
+{
+  "errors.requestFailed": "插件请求失败。",
+  "errors.notFound": "此插件操作不可用。",
+  "panel.title": "草稿工具台",
+  "panel.help": "这里的草稿属于此插件，面板与 Agent 可共享读取。保存不会修改宿主正文。",
+  "input.text": "文本",
+  "panel.save": "保存草稿",
+  "panel.reload": "重新读取",
+  "command.echo": "返回输入文本",
+  "panel.done": "已完成",
+  "panel.conflict": "内容已被其他操作修改，请重新读取后再保存。",
+  "panel.discard": "丢弃未保存内容并重新读取？"
+}

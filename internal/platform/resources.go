@@ -1,0 +1,281 @@
+package platform
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+
+	"denova/internal/portablepath"
+)
+
+const MaxAssetBytes = 32 << 20
+const MaxLibraryItemBytes = 1 << 20
+
+// AssetRef identifies raster content within the credential's Project or the
+// calling extension's scope. It is portable; consumers resolve it with an
+// authenticated request and never persist the resulting browser blob URL.
+type AssetRef struct {
+	Kind string `json:"kind" jsonschema:"enum=project,enum=generated,enum=shared"`
+	Path string `json:"path"`
+}
+
+// LibraryItem is the public library projection. Internal provenance, loading
+// policy and provider configuration are intentionally absent.
+type LibraryItem struct {
+	ID               string    `json:"id"`
+	Type             string    `json:"type"`
+	Name             string    `json:"name"`
+	Tags             []string  `json:"tags"`
+	BriefDescription string    `json:"briefDescription"`
+	UpdatedAt        string    `json:"updatedAt"`
+	Enabled          bool      `json:"enabled"`
+	Keywords         []string  `json:"keywords,omitempty"`
+	Content          string    `json:"content,omitempty"`
+	Image            *AssetRef `json:"image,omitempty"`
+}
+
+type LibraryPage struct {
+	Items      []LibraryItem `json:"items"`
+	Total      int           `json:"total" jsonschema:"minimum=0"`
+	NextOffset *int          `json:"nextOffset,omitempty" jsonschema:"minimum=0"`
+}
+
+// ResourceHost reuses application services under an explicit Project lease.
+// Project identity comes from the credential. Image selections are validated
+// against the host catalog; provider credentials never leave the application.
+type ResourceHost interface {
+	LibraryCategories(context.Context, string) ([]LibraryCategory, error)
+	LibraryItems(context.Context, string) ([]LibraryItem, error)
+	ReadAsset(context.Context, string, string) ([]byte, error)
+	ImageModels(context.Context, string) ([]ImageModel, error)
+	GenerateImage(context.Context, string, string, ImageRequest) (ImageBytes, error)
+}
+
+type ResourceService struct {
+	host ResourceHost
+	mu   sync.Mutex
+	live map[string]*imageOperation
+}
+
+func (m *Manager) ConfigureResources(host ResourceHost) {
+	m.resources = &ResourceService{host: host, live: map[string]*imageOperation{}}
+}
+
+func (s *ResourceService) ServeHTTP(w http.ResponseWriter, request *http.Request, runtime *Runtime, caller *activation, route string) {
+	permission := ""
+	switch {
+	case strings.HasPrefix(route, "/project-content/"):
+		permission = "project.content.read"
+		if request.Method != http.MethodGet {
+			permission = "project.content.write"
+		}
+	case strings.HasPrefix(route, "/library/"):
+		permission = "library.read"
+		if request.Method != http.MethodGet {
+			permission = "library.write"
+		}
+	case strings.HasPrefix(route, "/assets/"):
+		permission = "assets.read"
+		if request.Method != http.MethodGet {
+			permission = "assets.write"
+		}
+	case strings.HasPrefix(route, "/images/"):
+		permission = "images.generate"
+	default:
+		writeError(w, failure("NOT_FOUND", "Unknown resource route"))
+		return
+	}
+	if !slices.Contains(caller.grants, permission) {
+		writeError(w, failure("PERMISSION_DENIED", "%s is not granted", permission))
+		return
+	}
+	if caller.context.Scope.ProjectID == "" {
+		writeError(w, failure("NOT_CONFIGURED", "Select a Project for resource capabilities"))
+		return
+	}
+	if s.host == nil {
+		writeError(w, failure("NOT_CONFIGURED", "Resource service is unavailable"))
+		return
+	}
+	switch permission {
+	case "project.content.read", "project.content.write":
+		s.serveProjectContent(w, request, runtime, caller, route)
+	case "library.read":
+		s.serveLibrary(w, request, caller, route)
+	case "library.write":
+		s.serveLibraryWrite(w, request, caller, route)
+	case "assets.read", "assets.write":
+		if route == "/assets/content" && request.URL.Query().Get("kind") != "shared" {
+			s.serveAsset(w, request, runtime, caller, route)
+		} else {
+			s.serveSharedContent(w, request, runtime, caller, route)
+		}
+	case "images.generate":
+		s.serveImages(w, request, runtime, caller, route)
+	}
+}
+
+func (s *ResourceService) serveLibrary(w http.ResponseWriter, request *http.Request, caller *activation, route string) {
+	if request.Method == http.MethodGet && route == "/library/categories" {
+		categories, err := s.host.LibraryCategories(request.Context(), caller.context.Scope.ProjectID)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeResponse(w, http.StatusOK, categories)
+		return
+	}
+	if request.Method != http.MethodGet || route != "/library/items" && !strings.HasPrefix(route, "/library/items/") {
+		writeError(w, failure("NOT_FOUND", "Unknown library route"))
+		return
+	}
+	items, err := s.host.LibraryItems(request.Context(), caller.context.Scope.ProjectID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if route != "/library/items" {
+		id := strings.TrimPrefix(route, "/library/items/")
+		for _, item := range items {
+			if item.ID == id {
+				if len(item.Content) > MaxLibraryItemBytes {
+					writeError(w, failure("LIMIT_EXCEEDED", "Library content exceeds %d bytes", MaxLibraryItemBytes))
+					return
+				}
+				writeResponse(w, 200, item)
+				return
+			}
+		}
+		writeError(w, failure("NOT_FOUND", "Library item is unavailable"))
+		return
+	}
+	offset, limit := 0, 50
+	if value := request.URL.Query().Get("offset"); value != "" {
+		offset, err = strconv.Atoi(value)
+	}
+	if err != nil || offset < 0 {
+		writeError(w, failure("INVALID_ARGUMENT", "offset must be a nonnegative integer"))
+		return
+	}
+	if value := request.URL.Query().Get("limit"); value != "" {
+		limit, err = strconv.Atoi(value)
+	}
+	if err != nil || limit < 1 || limit > 100 {
+		writeError(w, failure("INVALID_ARGUMENT", "limit must be between 1 and 100"))
+		return
+	}
+	query := strings.ToLower(strings.TrimSpace(request.URL.Query().Get("query")))
+	result := LibraryPage{Items: []LibraryItem{}}
+	for _, item := range items {
+		if query != "" && !strings.Contains(strings.ToLower(strings.Join([]string{item.Name, item.Type, item.BriefDescription, strings.Join(item.Tags, " "), strings.Join(item.Keywords, " ")}, " ")), query) {
+			continue
+		}
+		if result.Total >= offset && len(result.Items) < limit {
+			item.Content = ""
+			result.Items = append(result.Items, item)
+		}
+		result.Total++
+	}
+	if offset < result.Total && len(result.Items) < result.Total-offset {
+		next := offset + len(result.Items)
+		result.NextOffset = &next
+	}
+	writeResponse(w, 200, result)
+}
+
+func (s *ResourceService) serveAsset(w http.ResponseWriter, request *http.Request, runtime *Runtime, caller *activation, route string) {
+	if request.Method != http.MethodGet || route != "/assets/content" {
+		writeError(w, failure("NOT_FOUND", "Unknown asset route"))
+		return
+	}
+	name := request.URL.Query().Get("path")
+	if err := portablepath.Validate(name); err != nil {
+		writeError(w, failure("INVALID_ARGUMENT", "Asset path must be a portable relative path"))
+		return
+	}
+	data, err := s.readImageAsset(request.Context(), runtime, caller, AssetRef{Kind: request.URL.Query().Get("kind"), Path: name})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	mimeType, err := rasterType(data)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+// ReadRasterAsset bounds a single file read and rejects links in every path
+// component. os.Root additionally fences path resolution against root escapes.
+func ReadRasterAsset(directory, name string) ([]byte, error) {
+	if err := portablepath.CheckNoCollision(directory, name); err != nil {
+		return nil, failure("INVALID_ARGUMENT", "Invalid asset path: %v", err)
+	}
+	rootInfo, err := os.Lstat(directory)
+	if err != nil {
+		return nil, err
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() {
+		return nil, failure("PERMISSION_DENIED", "Asset root must be a regular directory")
+	}
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	current := ""
+	for _, component := range strings.Split(name, "/") {
+		current = filepath.Join(current, component)
+		info, err := root.Lstat(current)
+		if err != nil {
+			return nil, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil, failure("PERMISSION_DENIED", "Asset paths cannot contain symbolic links")
+		}
+	}
+	file, err := root.Open(filepath.FromSlash(name))
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, failure("PERMISSION_DENIED", "Asset must be a regular file")
+	}
+	if info.Size() > MaxAssetBytes {
+		return nil, failure("LIMIT_EXCEEDED", "Asset exceeds %d bytes", MaxAssetBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, MaxAssetBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := rasterType(data); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func rasterType(data []byte) (string, error) {
+	if len(data) > MaxAssetBytes {
+		return "", failure("LIMIT_EXCEEDED", "Asset exceeds %d bytes", MaxAssetBytes)
+	}
+	mimeType := http.DetectContentType(data)
+	if !slices.Contains([]string{"image/png", "image/jpeg", "image/webp", "image/gif"}, mimeType) {
+		return "", failure("UNSUPPORTED", "Asset must be PNG, JPEG, WebP or GIF raster content")
+	}
+	return mimeType, nil
+}

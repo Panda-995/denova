@@ -2,6 +2,7 @@ package update
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -26,6 +27,7 @@ func TestApplySchedulerStartsUpdaterThenExits(t *testing.T) {
 		Args:       []string{updaterPath, "--manifest", manifestPath},
 	}
 	started := make(chan ApplyInvocation, 1)
+	cleaned := make(chan struct{})
 	exited := make(chan int, 1)
 	scheduler := ApplyScheduler{
 		Delay:        10 * time.Millisecond,
@@ -43,7 +45,13 @@ func TestApplySchedulerStartsUpdaterThenExits(t *testing.T) {
 			started <- got
 			return nil
 		},
+		Shutdown: func() { close(cleaned) },
 		Exit: func(code int) {
+			select {
+			case <-cleaned:
+			default:
+				t.Error("exit before cleanup")
+			}
 			exited <- code
 		},
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -66,5 +74,21 @@ func TestApplySchedulerStartsUpdaterThenExits(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("process exit was not requested")
+	}
+}
+
+func TestApplySchedulerReturnsHandoffFailureWithoutExiting(t *testing.T) {
+	dir := t.TempDir()
+	updater := filepath.Join(dir, updaterExecutableName())
+	path := filepath.Join(dir, manifestFileName)
+	for _, file := range []string{updater, path} {
+		if err := os.WriteFile(file, []byte("test"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cause := errors.New("handoff failed")
+	scheduler := ApplyScheduler{ManifestPath: path, Manifest: ApplyManifest{UpdaterExecutable: updater}, Start: func(ApplyInvocation) error { return cause }, Shutdown: func() { t.Error("closed app after failed handoff") }, Exit: func(int) { t.Error("exited after failed handoff") }}
+	if err := scheduler.Schedule(context.Background()); !errors.Is(err, cause) {
+		t.Fatal(err)
 	}
 }

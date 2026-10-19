@@ -2,10 +2,8 @@ package asset
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -24,7 +22,7 @@ func (g *illustrationFakeGenerator) Generate(_ context.Context, _ *config.Config
 	return g.result, nil
 }
 
-func TestGenerateWritesImageAndMetaUnderIllustrations(t *testing.T) {
+func TestGenerateWritesShallowIllustrationWithJournalProvenance(t *testing.T) {
 	workspace := t.TempDir()
 	bookService := book.NewService(workspace)
 	if err := bookService.Create("chapters/ch01.md", "file", "# 第一章\n\n雨夜。"); err != nil {
@@ -46,7 +44,6 @@ func TestGenerateWritesImageAndMetaUnderIllustrations(t *testing.T) {
 	}}
 	service := NewServiceWithGenerator(generator)
 	service.now = func() time.Time { return time.Date(2026, 6, 27, 12, 30, 0, 0, time.UTC) }
-	service.suffix = func() string { return "abcd1234" }
 
 	result, err := service.GenerateIllustration(context.Background(), &config.Config{Workspace: workspace}, bookService, IllustrationGenerateRequest{
 		ChapterPath: "chapters/ch01.md",
@@ -56,10 +53,10 @@ func TestGenerateWritesImageAndMetaUnderIllustrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
-	if !strings.HasPrefix(result.ImagePath, "assets/illustrations/ch01/20260627-123000-abcd1234/image.") {
+	if filepath.ToSlash(filepath.Dir(result.ImagePath)) != "assets/writing" {
 		t.Fatalf("image path = %q", result.ImagePath)
 	}
-	if result.MetaPath != "assets/illustrations/ch01/20260627-123000-abcd1234/meta.json" {
+	if result.MetaPath != "" {
 		t.Fatalf("meta path = %q", result.MetaPath)
 	}
 	if result.Markdown != "![雨夜小巷]("+result.ImagePath+")" {
@@ -72,16 +69,11 @@ func TestGenerateWritesImageAndMetaUnderIllustrations(t *testing.T) {
 	if string(imageBytes) != "fake-png" {
 		t.Fatalf("image bytes = %q", string(imageBytes))
 	}
-	metaBytes, err := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(result.MetaPath)))
-	if err != nil {
-		t.Fatalf("read meta: %v", err)
+	if result.Provider != "openai" || result.RevisedPrompt != "revised prompt" {
+		t.Fatalf("journal result lost provenance: %#v", result)
 	}
-	var meta illustrationMeta
-	if err := json.Unmarshal(metaBytes, &meta); err != nil {
-		t.Fatalf("meta json: %v", err)
-	}
-	if meta.Schema != IllustrationResultSchema || meta.Source != illustrationSourceTool || meta.Prompt != "rainy alley, cinematic" || meta.RevisedPrompt != "revised prompt" {
-		t.Fatalf("unexpected meta: %#v", meta)
+	if _, err := os.Stat(filepath.Join(workspace, "assets/writing/meta.json")); !os.IsNotExist(err) {
+		t.Fatalf("journaled generation created redundant metadata: %v", err)
 	}
 	if generator.request.N != 1 {
 		t.Fatalf("image request should generate one image, got %#v", generator.request)

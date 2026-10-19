@@ -15,6 +15,8 @@ interface CompactResourcePickerProps<T> {
   emptyLabel?: string
   layout?: 'inline' | 'sidebar'
   disabled?: boolean
+  /** Short display label for the trigger; menu items retain their full labels. */
+  triggerLabel?: string
   triggerClassName?: string
   contentClassName?: string
   trailingAction?: ReactNode
@@ -44,6 +46,7 @@ export function CompactResourcePicker<T>({
   emptyLabel = placeholder,
   layout = 'inline',
   disabled = false,
+  triggerLabel,
   triggerClassName,
   contentClassName,
   trailingAction,
@@ -57,7 +60,8 @@ export function CompactResourcePicker<T>({
   const close = () => setOpen(false)
 
   const selector = (
-    <Popover open={open} onOpenChange={(nextOpen) => setOpen(!disabled && nextOpen)}>
+    // Own the scroll lock so portaled lists also scroll inside a modal dialog.
+    <Popover modal open={open} onOpenChange={(nextOpen) => setOpen(!disabled && nextOpen)}>
       <PopoverTrigger asChild>
         <Button
           type="button"
@@ -70,8 +74,9 @@ export function CompactResourcePicker<T>({
           )}
           aria-label={ariaLabel}
           aria-expanded={open}
+          title={selectedItem ? getLabel(selectedItem) : undefined}
         >
-          <span className="min-w-0 flex-1 truncate text-left">{selectedItem ? getLabel(selectedItem) : placeholder}</span>
+          <span className="min-w-0 flex-1 truncate text-left">{triggerLabel ?? (selectedItem ? getLabel(selectedItem) : placeholder)}</span>
           <ChevronDown data-icon="inline-end" className={cn('shrink-0 text-[var(--nova-text-faint)] transition-transform', open && 'rotate-180')} />
         </Button>
       </PopoverTrigger>
@@ -80,14 +85,14 @@ export function CompactResourcePicker<T>({
         sideOffset={6}
         collisionPadding={8}
         className={cn(
-          'max-h-[min(70dvh,28rem)] overflow-y-auto rounded-[var(--nova-radius)] border border-[var(--nova-border)] bg-[var(--nova-surface-2)] p-1 text-[var(--nova-text)] shadow-[var(--nova-shadow)]',
+          'max-h-[min(70dvh,28rem,var(--radix-popover-content-available-height))] gap-0 overflow-hidden rounded-[var(--nova-radius)] border border-[var(--nova-border)] bg-[var(--nova-surface-2)] p-1 text-[var(--nova-text)] shadow-[var(--nova-shadow)]',
           sidebar
             ? 'w-[min(calc(100vw-2rem),24rem)]'
             : 'w-[var(--radix-popover-trigger-width)] max-w-[calc(100vw-2rem)]',
           contentClassName,
         )}
       >
-        <div aria-label={ariaLabel} className="flex flex-col gap-1">
+        <div aria-label={ariaLabel} className="flex min-h-0 flex-col gap-1 overflow-y-auto">
           {items.length === 0 ? (
             <div className="px-2 py-2 text-xs text-[var(--nova-text-faint)]">{emptyLabel}</div>
           ) : items.map((item) => {
@@ -132,7 +137,7 @@ export function CompactResourcePicker<T>({
             )
           })}
         </div>
-        {renderFooter?.(close)}
+        {renderFooter && <div className="shrink-0">{renderFooter(close)}</div>}
       </PopoverContent>
     </Popover>
   )

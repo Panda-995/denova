@@ -9,9 +9,11 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"denova/internal/buildinfo"
+	"denova/internal/hostruntime"
 )
 
 const (
@@ -21,11 +23,19 @@ const (
 )
 
 type Service struct {
-	repository     string
-	currentVersion string
-	httpClient     *http.Client
-	executablePath string
-	githubAPIBase  string
+	mu              sync.Mutex
+	operation       string
+	progress        *InstallProgress
+	check           *CheckResult
+	checkedAt       time.Time
+	downloadAttempt time.Time
+	operationError  string
+	clientMu        sync.Mutex
+	repository      string
+	currentVersion  string
+	httpClient      *http.Client
+	executablePath  string
+	githubAPIBase   string
 }
 
 func NewService() *Service {
@@ -33,17 +43,30 @@ func NewService() *Service {
 	return &Service{
 		repository:     buildinfo.Repository,
 		currentVersion: buildinfo.Version,
-		httpClient:     &http.Client{Timeout: 60 * time.Second},
+		httpClient:     nil,
 		executablePath: exe,
 		githubAPIBase:  githubAPIBase,
 	}
 }
 
-func (s *Service) Check(ctx context.Context) (CheckResult, error) {
+func (s *Service) Check(ctx context.Context) (result CheckResult, err error) {
+	if err = s.beginOperation("checking"); err != nil {
+		return result, err
+	}
+	defer func() { s.endOperation(err) }()
+	s.mu.Lock()
+	s.checkedAt = time.Now()
+	s.mu.Unlock()
 	release, err := s.latestRelease(ctx)
 	if err != nil {
 		return CheckResult{}, err
 	}
+	result = s.checkRelease(release)
+	s.rememberCheck(result)
+	return result, nil
+}
+
+func (s *Service) checkRelease(release githubRelease) CheckResult {
 	platform := platformKey(runtime.GOOS, runtime.GOARCH)
 	asset := selectAsset(release.Assets, platform)
 	current := s.currentVersion
@@ -53,7 +76,7 @@ func (s *Service) Check(ctx context.Context) (CheckResult, error) {
 		CurrentVersion:  current,
 		LatestVersion:   latest,
 		UpdateAvailable: updateAvailable,
-		CanInstall:      updateAvailable && asset != nil,
+		CanInstall:      updateAvailable && asset != nil && selectChecksumAsset(release.Assets) != nil,
 		Platform:        platform,
 		ReleaseURL:      release.HTMLURL,
 		PublishedAt:     release.PublishedAt,
@@ -62,10 +85,28 @@ func (s *Service) Check(ctx context.Context) (CheckResult, error) {
 	if asset != nil {
 		result.Asset = &Asset{Name: asset.Name, Size: asset.Size, DownloadURL: asset.DownloadURL, BrowserDownloadURL: asset.BrowserDownloadURL}
 	}
-	return result, nil
+	return result
+}
+
+func (s *Service) ensureHTTPClient() {
+	s.clientMu.Lock()
+	defer s.clientMu.Unlock()
+	if s.httpClient != nil {
+		return
+	}
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		s.httpClient = &http.Client{Timeout: 60 * time.Second}
+		return
+	}
+	transport := base.Clone()
+	transport.Proxy = hostruntime.NewHTTPProxy()
+
+	s.httpClient = &http.Client{Timeout: 60 * time.Second, Transport: transport}
 }
 
 func (s *Service) latestRelease(ctx context.Context) (githubRelease, error) {
+	s.ensureHTTPClient()
 	url := s.githubLatestReleaseURL()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -141,9 +182,7 @@ func (s *Service) githubLatestReleaseURL() string {
 }
 
 func (s *Service) downloadHTTPClient() *http.Client {
-	if s.httpClient == nil {
-		return &http.Client{}
-	}
+	s.ensureHTTPClient()
 	client := *s.httpClient
 	client.Timeout = 0
 	return &client

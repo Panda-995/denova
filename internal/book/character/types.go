@@ -1,11 +1,12 @@
 package character
 
 import (
+	"denova/internal/assetstore"
 	"denova/internal/book"
 	"denova/internal/book/lore"
 )
 
-const tavernCardCoverPath = "assets/image/cover.png"
+const tavernCardCoverPath = assetstore.CoverPath
 const interactiveOpeningPresetPath = "setting/interactive-openings.json"
 
 var pngSignature = []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}

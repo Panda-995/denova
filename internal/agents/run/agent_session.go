@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
 	agentsession "github.com/alfredxw/denova/agent/session"
 )
 
@@ -12,24 +11,24 @@ const agentSessionNamespacePrefix = "denova."
 
 // AgentSessionKey maps stable Project-owned product identity directly onto the
 // public Agent Session boundary. Mutable content paths never enter the key.
-func (binding RuntimeBinding) AgentSessionKey() (agent.SessionKey, error) {
+func (binding RuntimeBinding) AgentSessionKey() (agentsession.Key, error) {
 	identity, err := binding.identity()
 	if err != nil {
-		return agent.SessionKey{}, err
+		return agentsession.Key{}, err
 	}
-	key, err := agentsession.NormalizeKey(agent.SessionKey{
+	key, err := agentsession.NormalizeKey(agentsession.Key{
 		Namespace: identity.namespace(), ID: identity.id,
 		Attributes: cloneBindingAttributes(identity.attributes),
 	})
 	if err != nil {
-		return agent.SessionKey{}, fmt.Errorf("%w: %v", ErrInvalidBinding, err)
+		return agentsession.Key{}, fmt.Errorf("%w: %v", ErrInvalidBinding, err)
 	}
 	return key, nil
 }
 
 // RuntimeBindingFromAgentSessionKey decodes only Session keys created by
 // AgentSessionKey. Unknown namespaces, attributes, or derived IDs fail closed.
-func RuntimeBindingFromAgentSessionKey(key agent.SessionKey) (RuntimeBinding, error) {
+func RuntimeBindingFromAgentSessionKey(key agentsession.Key) (RuntimeBinding, error) {
 	normalized, err := agentsession.NormalizeKey(key)
 	if err != nil {
 		return RuntimeBinding{}, fmt.Errorf("%w: %v", ErrInvalidBinding, err)
@@ -48,7 +47,7 @@ func RuntimeBindingFromAgentSessionKey(key agent.SessionKey) (RuntimeBinding, er
 	binding := RuntimeBinding{
 		ProjectID: attribute(bindingLabelProject), Workspace: attribute(bindingLabelWorkspace),
 		SessionID: attribute(bindingLabelSession), StoryID: attribute(bindingLabelStory),
-		BranchID: attribute(bindingLabelBranch), TaskID: attribute(bindingLabelTask),
+		BranchID: attribute(bindingLabelBranch),
 	}
 	switch {
 	case kind == bindingKindWriting && profile == bindingProfileWriting:
@@ -65,8 +64,6 @@ func RuntimeBindingFromAgentSessionKey(key agent.SessionKey) (RuntimeBinding, er
 		binding.AgentKind = AgentKindInteractiveStory
 	case kind == bindingKindWriting && profile == bindingProfileImage:
 		binding.AgentKind = AgentKindImage
-	case kind == bindingKindAutomation && profile == bindingProfileAutomation:
-		binding.AgentKind = AgentKindAutomation
 	default:
 		return RuntimeBinding{}, fmt.Errorf("%w: unsupported Denova Session namespace %q", ErrInvalidBinding, namespace)
 	}
@@ -83,10 +80,10 @@ func RuntimeBindingFromAgentSessionKey(key agent.SessionKey) (RuntimeBinding, er
 }
 
 // AgentSessionKeyForOptions is the single app-facing identity adapter.
-func AgentSessionKeyForOptions(options Options) (agent.SessionKey, error) {
+func AgentSessionKeyForOptions(options Options) (agentsession.Key, error) {
 	binding, err := RuntimeBindingForOptions(options)
 	if err != nil {
-		return agent.SessionKey{}, err
+		return agentsession.Key{}, err
 	}
 	return binding.AgentSessionKey()
 }

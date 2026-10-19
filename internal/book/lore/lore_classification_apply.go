@@ -24,11 +24,11 @@ type TypeApplyResult struct {
 // AllRevision includes disabled entries and derived type metadata, making it
 // suitable for preview/confirm organization flows.
 func (s *Store) AllRevision() (string, error) {
-	items, err := s.ListAll()
+	collection, err := s.loadOrCreate()
 	if err != nil {
 		return "", err
 	}
-	return loreAllRevision(items), nil
+	return loreAllRevision(collection.Items, collection.Categories), nil
 }
 
 // ApplyTypeChanges atomically updates only type metadata after verifying the
@@ -41,7 +41,7 @@ func (s *Store) ApplyTypeChanges(expectedRevision string, changes []TypeChange) 
 	if err != nil {
 		return TypeApplyResult{}, err
 	}
-	currentRevision := loreAllRevision(collection.Items)
+	currentRevision := loreAllRevision(collection.Items, collection.Categories)
 	if strings.TrimSpace(expectedRevision) == "" || strings.TrimSpace(expectedRevision) != currentRevision {
 		return TypeApplyResult{}, ErrRevisionConflict
 	}
@@ -60,7 +60,7 @@ func (s *Store) ApplyTypeChanges(expectedRevision string, changes []TypeChange) 
 			return TypeApplyResult{}, fmt.Errorf("分类变更包含空或重复 ID: %s", change.ID)
 		}
 		seen[id] = true
-		if !ValidClassificationType(change.Type) {
+		if !HasCategory(collection.Categories, change.Type) {
 			return TypeApplyResult{}, fmt.Errorf("资料 %s 的分类无效: %s", id, change.Type)
 		}
 		index, ok := byID[id]
@@ -82,13 +82,16 @@ func (s *Store) ApplyTypeChanges(expectedRevision string, changes []TypeChange) 
 	if err != nil {
 		return TypeApplyResult{}, err
 	}
-	return TypeApplyResult{Revision: loreAllRevision(items), Items: items, Updated: updated}, nil
+	return TypeApplyResult{Revision: loreAllRevision(collection.Items, collection.Categories), Items: items, Updated: updated}, nil
 }
 
-func loreAllRevision(items []Item) string {
+func loreAllRevision(items []Item, categories []Category) string {
 	normalized := normalizeLoreItems(append([]Item(nil), items...))
 	sort.Slice(normalized, func(i, j int) bool { return normalized[i].ID < normalized[j].ID })
-	data, _ := json.Marshal(normalized)
+	data, _ := json.Marshal(struct {
+		Items      []Item
+		Categories []Category
+	}{normalized, categories})
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:12])
 }

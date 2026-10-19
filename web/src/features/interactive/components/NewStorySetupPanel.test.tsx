@@ -2,16 +2,21 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ConversationConfigController, ConversationConfigSnapshot } from '@/features/conversation-config/types'
-import type { LoreItem } from '@/lib/api'
+import { getProjectLoreItems, type LoreItem } from '@/lib/api'
 import type { GamePlanningTemplate, StorySummary, Teller } from '../types'
 import { NewStorySetupPanel } from './NewStorySetupPanel'
 
+vi.mock('@/lib/api', async (original) => ({ ...await original<typeof import('@/lib/api')>(), getProjectLoreItems: vi.fn() }))
+
 const settingsMocks = vi.hoisted(() => ({
   fetchSettings: vi.fn(),
+  fetchProjectSettings: vi.fn().mockResolvedValue({ effective: {} }),
 }))
 
 vi.mock('@/features/settings/api', () => ({
   fetchSettings: settingsMocks.fetchSettings,
+  fetchProjectSettings: settingsMocks.fetchProjectSettings,
+  refreshProjectSettings: settingsMocks.fetchProjectSettings,
 }))
 
 vi.mock('../api', () => ({
@@ -26,7 +31,7 @@ vi.mock('@/features/agents/CustomAgentSelect', () => ({
 
 const planningTemplate: GamePlanningTemplate = {
   version: 1,
-  id: 'adventure',
+  id: 'default',
   name: '冒险',
   description: '',
   sections: [{ id: 'direction', title: '方向', description: '规划方向。' }],
@@ -89,6 +94,7 @@ function conversationConfigController(): ConversationConfigController {
 
 describe('NewStorySetupPanel', () => {
   beforeEach(() => {
+    settingsMocks.fetchProjectSettings.mockResolvedValue({ workspace: {}, effective: {} })
     settingsMocks.fetchSettings.mockResolvedValue({
       effective: {
         openai_model: 'test-model',
@@ -152,6 +158,30 @@ describe('NewStorySetupPanel', () => {
     })
   })
 
+  it('selects an opening background and submits independent presentation switches', async () => {
+    const user = userEvent.setup()
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    const location: LoreItem = {
+      ...loreCharacter, id: 'station', type: 'location', name: '车站', tags: [],
+      resolved_materials: [{ id: 'day', path: 'assets/day.png', name: '白昼', original_name: 'day.png', mime_type: 'image/png', size_bytes: 10, source: { kind: 'uploaded' } }],
+    }
+    vi.mocked(getProjectLoreItems).mockResolvedValue([loreCharacter, location])
+    // The parent still holds the catalog from before the material import.
+    render(<NewStorySetupPanel projectId="project-1" tellers={[teller]} planningTemplates={[planningTemplate]} imagePresets={[]} loreItems={[loreCharacter]} conversationConfig={conversationConfigController()} onCancel={vi.fn()} onCreate={onCreate} />)
+    await user.click(screen.getByRole('button', { name: '当前背景' }))
+    await user.click(await screen.findByRole('button', { name: /白昼.*车站/ }))
+    expect(getProjectLoreItems).toHaveBeenCalledWith('project-1')
+    expect(screen.getByRole('img', { name: '白昼' })).toBeInTheDocument()
+    await user.click(screen.getByRole('switch', { name: '动态背景' }))
+    await user.click(screen.getByRole('switch', { name: '角色差分' }))
+    await user.click(screen.getByRole('button', { name: '开始故事' }))
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1))
+    expect(onCreate.mock.calls[0][0].presentation_settings).toEqual({
+      background: false, characters: false,
+      default_background: { item_id: 'station', asset_id: 'day', path: 'assets/day.png', name: '白昼' },
+    })
+  })
+
   it('keeps the Lore choice active and treats an empty optional custom opening as AI-generated', async () => {
     const user = userEvent.setup()
     const onCreate = vi.fn().mockResolvedValue(undefined)
@@ -171,7 +201,7 @@ describe('NewStorySetupPanel', () => {
     expect(screen.getByRole('radio', { name: '从资料库选择' })).toBeChecked()
     expect(screen.getByText(/Game Agent.*自动识别/)).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: '自定义' })).toHaveAttribute('aria-selected', 'true')
-    await user.click(screen.getByRole('button', { name: '开始故事' }))
+    await user.click(await screen.findByRole('button', { name: '开始故事' }))
 
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1))
     expect(onCreate.mock.calls[0]?.[0]).toMatchObject({
@@ -203,7 +233,6 @@ describe('NewStorySetupPanel', () => {
     expect(screen.getByRole('heading', { name: '互动图像' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: '状态面板' })).toBeInTheDocument()
     expect(screen.queryByText('主舞台展示')).not.toBeInTheDocument()
-    expect(screen.getByTestId('story-setup-footer')).toHaveClass('shrink-0')
     fireEvent.click(screen.getByRole('button', { name: /高级设置/ }))
     expect(screen.queryByRole('heading', { name: '回合判定' })).not.toBeInTheDocument()
   })
@@ -288,6 +317,27 @@ describe('NewStorySetupPanel', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '开始故事' })).toBeEnabled())
     expect(screen.getByRole('combobox', { name: '模型配置' })).toHaveTextContent('默认模型')
     expect(screen.getByRole('combobox', { name: '思考强度' })).toHaveTextContent('中')
+  })
+
+  it('seeds book resources once and keeps explicit background clearing local', async () => {
+    const user = userEvent.setup()
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    settingsMocks.fetchProjectSettings.mockResolvedValue({ workspace: { game_creation_defaults: {
+      narrative_style_id: teller.id, event_package_ids: [], default_background: { mode: 'image', item_id: 'hero', asset_id: 'background' },
+    } }, effective: {} })
+    vi.mocked(getProjectLoreItems).mockResolvedValue([loreCharacter])
+    const props = { projectId: 'project-1', tellers: [teller], planningTemplates: [planningTemplate], imagePresets: [], loreItems: [loreCharacter], conversationConfig: conversationConfigController(), onCancel: vi.fn(), onCreate }
+    const { rerender } = render(<NewStorySetupPanel {...props} />)
+    await screen.findByText('已使用本书默认资源；成功创建后会记住本次配置。')
+    await user.click(screen.getByRole('button', { name: '当前背景' }))
+    await user.click(screen.getByRole('button', { name: '无背景' }))
+    // Late resource/settings refreshes must not replace edits in this open form.
+    settingsMocks.fetchProjectSettings.mockResolvedValue({ workspace: { game_creation_defaults: { narrative_style_id: 'different' } }, effective: {} })
+    rerender(<NewStorySetupPanel {...props} loreItems={[...props.loreItems]} />)
+    await user.click(screen.getByRole('button', { name: '开始故事' }))
+    await waitFor(() => expect(onCreate).toHaveBeenCalledOnce())
+    expect(onCreate.mock.calls[0][0]).toMatchObject({ story_teller_id: teller.id, module_refs: { narrative_style_id: teller.id, event_packages_disabled: true }, presentation_settings: { background: true, characters: true } })
+    expect(onCreate.mock.calls[0][0].presentation_settings.default_background).toBeUndefined()
   })
 
   it('preserves released story metadata when resuming setup without exposing the old fields', async () => {

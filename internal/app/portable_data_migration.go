@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"denova/internal/portablepath"
 )
 
 const portableDataMigrationVersion = 4
@@ -91,6 +93,13 @@ func preparePortableDataMigration(dataRoot string) ([]string, error) {
 }
 
 func preservePortableMigrationFile(dataRoot, sourcePath, prefix, extension string) (string, bool, error) {
+	sourceRelative, err := filepath.Rel(dataRoot, sourcePath)
+	if err != nil {
+		return "", false, err
+	}
+	if err := portablepath.CheckPath(dataRoot, filepath.ToSlash(sourceRelative)); err != nil {
+		return "", false, err
+	}
 	content, err := os.ReadFile(sourcePath)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", false, nil
@@ -105,6 +114,9 @@ func preservePortableMigrationFile(dataRoot, sourcePath, prefix, extension strin
 		return "", false, fmt.Errorf("create portable migration backup directory: %w", err)
 	}
 	backupPath := filepath.Join(backupDir, name)
+	if err := portablepath.CheckPath(dataRoot, "backups/"+portableDataBackupDirectory+"/"+name); err != nil {
+		return "", false, err
+	}
 	file, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
 		if _, writeErr := file.Write(content); writeErr != nil {

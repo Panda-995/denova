@@ -1,7 +1,10 @@
+import { InlineErrorNotice } from '@/components/common/inline-error-notice'
+import { errorMessage } from '@/lib/error-diagnostics'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, ArrowUpRight, Bell, CheckCheck, CircleAlert, Clock3, Loader2, Sparkles, Star, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { MarkdownRenderer } from '@/components/common/MarkdownRenderer'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Sheet, SheetClose, SheetTrigger, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -62,7 +65,7 @@ export function MessageCenterButton({ className = '', showLabel = false, unreadC
       setActiveId((current) => current && nextItems.some((item) => item.id === current) ? current : null)
     } catch (e) {
       console.warn('[features/messages/MessageCenter.tsx] loading messages failed', { error: e })
-      setError(t('messages.loadFailed'))
+      setError(errorMessage(e, t('messages.loadFailed')))
       setItems([])
     } finally {
       setLoading(false)
@@ -89,7 +92,7 @@ export function MessageCenterButton({ className = '', showLabel = false, unreadC
       setItems((current) => current.map((item) => item.id === id ? { ...item, ...updated } : item))
     } catch (e) {
       console.warn('[features/messages/MessageCenter.tsx] marking message as read failed', { id, error: e })
-      setError(t('messages.readFailed'))
+      setError(errorMessage(e, t('messages.readFailed')))
       void load()
     } finally {
       pendingReadRef.current.delete(id)
@@ -111,7 +114,7 @@ export function MessageCenterButton({ className = '', showLabel = false, unreadC
       setActiveId((current) => current && nextItems.some((item) => item.id === current) ? current : null)
     } catch (e) {
       console.warn('[features/messages/MessageCenter.tsx] marking all messages as read failed', { error: e })
-      setError(t('messages.readFailed'))
+      setError(errorMessage(e, t('messages.readFailed')))
       void load()
     } finally {
       setMarkingAllRead(false)
@@ -187,8 +190,8 @@ export function MessageCenterButton({ className = '', showLabel = false, unreadC
               <SheetClose asChild><Button variant="ghost" size="icon" aria-label={t('common.close')}><X /></Button></SheetClose>
             </div>
           </SheetHeader>
-          {error && <div role="alert" className="flex items-center justify-between gap-2 border-b px-4 py-2 text-sm text-destructive">
-            <span>{error}</span><Button variant="ghost" size="sm" onClick={() => void load()}>{t('common.retry')}</Button>
+          {error && <div className="flex items-start gap-2 border-b px-4 py-2">
+            <InlineErrorNotice className="flex-1" message={error} /><Button variant="ghost" size="sm" onClick={() => void load()}>{t('common.retry')}</Button>
           </div>}
           <div className="flex min-h-0 flex-1">
             <div ref={listRef} hidden={showDetail} className={cn('min-h-0 flex-1 lg:w-72 lg:flex-none lg:border-r', showDetail && 'hidden')}>
@@ -241,8 +244,8 @@ export function MessageCenterButton({ className = '', showLabel = false, unreadC
                       setOpen(false)
                     }}><ArrowUpRight />{t(activeItem.action_required ? 'messages.openAutomationAction' : 'messages.openAutomation')}</Button>
                   )}
+                  {activeItem.type === 'changelog' && <SupportPrompt />}
                   <MarkdownRenderer content={activeItem.body} />
-                  {activeItem.type === 'changelog' && <div className="mt-8 border-t pt-5"><GitHubStarPrompt /><DonationPrompt /></div>}
                 </article>
               ) : <Empty className="h-full"><EmptyHeader><EmptyMedia variant="icon"><Bell /></EmptyMedia><EmptyTitle>{t('messages.selectEmpty')}</EmptyTitle></EmptyHeader></Empty>}
             </div>
@@ -252,47 +255,50 @@ export function MessageCenterButton({ className = '', showLabel = false, unreadC
   )
 }
 
-function DonationPrompt() {
+function SupportPrompt() {
   const { t } = useTranslation()
   return (
     <section
-      className="mb-4 flex flex-col gap-3 rounded-[var(--nova-radius)] border border-[var(--nova-border)] bg-[color-mix(in_srgb,var(--nova-surface-2)_88%,transparent)] p-3 text-xs leading-5 text-[var(--nova-text-muted)] shadow-sm backdrop-blur sm:flex-row sm:items-center sm:justify-between"
-      aria-label={t('messages.donation.title')}
+      className="mb-5 flex flex-col gap-3 rounded-[var(--nova-radius)] border border-[var(--nova-border)] bg-[color-mix(in_srgb,var(--nova-surface-2)_88%,transparent)] p-3 text-xs leading-5 text-[var(--nova-text-muted)] shadow-sm backdrop-blur sm:flex-row sm:items-center sm:justify-between"
+      aria-label={t('messages.support.title')}
     >
-      <div className="min-w-0">
-        <div className="text-sm font-medium text-[var(--nova-text)]">{t('messages.donation.title')}</div>
-        <p className="m-0 mt-1">{t('messages.donation.description')}</p>
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <div>
+          <div className="text-sm font-medium text-[var(--nova-text)]">{t('messages.support.title')}</div>
+          <p className="m-0 mt-1">{t('messages.support.description')}</p>
+        </div>
+        <Button asChild variant="outline" size="sm" className="self-start">
+          <a href={DENOVA_GITHUB_URL} target="_blank" rel="noopener noreferrer">
+            <Star data-icon="inline-start" />
+            {t('messages.github.star')}
+          </a>
+        </Button>
       </div>
-      <img
-        src="/donate.png"
-        alt={t('messages.donation.alt')}
-        loading="lazy"
-        className="h-auto max-h-24 w-auto max-w-[120px] shrink-0 self-center rounded-md border border-[var(--nova-border-soft)] bg-white p-1 sm:max-h-32"
-      />
-    </section>
-  )
-}
-
-function GitHubStarPrompt() {
-  const { t } = useTranslation()
-  return (
-    <section
-      className="mb-4 flex flex-col gap-3 rounded-[var(--nova-radius)] border border-[var(--nova-border)] bg-[color-mix(in_srgb,var(--nova-surface-2)_88%,transparent)] p-3 text-xs leading-5 text-[var(--nova-text-muted)] shadow-sm backdrop-blur sm:flex-row sm:items-center sm:justify-between"
-      aria-label={t('messages.github.title')}
-    >
-      <div className="min-w-0">
-        <div className="text-sm font-medium text-[var(--nova-text)]">{t('messages.github.title')}</div>
-        <p className="m-0 mt-1">{t('messages.github.description')}</p>
-      </div>
-      <a
-        href={DENOVA_GITHUB_URL}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex shrink-0 items-center gap-1.5 self-start rounded-[var(--nova-radius)] border border-[var(--nova-border)] bg-[var(--nova-surface)] px-3 py-1.5 text-xs font-medium text-[var(--nova-text-muted)] transition-colors hover:bg-[var(--nova-hover)] hover:text-[var(--nova-text)] sm:self-center"
-      >
-        <Star className="h-3.5 w-3.5" />
-        {t('messages.github.star')}
-      </a>
+      <Dialog>
+        <DialogTrigger asChild><button
+          type="button"
+          aria-label={t('messages.donation.openPreview')}
+          className="shrink-0 cursor-pointer self-center rounded-md focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+        >
+          <img
+            src="/donate.png"
+            alt={t('messages.donation.alt')}
+            loading="lazy"
+            className="h-auto max-h-32 w-auto max-w-40 rounded-md border border-[var(--nova-border-soft)] bg-white p-1 sm:max-h-40"
+          />
+        </button></DialogTrigger>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-[min(calc(100vw-2rem),28rem)] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="pr-6">{t('messages.support.title')}</DialogTitle>
+            <DialogDescription>{t('messages.support.description')}</DialogDescription>
+          </DialogHeader>
+          <img
+            src="/donate.png"
+            alt={t('messages.donation.alt')}
+            className="mx-auto h-auto max-h-[50dvh] max-w-full rounded-md object-contain"
+          />
+        </DialogContent>
+      </Dialog>
     </section>
   )
 }

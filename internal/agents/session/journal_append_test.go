@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestColdReplayKeepsCanonicalMessagesAcrossLargeDisplayWindow(t *testing.T) {
@@ -24,7 +24,7 @@ func TestColdReplayKeepsCanonicalMessagesAcrossLargeDisplayWindow(t *testing.T) 
 		}
 		lines = append(lines, string(encoded))
 	}
-	appendJSON(agent.UserMessage("canonical user input"))
+	appendJSON(agentschema.UserMessage("canonical user input"))
 	for index := 0; index < sessionRecentTransactionLimit+5; index++ {
 		appendJSON(displayRecord{
 			Type: historyTypeDisplay,
@@ -33,7 +33,7 @@ func TestColdReplayKeepsCanonicalMessagesAcrossLargeDisplayWindow(t *testing.T) 
 			},
 		})
 	}
-	appendJSON(agent.AssistantMessage("canonical assistant output", nil))
+	appendJSON(agentschema.AssistantMessage("canonical assistant output", nil))
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -47,8 +47,8 @@ func TestColdReplayKeepsCanonicalMessagesAcrossLargeDisplayWindow(t *testing.T) 
 		t.Fatal(err)
 	}
 	messages := sess.GetEffectiveMessages()
-	if len(messages) != 2 || messages[0].Role != agent.User || messages[0].Content != "canonical user input" ||
-		messages[1].Role != agent.Assistant || messages[1].Content != "canonical assistant output" {
+	if len(messages) != 2 || messages[0].Role != agentschema.User || messages[0].Content != "canonical user input" ||
+		messages[1].Role != agentschema.Assistant || messages[1].Content != "canonical assistant output" {
 		t.Fatalf("cold canonical transcript = %#v", messages)
 	}
 }
@@ -73,7 +73,7 @@ func TestLegacyJournalAppendPreservesExistingBytesAndReloads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.AssistantMessage("新回答", nil)); err != nil {
+	if err := sess.Append(agentschema.AssistantMessage("新回答", nil)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -414,7 +414,7 @@ func TestLoaderIgnoresOnlyIncompleteTailAndNextAppendRepairsIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.UserMessage("完整消息")); err != nil {
+	if err := sess.Append(agentschema.UserMessage("完整消息")); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "default.jsonl")
@@ -446,7 +446,7 @@ func TestLoaderIgnoresOnlyIncompleteTailAndNextAppendRepairsIt(t *testing.T) {
 	if got := recovered.GetMessages(); len(got) != 1 || got[0].Content != "完整消息" {
 		t.Fatalf("messages after tail recovery = %#v", got)
 	}
-	if err := recovered.Append(agent.AssistantMessage("恢复后消息", nil)); err != nil {
+	if err := recovered.Append(agentschema.AssistantMessage("恢复后消息", nil)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -505,7 +505,7 @@ func TestLoaderAcceptsCompleteFinalRecordWithoutNewline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.AssistantMessage("下一条", nil)); err != nil {
+	if err := sess.Append(agentschema.AssistantMessage("下一条", nil)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -576,7 +576,7 @@ func TestFailedAppendDoesNotMutateSessionMemory(t *testing.T) {
 	beforeUpdated := sess.UpdatedAt
 	beforeTitle := sess.Title()
 	restore := blockSessionJournal(t, filepath.Join(dir, "default.jsonl"))
-	if err := sess.Append(agent.UserMessage("不能进入内存")); err == nil {
+	if err := sess.Append(agentschema.UserMessage("不能进入内存")); err == nil {
 		restore()
 		t.Fatal("append should fail while journal path is blocked")
 	}

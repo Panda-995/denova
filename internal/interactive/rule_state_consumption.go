@@ -61,6 +61,26 @@ func applyRuleStateConsumptionV2(state map[string]any, system StoryDirectorActor
 		actorOps = append(actorOps, op)
 		applyActorStateOp(state, op)
 	}
+	// Apply resource bounds against final capacities, including capacity changes
+	// in this resolution. Automatic recovery saturates just like static max.
+	for i, op := range actorOps {
+		templateID, _ := actorTemplateIDFromStateOrSystem(state, system, op.ActorID)
+		field, _ := actorStateFieldByID(actorStateTemplateByID(system, templateID), op.FieldID)
+		if field.MaxField == "" {
+			continue
+		}
+		value, _ := actorStateNumber(op.Value)
+		minimum := float64(0)
+		if field.Min != nil {
+			minimum = *field.Min
+		}
+		value = max(minimum, value)
+		if capacity, ok := actorStateNumber(actorStateFieldValue(state, op.ActorID, field.MaxField)); ok {
+			value = min(value, capacity)
+		}
+		actorOps[i].Value = value
+		applyActorStateOp(state, actorOps[i])
+	}
 	status := "applied"
 	switch {
 	case len(actorOps) == 0:

@@ -2,8 +2,9 @@ package interactive
 
 import (
 	"fmt"
-	agent "github.com/alfredxw/denova/agent"
 	"strings"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 // StoryModelHistoryQuery selects an exact logical turn interval on the active
@@ -25,7 +26,7 @@ type StoryModelTurn struct {
 	PlayerInputID               string
 	Ts                          string
 	User                        string
-	Attachments                 []agent.Attachment
+	Attachments                 []agentschema.Attachment
 	Narrative                   string
 	ProviderContinuation        map[string]any
 	ResolvedPlayerInputContexts []ResolvedPlayerInputContext
@@ -153,7 +154,7 @@ func (s *Store) ReadModelHistory(storyID string, query StoryModelHistoryQuery) (
 		}
 		result.Turns = append(result.Turns, StoryModelTurn{
 			ID: turn.ID, BranchID: turn.BranchID, PlayerInputID: turn.PlayerInputID, Ts: turn.Ts, User: turn.User, Narrative: turn.Narrative,
-			Attachments:                 append([]agent.Attachment(nil), turn.Attachments...),
+			Attachments:                 append([]agentschema.Attachment(nil), turn.Attachments...),
 			ProviderContinuation:        cloneProviderContinuation(turn.ProviderContinuation),
 			ResolvedPlayerInputContexts: resolved,
 			ModelContextMessages:        sanitizeModelContextMessages(turn.ModelContextMessages),

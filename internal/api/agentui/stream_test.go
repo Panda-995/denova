@@ -9,6 +9,21 @@ import (
 	"testing"
 )
 
+func TestProviderTodoSnapshotDoesNotReplaceNativeToolInspection(t *testing.T) {
+	var out bytes.Buffer
+	encoder := NewStreamEncoder(&out, "plan")
+	for _, managed := range []bool{false, true} {
+		if err := encoder.WriteEvent(agentrun.Event{Type: "todo_updated", Data: map[string]any{
+			"schema": "agent.todo.v1", "items": []any{}, "runtime_managed": managed,
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if strings.Count(out.String(), DataTypeTodo) != 1 {
+		t.Fatalf("duplicate Todo presentation: %s", out.String())
+	}
+}
+
 func TestStreamEncoderMapsAgentEventsToUIStream(t *testing.T) {
 	var out bytes.Buffer
 	encoder := NewStreamEncoder(&out, "0198-stream-request")
@@ -25,7 +40,7 @@ func TestStreamEncoderMapsAgentEventsToUIStream(t *testing.T) {
 			"turn_version_index": 0,
 		}},
 		{Type: "chunk", Data: map[string]any{"content": "正文", "run_id": "run-1"}},
-		{Type: "tool_call", Data: map[string]any{"id": "tool-1", "name": "read", "args": `{"path"`, "tool_presentation": map[string]any{"call": "search", "result": "search"}}},
+		{Type: "tool_call", Data: map[string]any{"id": "tool-1", "run_id": "run-1", "name": "read", "args": `{"path"`, "tool_presentation": map[string]any{"call": "search", "result": "search"}}},
 		{Type: "tool_args_delta", Data: map[string]any{"id": "tool-1", "delta": `:"a.md"}`}},
 		{Type: "tool_started", Data: map[string]any{"id": "tool-1", "name": "read"}},
 		{Type: "tool_result", Data: map[string]any{"id": "tool-1", "name": "read", "content": "ok"}},
@@ -92,6 +107,7 @@ func TestStreamEncoderMapsAgentEventsToUIStream(t *testing.T) {
 		"tool-input-available",
 		"tool-output-available",
 		DataTypeInteractiveImage,
+		DataTypeError,
 		"error",
 		"abort",
 		"finish",
@@ -111,7 +127,8 @@ func TestStreamEncoderMapsAgentEventsToUIStream(t *testing.T) {
 	assertChunkAgentPresentation(t, chunks, "tool-input-start", "search", "search")
 	assertChunk(t, chunks, "tool-input-available", "toolCallId", "tool-1")
 	assertStreamingToolInput(t, chunks, "tool-1", `{"path":"a.md"}`)
-	assertChunk(t, chunks, "error", "errorText", "失败 · 日志 ID / Log ID: 0198-stream-request")
+	assertChunk(t, chunks, "error", "errorText", "失败")
+	assertDataChunkValue(t, chunks, DataTypeError, "request_id", "0198-stream-request")
 	assertChunk(t, chunks, "abort", "reason", "取消")
 	assertStartMetadata(t, chunks[0])
 	assertDataChunksHaveStrictShape(t, chunks)

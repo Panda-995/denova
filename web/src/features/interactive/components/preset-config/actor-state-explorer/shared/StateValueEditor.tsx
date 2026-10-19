@@ -18,6 +18,7 @@ interface StateValueEditorProps {
   options?: string[]
   min?: number
   max?: number
+  maxLabel?: string
   label?: string
   compact?: boolean
 }
@@ -29,6 +30,7 @@ export function StateValueEditor({
   options = [],
   min,
   max,
+  maxLabel,
   label,
   compact = false,
 }: StateValueEditorProps) {
@@ -116,6 +118,7 @@ export function StateValueEditor({
               options={options}
               min={min}
               max={max}
+              maxLabel={maxLabel}
               compact={compact}
             />
           </motion.div>
@@ -163,6 +166,7 @@ function ValueInputByType({
   options,
   min,
   max,
+  maxLabel,
   compact,
 }: {
   type: string
@@ -171,6 +175,7 @@ function ValueInputByType({
   options: string[]
   min?: number
   max?: number
+  maxLabel?: string
   compact: boolean
 }) {
   const { t } = useTranslation()
@@ -188,9 +193,9 @@ function ValueInputByType({
           onChange={(e) => onChange(parseNumberInput(e.target.value))}
           placeholder={t('settingPanel.actorState.explorer.numberPlaceholder')}
         />
-        {min !== undefined || max !== undefined ? (
+        {min !== undefined || max !== undefined || maxLabel ? (
           <div className="text-[10px] text-[var(--nova-text-faint)]">
-            {t('settingPanel.actorState.explorer.range', { min: min ?? '-∞', max: max ?? '+∞' })}
+            {t('settingPanel.actorState.explorer.range', { min: min ?? '-∞', max: maxLabel ?? max ?? '+∞' })}
           </div>
         ) : null}
       </div>

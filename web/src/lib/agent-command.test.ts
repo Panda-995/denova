@@ -25,10 +25,21 @@ describe('rememberAgentCommandID', () => {
 })
 
 describe('agentCommandErrorMessage', () => {
+  it('localizes unsupported runtime controls and retains the log ID', () => {
+    const t = vi.fn((key: string) => key) as unknown as TFunction
+    const error = new APIError('unsupported operation', {
+      status: 400,
+      code: 'agent_runtime.capability_unsupported',
+      requestID: 'runtime-command-log',
+    })
+    expect(agentCommandErrorMessage(error, t)).toContain('agentRuntime.capabilityUnsupported')
+    expect(agentCommandErrorMessage(error, t)).toContain('runtime-command-log')
+  })
+
   it('maps an idempotency conflict through the localized invalid-command copy', () => {
     const t = vi.fn((key: string) => key) as unknown as TFunction
 
-    expect(agentCommandErrorMessage({ code: 'agent_runtime.command_conflict' }, t)).toBe('chat.runtime.invalidCommand')
+    expect(agentCommandErrorMessage({ code: 'agent_runtime.command_conflict' }, t)).toContain('chat.runtime.invalidCommand')
   })
 
   it('retains the log ID when a stable code replaces the backend message', () => {

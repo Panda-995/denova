@@ -16,7 +16,7 @@ export function DirectorConsoleHeader({ branchId, turnCount, story, planningTemp
   const planningTemplate = planningTemplates.find((item) => item.id === story?.planning_template_id)
 
   return (
-    <header className="shrink-0 border-b border-[var(--nova-border)] bg-[color-mix(in_srgb,var(--director-canvas)_92%,transparent)] px-4 py-3.5 backdrop-blur-xl">
+    <header className="shrink-0 border-b border-[var(--nova-border)] bg-[color-mix(in_srgb,var(--director-canvas)_92%,transparent)] px-4 py-3.5 lg:pr-12 backdrop-blur-xl">
       <div className="flex min-w-0 items-center gap-3">
         <div data-testid="director-panel-icon" className="relative flex size-9 shrink-0 items-center justify-center rounded-[11px] border border-[var(--nova-border)] bg-[var(--director-panel)] text-[var(--director-brass)]" aria-label={t('directorPanel.consoleTitle')}>
           <Clapperboard className="size-4" />

@@ -24,11 +24,10 @@ const messages = {
   'messages.filter.product': '产品',
   'messages.openAutomation': '打开自动化任务',
   'messages.openAutomationAction': '前往处理',
-  'messages.donation.title': '给 Denova 充点 token',
-  'messages.donation.description': '如果 Denova 项目有帮到你，可以给它也充点 token，帮助 Denova 持续开源、持续迭代。非常感谢！',
+  'messages.support.title': '支持 Denova',
+  'messages.support.description': '如果 Denova 项目有帮到你，可以去 GitHub 点个 Star，或给它也充点 token，支持 Denova 持续开源、持续迭代；赞助时也可以添加备注，传达你的想法，非常感谢！🥰',
   'messages.donation.alt': 'Denova 赞助二维码',
-  'messages.github.title': '给 Denova 点个 Star',
-  'messages.github.description': '如果 Denova 项目有帮到你，欢迎去 GitHub 点个 Star，这是对 Denova 持续开源、持续迭代最大的支持。',
+  'messages.donation.openPreview': '放大查看二维码',
   'messages.github.star': '去 GitHub 点 Star',
 } as const
 

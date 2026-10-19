@@ -73,7 +73,7 @@ func (a *App) inferVersionMessageForResources(ctx context.Context, explicitMessa
 	if message := strings.TrimSpace(explicitMessage); message != "" {
 		return message, nil
 	}
-	status, err := runtime.versionService.Status(runtime.settings)
+	status, err := runtime.versionService.Status(ctx, runtime.settings)
 	if err != nil {
 		if ctx.Err() != nil {
 			return "", ctx.Err()

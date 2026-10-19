@@ -1,7 +1,7 @@
-import { DndContext, DragOverlay, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
+import { DndContext, KeyboardSensor, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { CSS, useCombinedRefs } from '@dnd-kit/utilities'
+import { memo, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronsDownUp, ChevronsUpDown, FileText, Plus, Search } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useControllableState } from '@radix-ui/react-use-controllable-state'
@@ -24,6 +24,7 @@ import {
   SidebarSeparator,
 } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
+import { verticalAxisModifiers } from '@/lib/dnd'
 import type { ResourceDirectoryBadge, ResourceDirectoryItem, ResourceDirectoryPinnedEntry, ResourceDirectorySection } from './types'
 
 /** 默认匹配 title + summary + searchText，空格分词后取交集。 */
@@ -48,9 +49,11 @@ interface ResourceDirectoryProps {
   searchAccessory?: ReactNode
   /** 搜索行右侧的附加按钮（如批量生成、分类） */
   headerActions?: ReactNode
+  /** Current search/filter conditions and result count, rendered below the search row. */
+  searchDetails?: ReactNode
   /** 展示「展开/收起全部」按钮 */
   showExpandCollapseAll?: boolean
-  /** 值变化时强制展开对应分组（如方案预设切换资源类型） */
+  /** Expand the matching group when the value changes, such as when switching creative setup types. */
   expandedSectionId?: string
   /** 空分组沉底展示（资料库语义）；缺省保持传入顺序 */
   emptySectionsLast?: boolean
@@ -80,6 +83,7 @@ export function ResourceDirectory({
   filterItem,
   searchAccessory,
   headerActions,
+  searchDetails,
   showExpandCollapseAll = false,
   expandedSectionId,
   emptySectionsLast = false,
@@ -95,11 +99,6 @@ export function ResourceDirectory({
     onChange: onQueryChange,
   })
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({})
-  const [draggingItem, setDraggingItem] = useState<ResourceDirectoryItem | null>(null)
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  )
 
   const trimmedQuery = query.trim()
   const searching = trimmedQuery.length > 0
@@ -137,27 +136,6 @@ export function ResourceDirectory({
 
   const totalVisible = visibleSections.reduce((sum, entry) => sum + entry.items.length, 0)
 
-  const handleDragStart = (event: DragStartEvent) => {
-    const activeId = String(event.active.id)
-    const item = visibleSections.flatMap((entry) => entry.items).find((entry) => entry.id === activeId)
-    setDraggingItem(item ?? null)
-  }
-
-  const handleDragEnd = (event: DragEndEvent) => {
-    setDraggingItem(null)
-    if (!event.over || event.active.id === event.over.id || !onReorderItems) return
-    const activeId = String(event.active.id)
-    const overId = String(event.over.id)
-    const entry = visibleSections.find(({ section, items }) => (
-      section.reorderable
-      && items.some((item) => item.id === activeId)
-      && items.some((item) => item.id === overId)
-    ))
-    if (!entry) return
-    const ids = entry.items.map((item) => item.id)
-    onReorderItems(entry.section.id, arrayMove(ids, ids.indexOf(activeId), ids.indexOf(overId)))
-  }
-
   const directoryContent = (
     <>
       {searching && totalVisible === 0 ? (
@@ -179,14 +157,14 @@ export function ResourceDirectory({
               key={item.id}
               item={item}
               active={activeId === item.id}
-              onSelect={() => onSelect(item.id)}
+              onSelect={onSelect}
             />
           ) : (
             <DirectoryItemRow
               key={item.id}
               item={item}
               active={activeId === item.id}
-              onSelect={() => onSelect(item.id)}
+              onSelect={onSelect}
             />
           ))
           return (
@@ -202,7 +180,7 @@ export function ResourceDirectory({
                     aria-expanded={!collapsed}
                     title={section.description ?? section.label}
                   >
-                    <ChevronDown className={cn('transition-transform', collapsed && '-rotate-90')} aria-hidden="true" />
+                    <ChevronDown className={cn('transition-transform duration-[var(--nova-motion-fast)] ease-[var(--nova-panel-motion-ease)]', collapsed && '-rotate-90')} aria-hidden="true" />
                     {SectionIcon && <SectionIcon aria-hidden="true" />}
                     <span data-resource-directory-section-label className="min-w-0 flex-1 truncate text-sidebar-foreground">{section.label}</span>
                     <span className="shrink-0 font-normal text-sidebar-foreground/50">{items.length}</span>
@@ -220,15 +198,13 @@ export function ResourceDirectory({
                     <Plus aria-hidden="true" />
                   </SidebarGroupAction>
                 )}
-                <CollapsibleContent>
+                <CollapsibleContent className="nova-resource-directory-content">
                   <SidebarGroupContent className="pl-2">
-                    <SidebarMenu>
-                      {reorderable ? (
-                        <SortableContext items={items.map((item) => item.id)} strategy={verticalListSortingStrategy}>
-                          {itemRows}
-                        </SortableContext>
-                      ) : itemRows}
-                    </SidebarMenu>
+                    {reorderable ? (
+                      <SortableDirectorySection sectionId={section.id} items={items} onReorderItems={onReorderItems!}>
+                        <SidebarMenu>{itemRows}</SidebarMenu>
+                      </SortableDirectorySection>
+                    ) : <SidebarMenu>{itemRows}</SidebarMenu>}
                   </SidebarGroupContent>
                 </CollapsibleContent>
               </SidebarGroup>
@@ -291,6 +267,7 @@ export function ResourceDirectory({
                       size="icon-sm"
                       onClick={toggleAllSections}
                       aria-label={allCollapsed ? t('common.expandAll') : t('common.collapseAll')}
+                      title={allCollapsed ? t('common.expandAll') : t('common.collapseAll')}
                     >
                       {allCollapsed ? <ChevronsUpDown /> : <ChevronsDownUp />}
                     </Button>
@@ -298,87 +275,129 @@ export function ResourceDirectory({
                   {headerActions}
                 </div>
               )}
+              {showSearch && searchDetails}
             </SidebarHeader>
             <SidebarSeparator />
           </>
         )}
         <SidebarContent>
-          {onReorderItems ? (
-            <DndContext
-              sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragStart={handleDragStart}
-              onDragCancel={() => setDraggingItem(null)}
-              onDragEnd={handleDragEnd}
-            >
-              {directoryContent}
-              <DragOverlay>{draggingItem ? <DirectoryItemDragOverlay item={draggingItem} /> : null}</DragOverlay>
-            </DndContext>
-          ) : directoryContent}
+          {directoryContent}
         </SidebarContent>
     </EmbeddedSidebar>
   )
 }
 
-function SortableDirectoryItemRow({ item, active, onSelect }: { item: ResourceDirectoryItem; active: boolean; onSelect: () => void }) {
-  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id })
+interface DirectoryItemRowProps {
+  item: ResourceDirectoryItem
+  active: boolean
+  onSelect: (id: string) => void
+  nodeRef?: (node: HTMLButtonElement | null) => void
+  attributes?: ReturnType<typeof useSortable>['attributes']
+  listeners?: ReturnType<typeof useSortable>['listeners']
+  transform?: string
+  transition?: string
+  isDragging?: boolean
+}
+
+/** Sorting stays within one group; other groups do not subscribe to pointer movement. */
+function SortableDirectorySection({ sectionId, items, onReorderItems, children }: {
+  sectionId: string
+  items: ResourceDirectoryItem[]
+  onReorderItems: NonNullable<ResourceDirectoryProps['onReorderItems']>
+  children: ReactNode
+}) {
+  const { t } = useTranslation()
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 220, tolerance: 8 } }),
+    useSensor(KeyboardSensor, {
+      keyboardCodes: { start: ['Space'], cancel: ['Escape'], end: ['Space', 'Enter'] },
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  )
+  const ids = useMemo(() => items.map(item => item.id), [items])
+  const handleDragEnd = (event: DragEndEvent) => {
+    if (!event.over || event.active.id === event.over.id) return
+    const from = ids.indexOf(String(event.active.id))
+    const to = ids.indexOf(String(event.over.id))
+    if (from >= 0 && to >= 0) onReorderItems(sectionId, arrayMove(ids, from, to))
+  }
   return (
-    <SidebarMenuItem>
+    <DndContext
+      sensors={sensors}
+      modifiers={verticalAxisModifiers}
+      collisionDetection={closestCenter}
+      accessibility={{
+        screenReaderInstructions: { draggable: t('common.reorderInstructions') },
+        announcements: {
+          onDragStart: () => t('common.reorderStarted'),
+          onDragOver: ({ over }) => {
+            const index = ids.indexOf(String(over?.id))
+            return index >= 0 ? t('common.reorderPosition', { position: index + 1, count: items.length }) : undefined
+          },
+          onDragEnd: () => t('common.reorderFinished'),
+          onDragCancel: () => t('common.reorderCancelled'),
+        },
+      }}
+      onDragEnd={handleDragEnd}
+    >
+      <SortableContext items={ids} strategy={verticalListSortingStrategy}>{children}</SortableContext>
+    </DndContext>
+  )
+}
+
+const SortableDirectoryItemRow = memo(function SortableDirectoryItemRow({ item, active, onSelect }: DirectoryItemRowProps) {
+  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id })
+  // A stable ref avoids disconnecting and remeasuring every row as the pointer moves.
+  const nodeRef = useCombinedRefs(setNodeRef, setActivatorNodeRef)
+  return (
+    <DirectoryItemRow
+      item={item}
+      active={active}
+      onSelect={onSelect}
+      nodeRef={nodeRef}
+      attributes={attributes}
+      listeners={listeners}
+      transform={CSS.Transform.toString(transform)}
+      transition={isDragging ? 'none' : transition}
+      isDragging={isDragging}
+    />
+  )
+})
+
+// Keep dnd-kit context updates outside the row's unchanged content and controls.
+const DirectoryItemRow = memo(function DirectoryItemRow({ item, active, onSelect, nodeRef, attributes, listeners, transform, transition, isDragging }: DirectoryItemRowProps) {
+  const { t } = useTranslation()
+  return (
+    <SidebarMenuItem style={{ contentVisibility: 'auto', containIntrinsicSize: item.summary ? 'auto 48px' : 'auto 32px' }}>
       <SidebarMenuButton
-        ref={(node) => {
-          setNodeRef(node)
-          setActivatorNodeRef(node)
-        }}
+        ref={nodeRef}
         type="button"
         size={item.summary ? 'lg' : 'default'}
-        style={{ transform: CSS.Transform.toString(transform), transition }}
+        style={{ transform, transition }}
         isActive={active}
-        className={cn('cursor-default', item.disabled && 'opacity-50', isDragging && 'opacity-35')}
-        onClick={onSelect}
+        className={cn('cursor-default', item.disabled && 'opacity-50', isDragging && 'relative z-10 bg-sidebar-accent')}
+        onClick={() => onSelect(item.id)}
+        onDragStart={event => event.preventDefault()}
         aria-current={active ? 'true' : undefined}
         title={item.summary ? `${item.title}\n${item.summary}` : item.title}
         {...attributes}
         {...listeners}
+        aria-roledescription={attributes ? t('common.reorderRole') : undefined}
       >
         <DirectoryItemContent item={item} />
       </SidebarMenuButton>
     </SidebarMenuItem>
   )
-}
+})
 
-function DirectoryItemRow({ item, active, onSelect }: { item: ResourceDirectoryItem; active: boolean; onSelect: () => void }) {
-  return (
-    <SidebarMenuItem>
-      <SidebarMenuButton
-        type="button"
-        size={item.summary ? 'lg' : 'default'}
-        isActive={active}
-        className={cn(item.disabled && 'opacity-50')}
-        onClick={onSelect}
-        aria-current={active ? 'true' : undefined}
-        title={item.summary ? `${item.title}\n${item.summary}` : item.title}
-      >
-        <DirectoryItemContent item={item} />
-      </SidebarMenuButton>
-    </SidebarMenuItem>
-  )
-}
-
-function DirectoryItemDragOverlay({ item }: { item: ResourceDirectoryItem }) {
-  return (
-    <div className="flex w-60 items-center gap-2 rounded-md bg-sidebar p-2 text-sm text-sidebar-foreground shadow-lg ring-1 ring-sidebar-border">
-      <DirectoryItemContent item={item} />
-    </div>
-  )
-}
-
-function DirectoryItemContent({ item }: { item: ResourceDirectoryItem }) {
+const DirectoryItemContent = memo(function DirectoryItemContent({ item }: { item: ResourceDirectoryItem }) {
   const ItemIcon = item.icon ?? FileText
   return (
     <>
       {item.thumbnailUrl ? (
         <span className="flex size-5 shrink-0 overflow-hidden rounded-md border border-sidebar-border bg-sidebar">
-          <img src={item.thumbnailUrl} alt="" className="size-full object-cover" />
+          <img src={item.thumbnailUrl} loading="lazy" decoding="async" alt="" referrerPolicy="no-referrer" className="size-full object-cover" />
         </span>
       ) : (
         <span className="relative flex size-5 shrink-0 items-center justify-center rounded-md border border-sidebar-border bg-sidebar">
@@ -393,7 +412,7 @@ function DirectoryItemContent({ item }: { item: ResourceDirectoryItem }) {
       {item.badges?.map((badge, index) => <ItemBadge key={`${badge.label}-${index}`} badge={badge} />)}
     </>
   )
-}
+})
 
 function StatusIndicator({ status }: { status: NonNullable<ResourceDirectoryItem['status']> }) {
   return (

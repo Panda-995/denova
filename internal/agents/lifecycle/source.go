@@ -10,7 +10,9 @@ import (
 	agentchat "denova/internal/agents/chat"
 	agentrun "denova/internal/agents/run"
 
-	agent "github.com/alfredxw/denova/agent"
+	"github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
 )
 
 const turnHostDataType = "denova.turn"
@@ -74,7 +76,7 @@ func TurnInput(kind TurnKind, request agentchat.ChatRequest, options agentrun.Op
 		return agent.Input{}, fmt.Errorf("encode Denova Agent turn HostData: %w", err)
 	}
 	return agent.Input{
-		Text: caller.Message, Attachments: append([]agent.Attachment(nil), request.AttachedFiles...),
+		Text: caller.Message, Attachments: append([]agentschema.Attachment(nil), request.AttachedFiles...),
 		IdempotencyKey: strings.TrimSpace(caller.CommandID),
 		HostData:       &agent.HostData{Type: turnHostDataType, Version: 2, Data: encoded},
 	}, nil
@@ -124,16 +126,9 @@ func decodeTurnHostData(hostData *agent.HostData, inputText string) (TurnHostDat
 }
 
 func (data TurnHostData) ChatRequest() agentchat.ChatRequest {
-	return agentchat.ChatRequest{
-		CommandID: data.Caller.CommandID, Message: data.Caller.Message, DisplayMessage: data.Caller.DisplayMessage,
-		AttachmentIDs: append([]string(nil), data.Caller.AttachmentIDs...),
-		References:    append([]string(nil), data.Caller.References...), LoreReferences: append([]string(nil), data.Caller.LoreReferences...),
-		StyleScenes: append([]string(nil), data.Caller.StyleScenes...), Selections: append([]agentchat.TextSelectionRef(nil), data.Caller.Selections...),
-		IDEContext: data.Caller.IDEContext, ReviewFeedback: data.Caller.ReviewFeedback.Clone(),
-		PlanMode: data.Caller.PlanMode, WritingSkill: data.Caller.WritingSkill,
-		ImagePresetID: data.Caller.ImagePresetID, TellerID: data.Caller.TellerID,
-		Locale: data.Caller.Locale, InputVisibility: data.InputVisibility,
-	}
+	request := data.Caller.Request()
+	request.InputVisibility = data.InputVisibility
+	return request
 }
 
 // DefinitionRequest is Denova's product composition seam. It contains product
@@ -151,7 +146,7 @@ type DefinitionResolver interface {
 // DefinitionResolver. It must not prepare a model, Toolset, or Context; the
 // public Runtime calls it before Definition preparation can be preempted.
 type CanonicalInputResolver interface {
-	ResolveCanonicalInput(context.Context, DefinitionRequest) (agent.CanonicalAdapter, error)
+	ResolveCanonicalInput(context.Context, DefinitionRequest) (agentcanonical.CanonicalAdapter, error)
 }
 
 type DefinitionResolverFunc func(context.Context, DefinitionRequest) (agent.Definition, error)
@@ -177,7 +172,7 @@ func (source denovaSource) Prepare(ctx context.Context, request agent.PrepareReq
 	return source.resolve(ctx, request)
 }
 
-func (source denovaSource) CanonicalInput(ctx context.Context, request agent.PrepareRequest) (agent.CanonicalAdapter, error) {
+func (source denovaSource) CanonicalInput(ctx context.Context, request agent.PrepareRequest) (agentcanonical.CanonicalAdapter, error) {
 	if strings.HasPrefix(request.Session.Key.Namespace, "task.") || request.Reason == agent.TurnReasonGoalMutation {
 		return nil, nil
 	}

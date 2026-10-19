@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { type OnMount } from '@monaco-editor/react'
+import type { OnMount } from '@monaco-editor/react'
 import { Braces, ChevronDown, ChevronRight, Eye } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { DenovaMonacoEditor } from '@/components/monaco/DenovaMonaco'

@@ -10,20 +10,20 @@ import (
 	"strings"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
 	"denova/internal/interactive"
 	"denova/internal/interactive/teller"
 	workspacelayout "denova/internal/workspace"
+
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 func runToolForTest(ctx context.Context, candidate any, arguments string) (string, error) {
-	var tool agent.Tool
+	var tool agenttool.Tool
 	switch value := candidate.(type) {
-	case agent.ToolDefinition:
+	case agenttool.ToolDefinition:
 		tool = value.Tool
-	case agent.Tool:
+	case agenttool.Tool:
 		tool = value
 	}
 	if tool == nil {
@@ -48,11 +48,11 @@ func TestConfigurationToolFactoryExposesOnlyRegistryTools(t *testing.T) {
 		}
 		switch info.Name {
 		case "config_read":
-			if definition.Descriptor.Capability != config.AgentToolConfigRead || definition.Descriptor.Execution != agent.ToolExecutionParallelRead || definition.Descriptor.MutationScope != agent.ToolMutationNone {
+			if definition.Descriptor.Capability != config.AgentToolConfigRead || definition.Descriptor.Execution != agenttool.ToolExecutionParallelRead || definition.Descriptor.MutationScope != agenttool.ToolMutationNone {
 				t.Fatalf("config_read descriptor = %#v", definition.Descriptor)
 			}
 		case "config_apply":
-			if definition.Descriptor.Capability != config.AgentToolConfigApply || definition.Descriptor.Execution != agent.ToolExecutionConfigExclusive || definition.Descriptor.MutationScope != agent.ToolMutationConfig || definition.Descriptor.PostCheck != agent.ToolPostCheckConfigRevision {
+			if definition.Descriptor.Capability != config.AgentToolConfigApply || definition.Descriptor.Execution != agenttool.ToolExecutionConfigExclusive || definition.Descriptor.MutationScope != agenttool.ToolMutationConfig || definition.Descriptor.PostCheck != agenttool.ToolPostCheckConfigRevision {
 				t.Fatalf("config_apply descriptor = %#v", definition.Descriptor)
 			}
 		}
@@ -876,7 +876,7 @@ func TestConfigApplyRejectsOversizedEventCardWithoutSavingTruncatedData(t *testi
 	}
 }
 
-func configManagerToolByName(t *testing.T, cfg *config.Config, name string) agent.Tool {
+func configManagerToolByName(t *testing.T, cfg *config.Config, name string) agenttool.Tool {
 	t.Helper()
 	return configManagerDefinitionByName(t, cfg, name).Tool
 }
@@ -922,7 +922,7 @@ func decodeConfigGetItem[T any](t *testing.T, output string) T {
 	return zero
 }
 
-func configManagerDefinitionByName(t *testing.T, cfg *config.Config, name string) agent.ToolDefinition {
+func configManagerDefinitionByName(t *testing.T, cfg *config.Config, name string) agenttool.ToolDefinition {
 	t.Helper()
 	definitions, err := NewTools(cfg, 0)
 	if err != nil {
@@ -938,10 +938,10 @@ func configManagerDefinitionByName(t *testing.T, cfg *config.Config, name string
 		}
 	}
 	t.Fatalf("tool %s not found", name)
-	return agent.ToolDefinition{}
+	return agenttool.ToolDefinition{}
 }
 
-func configManagerToolNameSet(t *testing.T, tools []agent.ToolDefinition) map[string]bool {
+func configManagerToolNameSet(t *testing.T, tools []agenttool.ToolDefinition) map[string]bool {
 	t.Helper()
 	names := map[string]bool{}
 	for _, tool := range tools {

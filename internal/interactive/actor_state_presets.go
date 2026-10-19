@@ -21,7 +21,6 @@ type actorStatePresetSpec struct {
 	ID          string
 	Name        string
 	Description string
-	PanelFields []ActorStateField
 	StateFields []ActorStateField
 
 	ProtagonistFields        []ActorStateField

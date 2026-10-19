@@ -36,6 +36,9 @@ func MigrateWorkspaceSkills(workspace string) error {
 	}
 	var migrationErrors []error
 	for _, sourceRoot := range sources {
+		if workspacelayout.IsUserDataRoot(filepath.Dir(sourceRoot)) {
+			continue
+		}
 		entries, err := os.ReadDir(sourceRoot)
 		if os.IsNotExist(err) {
 			continue

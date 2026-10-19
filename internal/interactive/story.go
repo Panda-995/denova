@@ -58,6 +58,7 @@ type storyRecentCache struct {
 }
 
 type storySnapshotCacheKey struct {
+	view     storyHistoryView
 	branchID string
 	limit    int
 }

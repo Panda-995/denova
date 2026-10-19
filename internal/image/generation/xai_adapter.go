@@ -23,13 +23,14 @@ func NewXAIAdapter(httpClient *http.Client) *XAIAdapter {
 }
 
 type xaiImageRequest struct {
-	Model          string `json:"model"`
-	Prompt         string `json:"prompt"`
-	N              int    `json:"n,omitempty"`
-	AspectRatio    string `json:"aspect_ratio,omitempty"`
-	Resolution     string `json:"resolution,omitempty"`
-	Quality        string `json:"quality,omitempty"`
-	ResponseFormat string `json:"response_format"`
+	Images         []xaiImageInput `json:"images,omitempty"`
+	Model          string          `json:"model"`
+	Prompt         string          `json:"prompt"`
+	N              int             `json:"n,omitempty"`
+	AspectRatio    string          `json:"aspect_ratio,omitempty"`
+	Resolution     string          `json:"resolution,omitempty"`
+	Quality        string          `json:"quality,omitempty"`
+	ResponseFormat string          `json:"response_format"`
 }
 
 func (adapter *XAIAdapter) Generate(ctx context.Context, profile config.ResolvedImageAPIProfile, request GenerateRequest) (Result, error) {
@@ -54,6 +55,18 @@ func (adapter *XAIAdapter) Generate(ctx context.Context, profile config.Resolved
 		Quality:        quality,
 		ResponseFormat: "b64_json",
 	}
+	if len(request.Images) > 0 {
+		if len(request.Images) > 5 {
+			return Result{}, fmt.Errorf("xAI supports at most five image inputs")
+		}
+		endpoint, err = endpointURL(profile.BaseURL, "images/edits")
+		if err != nil {
+			return Result{}, err
+		}
+		for _, input := range request.Images {
+			payload.Images = append(payload.Images, xaiImageInput{URL: imageDataURL(input), Type: "image_url"})
+		}
+	}
 	var response imagesAPIResponse
 	if err := doJSON(ctx, adapter.httpClient, http.MethodPost, endpoint, bearerHeaders(profile.APIKey, profile.Headers), payload, &response); err != nil {
 		return Result{}, err
@@ -61,4 +74,9 @@ func (adapter *XAIAdapter) Generate(ctx context.Context, profile config.Resolved
 	request.Size = ""
 	request.OutputFormat = ""
 	return imagesResultFromResponse(ctx, adapter.httpClient, profile.ProfileID, profile.Provider, profile.Model, request, response)
+}
+
+type xaiImageInput struct {
+	URL  string `json:"url"`
+	Type string `json:"type"`
 }

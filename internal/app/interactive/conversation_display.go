@@ -1,15 +1,15 @@
 package interactiveapp
 
 import (
-	agentinteractive "denova/internal/agents/interactive"
 	"fmt"
 	"strings"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
-
+	agentinteractive "denova/internal/agents/interactive"
 	"denova/internal/agents/session"
 	"denova/internal/interactive"
+
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 func (c *Conversation) AppendDisplayEvent(event session.DisplayEvent) error {
@@ -23,7 +23,7 @@ func (c *Conversation) AppendDisplayEvent(event session.DisplayEvent) error {
 	if role == "token_usage" {
 		return c.appendTokenUsageEvent(event)
 	}
-	if role != "thinking" && role != "tool_call" && role != "tool_result" && !(role == "assistant" && event.SubAgent) {
+	if role != "context_compaction" && role != "todo_updated" && role != "thinking" && role != "tool_call" && role != "tool_result" && !(role == "assistant" && event.SubAgent) {
 		return nil
 	}
 	name := strings.TrimSpace(event.Name)
@@ -48,6 +48,7 @@ func (c *Conversation) AppendDisplayEvent(event session.DisplayEvent) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	next := interactive.DisplayEvent{
+		Phase: event.Phase, RuntimeManaged: event.RuntimeManaged,
 		ID:                strings.TrimSpace(event.ID),
 		Role:              role,
 		Content:           content,
@@ -82,10 +83,20 @@ func (c *Conversation) AppendDisplayEvent(event session.DisplayEvent) error {
 		turnID = c.lastTurn.ID
 		branchID = c.lastTurn.BranchID
 		c.lastTurn.DisplayEvents = appendOrReplaceDisplayEvent(c.lastTurn.DisplayEvents, next)
+	} else if role == "context_compaction" && c.user == "" && c.baseParentID != nil {
+		// A maintenance command has no new story turn. Its observation belongs
+		// to the accepted branch head and remains visible after a reload.
+		turnID = *c.baseParentID
 	}
 	storyID := c.storyID
 	store := c.store
 	if turnID == "" || store == nil {
+		if store != nil && (role == "todo_updated" || (role == "context_compaction" && event.RuntimeManaged)) && c.agentCycleIdentity.CommandID != "" {
+			c.mu.Unlock()
+			err := c.persistDraftDisplay(next)
+			c.mu.Lock()
+			return err
+		}
 		return nil
 	}
 	c.mu.Unlock()
@@ -94,12 +105,30 @@ func (c *Conversation) AppendDisplayEvent(event session.DisplayEvent) error {
 	return err
 }
 
-func cloneDisplayToolPresentation(presentation *agent.ToolPresentation) *agent.ToolPresentation {
+func cloneDisplayToolPresentation(presentation *agenttool.ToolPresentation) *agenttool.ToolPresentation {
 	if presentation == nil {
 		return nil
 	}
 	cloned := *presentation
 	return &cloned
+}
+
+func (c *Conversation) DiscardDisplayEvents(ids []string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	selected := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		selected[id] = true
+	}
+	for index := range c.displayEvents {
+		if selected[c.displayEvents[index].ID] {
+			c.displayEvents[index].Status = "discarded"
+			if err := c.persistLastTurnDisplayEventLocked(c.displayEvents[index]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Conversation) AppendDisplayToolArgs(id, name, delta string) error {
@@ -235,7 +264,7 @@ func (c *Conversation) UpdateDisplayToolStatus(id, name, status string) error {
 	return nil
 }
 
-func (c *Conversation) UpdateDisplayToolResult(id, name, status, result string, presentation *agent.ToolPresentation) error {
+func (c *Conversation) UpdateDisplayToolResult(id, name, status, result string, presentation *agenttool.ToolPresentation) error {
 	if c == nil {
 		return nil
 	}

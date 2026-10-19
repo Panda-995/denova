@@ -13,6 +13,7 @@ import (
 const (
 	StoryEventTypeMeta                             = "meta"
 	StoryEventTypePlayerInput                      = "player_input_accepted"
+	StoryEventTypeTurnDraft                        = "turn_draft"
 	StoryEventTypeTurnInterrupted                  = "turn_interrupted"
 	StoryEventTypeModelContextBatch                = "model_context_batch"
 	StoryEventTypeModelContextProviderContinuation = "model_context_provider_continuation"
@@ -22,6 +23,7 @@ const (
 	StoryEventTypeBranch                           = "branch"
 	StoryEventTypeHotChoices                       = "hot_choices"
 	StoryEventTypeTurnVersionSelected              = "turn_version_selected"
+	StoryEventTypeTurnBackgroundRevised            = "turn_background_revised"
 	StoryEventTypeTurnNarrativeRevised             = "turn_narrative_revised"
 	StoryEventTypeTurnDisplayAppended              = "turn_display_appended"
 	StoryEventTypeTurnStateRevised                 = "turn_state_revised"
@@ -39,26 +41,29 @@ const (
 // canonical story event rows. Envelope validation and the journal projection
 // both consult this table, so adding an event requires an explicit context decision.
 var persistedStoryEventModelContextChanges = map[string]bool{
+	StoryEventTypeExtensionRecord:   false,
 	StoryEventTypePlayerInput:       true,
+	StoryEventTypeTurnDraft:         false,
 	StoryEventTypeTurnInterrupted:   true,
 	StoryEventTypeModelContextBatch: true,
 	// The owning Turn or model-context batch already changes model context.
 	StoryEventTypeModelContextProviderContinuation: false,
 	// The parent Turn already advances the context revision in the same atomic
 	// transaction. This side event only carries its opaque provider state.
-	StoryEventTypeProviderContinuation: false,
-	StoryEventTypeTurn:                 true,
-	StoryEventTypeStateDelta:           true,
-	StoryEventTypeBranch:               true,
-	StoryEventTypeHotChoices:           false,
-	StoryEventTypeTurnVersionSelected:  true,
-	StoryEventTypeTurnNarrativeRevised: true,
-	StoryEventTypeTurnDisplayAppended:  false,
-	StoryEventTypeTurnStateRevised:     true,
-	StoryEventTypeStoryConfigUpdated:   true,
-	StoryEventTypeBranchSwitched:       false,
-	StoryEventTypeBranchArchived:       false,
-	StoryEventTypeBranchHeadMoved:      true,
+	StoryEventTypeProviderContinuation:  false,
+	StoryEventTypeTurn:                  true,
+	StoryEventTypeStateDelta:            true,
+	StoryEventTypeBranch:                true,
+	StoryEventTypeHotChoices:            false,
+	StoryEventTypeTurnVersionSelected:   true,
+	StoryEventTypeTurnBackgroundRevised: true,
+	StoryEventTypeTurnNarrativeRevised:  true,
+	StoryEventTypeTurnDisplayAppended:   false,
+	StoryEventTypeTurnStateRevised:      true,
+	StoryEventTypeStoryConfigUpdated:    true,
+	StoryEventTypeBranchSwitched:        false,
+	StoryEventTypeBranchArchived:        false,
+	StoryEventTypeBranchHeadMoved:       true,
 	// The owning Turn already advances the model-context revision in the same
 	// atomic transaction. This private event only carries its next-turn plan.
 	StoryEventTypeBranchPlanUpdated: false,
@@ -109,6 +114,15 @@ func mapToStoryEventRecord(raw map[string]any) (StoryEventRecord, error) {
 	}
 	if err := validateStoryEventEnvelope(envelope); err != nil {
 		return StoryEventRecord{}, err
+	}
+	if envelope.Type == StoryEventTypeExtensionRecord {
+		var event extensionRecordEvent
+		if err := mapToStruct(raw, &event); err != nil {
+			return StoryEventRecord{}, err
+		}
+		if err := validateExtensionRecord(event.ExtensionRecord); err != nil {
+			return StoryEventRecord{}, err
+		}
 	}
 	if envelope.Type == StoryEventTypeTurn {
 		var turn TurnEvent
@@ -188,6 +202,15 @@ func mapToStoryEventRecord(raw map[string]any) (StoryEventRecord, error) {
 			return StoryEventRecord{}, err
 		}
 		if _, err := normalizePlayerInputAcceptedEvent(input); err != nil {
+			return StoryEventRecord{}, err
+		}
+	}
+	if envelope.Type == StoryEventTypeTurnDraft {
+		var event TurnDraftEvent
+		if err := mapToStruct(raw, &event); err != nil {
+			return StoryEventRecord{}, err
+		}
+		if err := validateTurnDraft(event.Draft); err != nil {
 			return StoryEventRecord{}, err
 		}
 	}
@@ -318,6 +341,9 @@ func validateStoryMeta(meta StoryMeta) error {
 	}
 	if meta.ImageSettings.IntervalTurns <= 0 {
 		return fmt.Errorf("互动图像间隔轮数无效: %d", meta.ImageSettings.IntervalTurns)
+	}
+	if err := validateStorySpeechSettings(meta.SpeechSettings); err != nil {
+		return err
 	}
 	if err := validateStoryCheckSettings(meta.CheckSettings); err != nil {
 		return err

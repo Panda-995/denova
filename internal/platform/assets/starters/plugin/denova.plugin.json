@@ -1,0 +1,125 @@
+{
+  "manifestVersion": 1,
+  "id": "example.plugin",
+  "version": "0.1.0",
+  "apiMajor": 1,
+  "minHostVersion": "0.6.0",
+  "name": {
+    "zh-CN": "插件项目",
+    "en-US": "Plugin project"
+  },
+  "description": {
+    "zh-CN": "从这里开发你的插件。",
+    "en-US": "Develop your plugin from here."
+  },
+  "distribution": {
+    "files": [
+      "server.mjs",
+      "runtime.mjs",
+      "tools",
+      "locales",
+      "index.html",
+      "view.mjs",
+      "style.css",
+      "client.mjs",
+      "client.d.mts"
+    ]
+  },
+  "runtime": {
+    "backend": {
+      "protocol": "denova-runtime-v1",
+      "launch": {
+        "kind": "runtime",
+        "runtime": "node",
+        "entry": "server.mjs",
+        "args": []
+      }
+    }
+  },
+  "permissions": {
+    "required": [
+      "tools.invoke",
+      "assets.read",
+      "assets.write"
+    ],
+    "optional": []
+  },
+  "contributes": {
+    "tools": [
+      {
+        "id": "echo",
+        "definition": "tools/echo.json",
+        "endpoint": {
+          "method": "POST",
+          "path": "/tools/echo"
+        },
+        "agentContexts": [
+          "writing",
+          "game",
+          "general"
+        ]
+      },
+      {
+        "id": "read-draft",
+        "definition": "tools/read-draft.json",
+        "agentContexts": [
+          "writing",
+          "game",
+          "general"
+        ],
+        "endpoint": {
+          "method": "POST",
+          "path": "/tools/read-draft"
+        }
+      }
+    ],
+    "toolsets": [
+      {
+        "id": "default",
+        "tools": [
+          "echo"
+        ]
+      }
+    ],
+    "panels": [
+      {
+        "id": "draft",
+        "titleKey": "panel.title",
+        "contexts": [
+          "writing",
+          "game",
+          "general"
+        ],
+        "viewId": "draft"
+      }
+    ],
+    "commands": [
+      {
+        "id": "echo-command",
+        "titleKey": "command.echo",
+        "contexts": [
+          "writing",
+          "game",
+          "general"
+        ],
+        "target": {
+          "kind": "tool",
+          "id": "echo"
+        }
+      }
+    ]
+  },
+  "locales": {
+    "zh-CN": "locales/zh-CN.json",
+    "en-US": "locales/en-US.json"
+  },
+  "views": [
+    {
+      "id": "draft",
+      "source": {
+        "kind": "static",
+        "path": "index.html"
+      }
+    }
+  ]
+}

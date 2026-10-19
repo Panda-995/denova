@@ -20,7 +20,7 @@ import {
   dismissAutomationInboxItem,
   getAutomationInbox,
   getAutomationTemplates,
-  getAutomations,
+  getAutomationCatalog,
   markAutomationInboxItemRead,
   startAutomationRun,
   createAgentCommandID,
@@ -117,31 +117,27 @@ export function AutomationsView({
     loadSequenceRef.current = sequence
     try {
       const locale = i18n.resolvedLanguage || i18n.language || 'zh-CN'
-      const projectDirectory = automationProjectOptions(await getAgentChatProjects())
-      const targets = projectDirectory.map((project) => automationProjectTarget(project))
-      const [taskTemplates, catalogGroups] = await Promise.all([
-        getAutomationTemplates(locale),
-        Promise.allSettled(targets.map(async (target) => {
-          const [projectTasks, projectInbox] = await Promise.all([
-            getAutomations(target),
-            getAutomationInbox(target),
-          ])
-          return {
-            tasks: projectTasks.map((task) => normalizeAutomationTaskShape(task, target)),
-            inbox: projectInbox,
-          }
-        })),
+      const [projectEntries, taskTemplates, catalog] = await Promise.all([
+        getAgentChatProjects(), getAutomationTemplates(locale), getAutomationCatalog(),
       ])
+      const projectDirectory = automationProjectOptions(projectEntries)
       if (!mountedRef.current || sequence !== loadSequenceRef.current) return
+      const groups = new Map(catalog.map(group => [group.project_id, group]))
       const failedProjects: AutomationProjectOption[] = []
-      const normalized = catalogGroups.flatMap((group, index) => {
-        if (group.status === 'fulfilled') return group.value.tasks
-        const project = projectDirectory[index]
-        failedProjects.push(project)
-        console.error(`[automations] failed to load Project catalog project_id=${project.id}`, group.reason)
-        return []
-      })
-      const inbox = catalogGroups.flatMap((group) => group.status === 'fulfilled' ? group.value.inbox : [])
+      const normalized: AutomationTask[] = []
+      const inbox: AutomationInboxItem[] = []
+      for (const project of projectDirectory) {
+        const group = groups.get(project.id)
+        if (!group) continue
+        if (group.error) {
+          failedProjects.push(project)
+          console.error(`[automations] failed to load Project catalog project_id=${project.id}`, group.error)
+          continue
+        }
+        const target = automationProjectTarget(project)
+        normalized.push(...group.tasks.map(task => normalizeAutomationTaskShape(task, target)))
+        inbox.push(...group.inbox)
+      }
       // A Project switch must not discard an existing dirty definition while
       // the current request is still settling.
       const preserveDraft = draftDirtyRef.current && Boolean(activeIdRef.current || creatingRef.current)

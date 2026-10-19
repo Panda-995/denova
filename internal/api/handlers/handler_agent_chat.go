@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -11,11 +12,14 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 
+	agentruntime "denova/internal/agents/runtime"
+	"denova/internal/agents/session"
 	"denova/internal/api/agentui"
 	"denova/internal/api/sse"
 	appsvc "denova/internal/app"
 	agentchatapp "denova/internal/app/agentchat"
 	appagentruntime "denova/internal/app/agentruntime"
+	"denova/internal/project"
 )
 
 type agentChatSessionCreateRequest struct {
@@ -55,9 +59,9 @@ func requireAgentChatBindingFromQuery(c *app.RequestContext) (agentchatapp.Bindi
 	return requireAgentChatBinding(c, c.Query("session_id"))
 }
 
-// HandleAgentChatProjects lists every project and never switches the open book.
+// HandleAgentChatProjects lists all or one project's conversations without switching the open book.
 func (h *Handlers) HandleAgentChatProjects(_ context.Context, c *app.RequestContext) {
-	writeJSON(c, consts.StatusOK, map[string]any{"projects": h.app.AgentChat().Projects()})
+	writeJSON(c, consts.StatusOK, map[string]any{"projects": h.app.AgentChat().Projects(strings.TrimSpace(c.Query("project_id")))})
 }
 
 // HandleAgentChatActivity is the lightweight detached-task heartbeat. Project
@@ -77,6 +81,21 @@ func (h *Handlers) HandleAgentChatProjectCreate(_ context.Context, c *app.Reques
 	record, err := h.app.AgentChat().AddProject(request.Path)
 	if err != nil {
 		writeAgentChatProjectError(c, consts.StatusBadRequest, "添加项目失败", "Failed to add project", err)
+		return
+	}
+	writeJSON(c, consts.StatusCreated, record)
+}
+
+func (h *Handlers) HandleAgentChatDirectoryCreate(_ context.Context, c *app.RequestContext) {
+	var request project.CreateDirectoryRequest
+	if err := decodeStrictJSONRequest(c.Request.Body(), &request); err != nil {
+		c.JSON(400, map[string]string{"messageKey": "platform.errors.INVALID_ARGUMENT"})
+		return
+	}
+	record, err := h.app.AgentChat().CreateDirectoryProject(request)
+	if err != nil {
+		slog.Warn("project_directory_create_failed", "error", err)
+		c.JSON(400, map[string]string{"messageKey": "platform.errors.PROJECT_CREATE_FAILED"})
 		return
 	}
 	writeJSON(c, consts.StatusCreated, record)
@@ -146,8 +165,8 @@ const (
 )
 
 // HandleAgentChatHistory searches durable conversations across every registered project without
-// changing the Writing workspace or loading message bodies.
-func (h *Handlers) HandleAgentChatHistory(_ context.Context, c *app.RequestContext) {
+// changing the Writing workspace. Bodies are read only for non-metadata matches.
+func (h *Handlers) HandleAgentChatHistory(ctx context.Context, c *app.RequestContext) {
 	offset := 0
 	limit := defaultAgentChatHistoryPageSize
 	var err error
@@ -166,12 +185,36 @@ func (h *Handlers) HandleAgentChatHistory(_ context.Context, c *app.RequestConte
 		}
 		limit = min(limit, maxAgentChatHistoryPageSize)
 	}
-	writeJSON(c, consts.StatusOK, h.app.AgentChat().History(agentchatapp.HistoryQuery{
+	page, err := h.app.AgentChat().History(ctx, agentchatapp.HistoryQuery{
 		ProjectID: c.Query("project_id"),
 		Search:    c.Query("query"),
 		Offset:    offset,
 		Limit:     limit,
-	}))
+	})
+	if err != nil {
+		slog.ErrorContext(ctx, "Search conversation history failed", "project_id", c.Query("project_id"), "error", err)
+		writeErrorKey(c, consts.StatusInternalServerError, "api.agentChat.searchFailed")
+		return
+	}
+	writeJSON(c, consts.StatusOK, page)
+}
+
+// HandleAgentChatExport downloads the saved visible transcript as Markdown.
+func (h *Handlers) HandleAgentChatExport(ctx context.Context, c *app.RequestContext) {
+	binding, ok := requireAgentChatBindingFromQuery(c)
+	if !ok {
+		return
+	}
+	data, err := h.app.AgentChat().ExportMarkdown(ctx, binding, requestLocale(c))
+	if err != nil {
+		slog.ErrorContext(ctx, "Export conversation Markdown failed", "project_id", binding.ProjectID,
+			"session_id", binding.SessionID, "error", err)
+		writeErrorKey(c, consts.StatusInternalServerError, "api.agentChat.exportFailed")
+		return
+	}
+	c.Response.Header.Set("Content-Disposition", attachmentContentDisposition(binding.SessionID+".md"))
+	c.Response.Header.Set("Cache-Control", "no-store")
+	c.Data(consts.StatusOK, "text/markdown; charset=utf-8", data)
 }
 
 func (h *Handlers) HandleAgentChatSessionCreate(ctx context.Context, c *app.RequestContext) {
@@ -225,7 +268,15 @@ func (h *Handlers) HandleAgentChatSessionDelete(_ context.Context, c *app.Reques
 		return
 	}
 	if err := h.app.AgentChat().DeleteSession(binding.ProjectID, req.SessionID); err != nil {
-		writeError(c, consts.StatusConflict, err.Error())
+		slog.ErrorContext(context.Background(), "[agent-chat] delete conversation failed", "project_id", binding.ProjectID, "session_id", req.SessionID, "error", err)
+		switch {
+		case errors.Is(err, session.ErrOnlySession):
+			writeErrorKey(c, consts.StatusConflict, "api.session.onlySession")
+		case errors.Is(err, agentruntime.ErrOperationActive):
+			writeErrorKey(c, consts.StatusConflict, "agentRuntime.busy")
+		default:
+			writeErrorKey(c, consts.StatusConflict, "api.session.deleteFailed")
+		}
 		return
 	}
 	writeJSON(c, consts.StatusOK, map[string]any{"session_id": req.SessionID, "deleted": true})
@@ -296,8 +347,8 @@ func (h *Handlers) HandleAgentChatActive(ctx context.Context, c *app.RequestCont
 		response["task_id"] = view.Task.ID
 		response["stream_cursor"] = view.Task.Cursor
 	}
-	if view.PendingAsk != nil {
-		response["pending_ask"] = view.PendingAsk
+	if len(view.PendingAsks) > 0 {
+		response["pending_asks"] = view.PendingAsks
 	}
 	if view.PendingInterruptionID != "" {
 		response["pending_interruption_id"] = view.PendingInterruptionID
@@ -326,7 +377,7 @@ func (h *Handlers) HandleAgentChatCommand(ctx context.Context, c *app.RequestCon
 	queueControl := kind == appsvc.CommandSteerQueued || kind == appsvc.CommandCancelQueued
 	if err != nil || strings.TrimSpace(body.CommandID) == "" || strings.TrimSpace(body.TargetOperationID) == "" ||
 		(queueControl && strings.TrimSpace(body.TargetCommandID) == "") ||
-		(kind != appsvc.CommandAbort && !queueControl && strings.TrimSpace(body.Input.Message) == "" && len(body.Input.AttachmentUploads) == 0) {
+		(kind != appsvc.CommandAbort && kind != appsvc.CommandSuspend && !queueControl && strings.TrimSpace(body.Input.Message) == "" && len(body.Input.AttachmentUploads) == 0) {
 		writeAgentRuntimeError(c, consts.StatusBadRequest, "agent_runtime.invalid_command", "AgentChat 命令 identity 或消息不完整 / AgentChat command identity or message is incomplete", nil)
 		return
 	}
@@ -335,20 +386,20 @@ func (h *Handlers) HandleAgentChatCommand(ctx context.Context, c *app.RequestCon
 	if !ok {
 		return
 	}
-	if kind != appsvc.CommandAbort && !queueControl {
+	if kind != appsvc.CommandAbort && kind != appsvc.CommandSuspend && !queueControl {
 		if err := h.app.AgentChat().MaterializeAttachments(ctx, binding, body.CommandID, &body.Input); err != nil {
 			writeErrorKey(c, consts.StatusBadRequest, "api.common.invalidRequestWithDetail", "detail", err.Error())
 			return
 		}
 	}
-	receipt, err := h.app.AgentChat().SubmitCommand(ctx, binding, appagentruntime.Command{
+	receipt, err := h.app.AgentChat().SubmitCommand(ctx, binding, agentruntime.Command{
 		Kind: kind, CommandID: strings.TrimSpace(body.CommandID),
 		OperationID:     appsvc.AgentOperationID(strings.TrimSpace(body.TargetOperationID)),
 		TargetCommandID: appsvc.AgentCommandID(strings.TrimSpace(body.TargetCommandID)),
 		Reason:          body.Reason, Input: body.Input,
 	})
 	if err != nil {
-		h.writeAgentCommandError(c, err, body.TargetOperationID)
+		h.writeAgentCommandError(ctx, c, err, body.TargetOperationID)
 		return
 	}
 	c.JSON(consts.StatusAccepted, agentCommandReceiptResponse{
@@ -458,7 +509,7 @@ func (h *Handlers) HandleAgentChatAskAnswer(ctx context.Context, c *app.RequestC
 	}
 	result, err := h.app.AgentChat().AnswerAsk(ctx, binding, strings.TrimSpace(c.Param("ask_id")), request.Answers)
 	if err != nil {
-		writeAskResolutionError(c, err)
+		writeAskResolutionError(ctx, c, err)
 		return
 	}
 	writeJSON(c, consts.StatusOK, result)
@@ -479,7 +530,7 @@ func (h *Handlers) HandleAgentChatAskCancel(ctx context.Context, c *app.RequestC
 	}
 	result, err := h.app.AgentChat().CancelAsk(ctx, binding, strings.TrimSpace(c.Param("ask_id")), request.Reason)
 	if err != nil {
-		writeAskResolutionError(c, err)
+		writeAskResolutionError(ctx, c, err)
 		return
 	}
 	writeJSON(c, consts.StatusOK, result)
@@ -499,12 +550,6 @@ func (h *Handlers) HandleAgentChatSlashCommand(ctx context.Context, c *app.Reque
 		return
 	}
 	switch strings.TrimSpace(request.Command) {
-	case "clear":
-		if err := h.app.AgentChat().ClearSession(ctx, binding); err != nil {
-			writeError(c, consts.StatusConflict, err.Error())
-			return
-		}
-		writeJSON(c, consts.StatusOK, map[string]string{"result": "会话上下文已清空 / Conversation context cleared"})
 	case "status":
 		view := h.app.AgentChat().ActiveView(ctx, binding)
 		status := "空闲 / Idle"
@@ -513,9 +558,19 @@ func (h *Handlers) HandleAgentChatSlashCommand(ctx context.Context, c *app.Reque
 		}
 		writeJSON(c, consts.StatusOK, map[string]string{"result": status})
 	case "help":
-		writeJSON(c, consts.StatusOK, map[string]string{"result": "/clear · /status · /help"})
+		writeJSON(c, consts.StatusOK, map[string]string{"result": requestLocalizer(c).T("api.command.help")})
 	case "compact":
-		writeError(c, consts.StatusConflict, "AgentChat 暂不支持手动压缩 / Manual compaction is not available in AgentChat yet")
+		compacted, err := h.app.AgentChat().CompactContext(ctx, binding, "")
+		if err != nil {
+			h.writeAgentCommandError(ctx, c, err, "")
+			return
+		}
+		localizer := requestLocalizer(c)
+		result := localizer.T("api.command.runtimeCompacted")
+		if !compacted.RuntimeManaged {
+			result = localizer.T("api.command.compacted", "epoch", compacted.Revision, "before", compacted.TokensBefore, "after", compacted.TokensAfter)
+		}
+		writeJSON(c, consts.StatusOK, map[string]string{"result": result})
 	default:
 		writeErrorKey(c, consts.StatusBadRequest, "api.common.invalidBody")
 	}

@@ -20,13 +20,15 @@ func NewOpenAIAdapter(httpClient *http.Client) *OpenAIAdapter {
 }
 
 type openAIImageRequest struct {
-	Model          string `json:"model"`
-	Prompt         string `json:"prompt"`
-	N              int    `json:"n,omitempty"`
-	Size           string `json:"size,omitempty"`
-	Quality        string `json:"quality,omitempty"`
-	OutputFormat   string `json:"output_format,omitempty"`
-	ResponseFormat string `json:"response_format,omitempty"`
+	Images         []openAIImageInput `json:"images,omitempty"`
+	Mask           *openAIImageInput  `json:"mask,omitempty"`
+	Model          string             `json:"model"`
+	Prompt         string             `json:"prompt"`
+	N              int                `json:"n,omitempty"`
+	Size           string             `json:"size,omitempty"`
+	Quality        string             `json:"quality,omitempty"`
+	OutputFormat   string             `json:"output_format,omitempty"`
+	ResponseFormat string             `json:"response_format,omitempty"`
 }
 
 func (adapter *OpenAIAdapter) Generate(ctx context.Context, profile config.ResolvedImageAPIProfile, request GenerateRequest) (Result, error) {
@@ -50,6 +52,18 @@ func (adapter *OpenAIAdapter) Generate(ctx context.Context, profile config.Resol
 		payload.OutputFormat = ""
 		payload.ResponseFormat = "b64_json"
 		request.OutputFormat = ""
+	}
+	if len(request.Images) > 0 {
+		endpoint, err = endpointURL(profile.BaseURL, "images/edits")
+		if err != nil {
+			return Result{}, err
+		}
+		for _, input := range request.Images {
+			payload.Images = append(payload.Images, openAIImageInput{ImageURL: imageDataURL(input)})
+		}
+		if request.Mask != nil {
+			payload.Mask = &openAIImageInput{ImageURL: imageDataURL(*request.Mask)}
+		}
 	}
 	var response imagesAPIResponse
 	if err := doJSON(ctx, adapter.httpClient, http.MethodPost, endpoint, bearerHeaders(profile.APIKey, profile.Headers), payload, &response); err != nil {
@@ -77,4 +91,8 @@ func openAIImageSize(size, aspectRatio string) string {
 	default:
 		return "1024x1024"
 	}
+}
+
+type openAIImageInput struct {
+	ImageURL string `json:"image_url"`
 }

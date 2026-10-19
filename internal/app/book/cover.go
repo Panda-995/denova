@@ -61,6 +61,7 @@ func (service *Service) GenerateCover(ctx context.Context, request CoverGenerate
 		}
 	}
 	return imageasset.NewService().GenerateCover(ctx, &cfg, book.NewService(absPath), imageasset.CoverGenerateRequest{
+		Provenance:        imageasset.ProvenanceDirectory,
 		Title:             meta.Title,
 		Description:       meta.Description,
 		Prompt:            request.Prompt,

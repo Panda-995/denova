@@ -9,6 +9,7 @@
 @source "../node_modules/streamdown/dist/*.js";
 @source "../node_modules/@streamdown/cjk/dist/*.js";
 @source "../node_modules/@streamdown/math/dist/*.js";
+@source "../node_modules/@rjsf/shadcn/lib/**/*.js";
 
 @custom-variant dark (&:is([data-theme="dark"] *));
 
@@ -698,8 +699,7 @@
     0 12px 30px rgba(0, 0, 0, 0.1);
 }
 
-[data-theme="light"] .nova-chat-input-area-floating,
-[data-theme="light"] .nova-story-input-float {
+[data-theme="light"] .nova-chat-input-area-floating {
   background:
     linear-gradient(180deg, transparent, color-mix(in srgb, var(--nova-surface-2) 76%, transparent) 34%, color-mix(in srgb, var(--nova-surface-2) 92%, transparent));
 }
@@ -908,6 +908,12 @@ html[data-nova-motion="off"] .shimmer {
   transition-timing-function: var(--nova-panel-motion-ease) !important;
 }
 
+/* Pointer resizing follows the pointer directly; explicit collapse/expand still animates. */
+[data-nova-activity-bar-resizing="true"] > [data-slot="sidebar-gap"],
+[data-nova-activity-bar-resizing="true"] > .nova-activity-bar {
+  transition-duration: 0s !important;
+}
+
 /* The primary menu belongs to the app canvas; the inset workspace is the single elevated surface. */
 .nova-workspace-frame {
   border: 1px solid var(--nova-border-soft);
@@ -926,16 +932,10 @@ html[data-nova-motion="off"] .shimmer {
     inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 
-/* Primary navigation should acknowledge the press immediately. The route itself may contain a
-   large editor or Markdown tree, so its button feedback must not inherit the global 220ms pace. */
-.nova-activity-bar .nova-icon-button {
-  transition-duration: var(--nova-motion-fast);
-}
-
-.nova-activity-bar .nova-icon-button:active {
-  background: var(--nova-hover);
-  transform: scale(0.98);
-  transition-duration: 0ms;
+/* Selection and hover must paint immediately when navigating rapidly. Keep this outside
+   Tailwind layers so the global button color transition cannot leave a trailing highlight. */
+.nova-activity-bar [data-sidebar="menu-button"] {
+  transition-property: width, height, padding;
 }
 
 .nova-activity-bar-resize-handle {
@@ -1104,7 +1104,25 @@ html[data-nova-motion="off"] .shimmer {
     var(--nova-surface-2);
 }
 
-.nova-story-stage-content {
+.nova-story-reading-column {
+  width: 100%;
+  max-width: var(--nova-story-text-max-width, 896px);
+  margin-inline: auto;
+  padding-inline: 24px;
+}
+
+.nova-story-stage-content .nova-story-input-float {
+  padding-inline: 0;
+  padding-inline-end: var(--nova-story-scrollbar-width, 0px);
+}
+
+.nova-story-stage-content [data-nova-scroll-to-bottom] {
+  /* Reading controls stay beneath the floating composer and its popup. */
+  z-index: 10;
+}
+
+/* Keep floating stage controls and sticky state navigation in the same stacking context. */
+.nova-story-stage-card {
   container-name: nova-story-stage;
   container-type: inline-size;
 }
@@ -1294,11 +1312,6 @@ html[data-nova-motion="off"] .shimmer {
   pointer-events: auto;
 }
 
-.nova-story-input-float {
-  background:
-    linear-gradient(180deg, transparent, color-mix(in srgb, var(--nova-surface-2) 72%, transparent) 34%, color-mix(in srgb, var(--nova-surface-2) 90%, transparent));
-}
-
 .nova-chat-composer {
   box-shadow:
     inset 0 1px 0 var(--nova-control-shadow),
@@ -1342,6 +1355,112 @@ html[data-nova-motion="off"] .shimmer {
     inset 0 1px 0 rgba(255, 255, 255, 0.055),
     0 0 0 1px rgba(163, 163, 163, 0.08),
     0 18px 40px rgba(0, 0, 0, 0.24);
+}
+
+/* Game controls and compact composers share one frosted surface. */
+.nova-story-stage-controls,
+.nova-story-console-toggle,
+.nova-story-choice-panel,
+.nova-agent-composer.nova-story-stage-composer,
+.nova-agent-composer.nova-story-stage-composer:focus-within,
+[data-nova-mobile-shell="true"] .nova-agent-composer,
+[data-nova-mobile-shell="true"] .nova-agent-composer:focus-within {
+  background: color-mix(in srgb, var(--nova-surface) 72%, transparent);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+}
+
+.nova-story-stage-header {
+  color: var(--nova-text-muted);
+  font-size: var(--nova-ui-font-size);
+  line-height: var(--nova-ui-line-height);
+}
+
+.nova-story-stage-header button,
+.nova-story-console-toggle {
+  pointer-events: auto;
+  border-color: transparent;
+  border-radius: var(--nova-radius);
+}
+
+.nova-story-stage-header button {
+  background: transparent;
+}
+
+.nova-story-stage-header button:is(:hover, [aria-expanded="true"]),
+.nova-story-console-toggle:hover {
+  background: color-mix(in srgb, var(--nova-surface-3) 88%, transparent);
+}
+
+.nova-story-stage-controls [data-layout="inline"] > span {
+  display: none;
+}
+
+.nova-story-stage-controls [data-layout="inline"] > div {
+  width: auto;
+  flex: 0 1 auto;
+}
+
+@media (min-width: 1024px) {
+  /* The inset scrolls away with the first message; the canvas fills the stage. */
+  .nova-story-stage-content .nova-message-list-header {
+    min-height: 48px;
+    padding-top: 48px;
+  }
+
+  .nova-story-stage-content[data-setup="true"],
+  .nova-story-speech-playback:not(:empty) {
+    padding-top: 48px;
+  }
+}
+
+.nova-story-choice-panel,
+.nova-agent-composer.nova-story-stage-composer,
+.nova-agent-composer.nova-story-stage-composer:focus-within,
+[data-nova-mobile-shell="true"] .nova-agent-composer,
+[data-nova-mobile-shell="true"] .nova-agent-composer:focus-within {
+  border-color: var(--nova-border-soft);
+  padding: 8px;
+  box-shadow: 0 4px 18px color-mix(in srgb, var(--nova-bg-deep) 12%, transparent);
+}
+
+[data-nova-mobile-shell="true"] .nova-agent-composer,
+[data-nova-mobile-shell="true"] .nova-agent-composer:focus-within {
+  border-radius: 24px;
+}
+
+.nova-story-stage-controls,
+.nova-story-console-toggle,
+.nova-story-choice-panel,
+.nova-agent-composer.nova-story-stage-composer,
+.nova-agent-composer.nova-story-stage-composer:focus-within {
+  border-radius: 12px;
+}
+
+.nova-agent-composer.nova-story-stage-composer:focus-within,
+[data-nova-mobile-shell="true"] .nova-agent-composer:focus-within {
+  border-color: var(--nova-field-focus-border);
+}
+
+.nova-agent-composer.nova-story-stage-composer :is(.nova-agent-composer-icon, .nova-agent-composer-pill, [data-model-profile-trigger="true"]) {
+  border-radius: var(--nova-radius);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.nova-agent-composer.nova-story-stage-composer :is(.nova-agent-composer-icon, .nova-agent-composer-pill, [data-model-profile-trigger="true"]):is(:hover, :focus-visible, [aria-pressed="true"], [data-state="open"]) {
+  background: var(--nova-hover);
+}
+
+.nova-agent-composer.nova-story-stage-composer :is(.nova-agent-composer-submit, .nova-agent-composer-stop) {
+  border-radius: var(--nova-radius);
+  box-shadow: none;
+}
+
+.nova-story-stage-composer .nova-agent-composer-submit:not(:disabled) {
+  background: var(--primary);
+  color: var(--primary-foreground);
 }
 
 .nova-agent-composer-references > :last-child {
@@ -1521,23 +1640,23 @@ html[data-nova-motion="off"] .shimmer {
   }
 }
 
-.nova-agent-execution-content,
+.nova-resource-directory-content,
 .nova-tool-content {
   overflow: hidden;
 }
 
-.nova-agent-execution-content[data-state="open"],
+.nova-resource-directory-content[data-state="open"],
 .nova-tool-content[data-state="open"] {
   animation: nova-collapsible-expand var(--nova-motion-fast) var(--nova-panel-motion-ease);
 }
 
-.nova-agent-execution-content[data-state="closed"],
+.nova-resource-directory-content[data-state="closed"],
 .nova-tool-content[data-state="closed"] {
   animation: nova-collapsible-collapse var(--nova-motion-fast) var(--nova-panel-motion-ease);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .nova-agent-execution-content,
+  .nova-resource-directory-content,
   .nova-tool-content {
     animation-duration: 1ms !important;
   }
@@ -1719,13 +1838,6 @@ html[data-nova-motion="off"] .shimmer {
   transition: flex-grow var(--nova-panel-motion-duration) var(--nova-panel-motion-ease);
 }
 
-/* Retained page routes should swap directly. Panel motion remains available for explicit layout
-   actions such as opening, closing, or resizing a pane within the current page. */
-[data-nova-panel-motion-group][data-nova-panel-motion-suspended="true"] {
-  --nova-panel-motion-duration: 0ms;
-  --nova-panel-fade-duration: 0ms;
-}
-
 [data-panel][data-nova-panel-motion="resizable"] {
   transition:
     flex-grow var(--nova-panel-motion-duration) var(--nova-panel-motion-ease),
@@ -1866,6 +1978,16 @@ html[data-nova-motion="off"] .shimmer {
   transition: none;
 }
 
+/* Route swaps only suspend this group's own panels, separators and content. Overriding inherited
+   duration tokens here would also disable every nested workspace's explicit pane toggles.
+   Panel places its content inside one library-owned wrapper. */
+[data-nova-panel-motion-group][data-nova-panel-motion-suspended="true"] > :is([data-panel], [data-nova-panel-motion-separator]),
+[data-nova-panel-motion-group][data-nova-panel-motion-suspended="true"] > [data-panel] > div > [data-nova-panel-motion-clip] > [data-nova-panel-motion-content],
+[data-nova-panel-motion-group][data-nova-panel-motion-suspended="true"] > [data-panel] > div > [data-nova-panel-motion-collapsed-content] {
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+}
+
 /* Review swaps a live editor for another Monaco-heavy surface. Its outer geometry settles in one
    frame, then the review layer enters using compositor-only properties, avoiding repeated editor
    layout while the sidebar is contracting. */
@@ -1993,22 +2115,14 @@ html[data-nova-motion="off"] .nova-change-review-layer {
 .editor-content .tiptap p {
   margin: 0;
   line-height: var(--nova-editor-line-height, 1.9);
-  text-indent: 2em;
+  text-indent: var(--nova-editor-first-line-indent, 2em);
 }
 
-/* hardBreak 缩进：让 br 换行后的行也有 2em 缩进 */
+/* Match paragraph indentation after explicit line breaks. */
 .editor-content .tiptap .nova-hard-break::after {
   content: '';
   display: inline-block;
-  width: 2em;
-}
-
-/* 文本自带缩进时，关闭 CSS 缩进避免双重缩进 */
-.editor-content.native-indent .tiptap p {
-  text-indent: 0;
-}
-.editor-content.native-indent .tiptap .nova-hard-break::after {
-  width: 0;
+  width: var(--nova-editor-first-line-indent, 2em);
 }
 
 .editor-content .tiptap h1 {
@@ -2616,6 +2730,8 @@ html[data-nova-motion="off"] .nova-change-review-layer {
 
 /* Story state ledger: current committed state placed after the latest prose. */
 .story-state-ledger {
+  position: relative;
+  z-index: 2;
   --story-state-canvas: var(--nova-surface);
   --story-state-positive: var(--nova-success);
   --story-state-positive-soft: var(--nova-success-bg);
@@ -2635,6 +2751,33 @@ html[data-nova-motion="off"] .nova-change-review-layer {
   scrollbar-width: none;
 }
 
+.story-state-ledger__navigation {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  border-radius: inherit;
+  background: var(--story-state-canvas);
+  box-shadow: 0 1px 0 var(--nova-border-soft);
+}
+
+/* Details keep the panel frame and navigation fixed while only the body scrolls. */
+.story-state-ledger > [data-presentation='details'] {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.story-state-ledger > [data-presentation='details'] > .story-state-ledger__navigation {
+  position: static;
+  padding-top: 6px;
+}
+
+.story-state-ledger > [data-presentation='details'] > .story-state-ledger__body {
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .story-state-ledger__tabs-list {
   background: var(--story-state-tabs-bg);
 }
@@ -2647,7 +2790,7 @@ html[data-nova-motion="off"] .nova-change-review-layer {
   display: none;
 }
 
-.story-state-ledger__director-label {
+.story-state-ledger__details-label {
   display: none;
 }
 
@@ -2684,6 +2827,93 @@ html[data-nova-motion="off"] .nova-change-review-layer {
   padding: 4px 10px 10px;
 }
 
+.story-state-ledger__group-flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  min-width: 0;
+  gap: 8px;
+}
+
+.story-state-ledger__section {
+  flex: 1 1 28rem;
+  min-width: 0;
+  container: state-group / inline-size;
+}
+
+.story-state-ledger__section[data-compact] {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: center;
+  gap: 16px;
+  max-width: 100%;
+}
+
+.story-state-ledger__section[data-compact] > .story-state-ledger__section-header {
+  flex: 0 0 auto;
+  margin-bottom: 0;
+}
+
+.story-state-ledger__section[data-compact] > .story-state-ledger__grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  flex: 1;
+  min-width: 0;
+}
+
+.story-state-ledger__section[data-compact] .story-state-ledger__field[data-renderer='inline'] {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.story-state-ledger__section[data-compact] .story-state-ledger__field[data-renderer='inline'] > div {
+  margin-bottom: 0;
+}
+
+@container state (max-width: 32rem) {
+  .story-state-ledger__section,
+  .story-state-ledger__section[data-compact] {
+    flex: 1 1 100%;
+  }
+}
+
+.story-state-ledger__action {
+  background: color-mix(in srgb, var(--nova-surface-2) 45%, transparent);
+}
+
+.story-state-ledger__action:hover {
+  background: color-mix(in srgb, var(--nova-surface-2) 65%, transparent);
+}
+
+/* The cover accompanies only the first two ordered sections; later sections keep full width. */
+.story-state-ledger__preview {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+}
+
+@container state (min-width: 32rem) {
+  .story-state-ledger__preview:has(> aside) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 3fr);
+    align-items: stretch;
+  }
+
+  .story-state-ledger__cover {
+    max-width: none;
+  }
+
+  /* Let the two state sections set the row height, then fill that entire portrait slot. */
+  .story-state-ledger__cover > [data-slot='dialog-trigger'] {
+    position: absolute;
+    inset: 0;
+    height: 100%;
+    aspect-ratio: auto;
+  }
+}
+
 .story-state-ledger__section[data-decorated] {
   padding: 8px 10px 10px;
   border: 1px solid var(--nova-border-soft);
@@ -2715,12 +2945,6 @@ html[data-nova-motion="off"] .nova-change-review-layer {
   white-space: nowrap;
 }
 
-.story-state-ledger__section-count {
-  flex-shrink: 0;
-  font-size: var(--nova-ui-micro-font-size);
-  color: var(--nova-text-faint);
-}
-
 .story-state-ledger__mode-toggle {
   display: flex;
   align-items: center;
@@ -2739,25 +2963,34 @@ html[data-nova-motion="off"] .nova-change-review-layer {
   color: var(--nova-text);
 }
 
-/* Dense auto-fill field grid; column basis adapts per group kind. */
+/* Columns follow each group's width and field count; compact strips keep their inline flow. */
 .story-state-ledger__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
   gap: 10px 20px;
 }
 
-.story-state-ledger__grid[data-group='overview'] {
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr));
+@container state-group (min-width: 24rem) {
+  .story-state-ledger__grid {
+    grid-template-columns: repeat(min(2, var(--story-state-field-columns)), minmax(0, 1fr));
+  }
 }
 
-.story-state-ledger__grid[data-group='details'] {
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+@container state-group (min-width: 36rem) {
+  .story-state-ledger__grid {
+    grid-template-columns: repeat(var(--story-state-field-columns), minmax(0, 1fr));
+  }
 }
 
 .story-state-ledger__field {
   position: relative;
   min-width: 0;
   padding: 2px 0;
+}
+
+.story-state-ledger__section[data-compact] .story-state-ledger__field[data-renderer='stat'] {
+  flex: 0 1 10rem;
 }
 
 .story-state-ledger__field-label {
@@ -2895,7 +3128,7 @@ html[data-nova-motion="off"] .nova-change-review-layer {
 }
 
 @container story-state-ledger (min-width: 560px) {
-  .story-state-ledger__director-label {
+  .story-state-ledger__details-label {
     display: inline;
   }
 }
@@ -2989,5 +3222,95 @@ html[data-nova-motion="off"] .nova-change-review-layer {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+  }
+}
+
+/* Diagnostic lines must remain readable in screenshots, including narrow screens. */
+.cn-toast [data-title], .cn-toast [data-description] {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+/* Resolve translucent bubble colors before overriding the original theme tokens. */
+.nova-story-stage-content[data-artwork="true"] {
+  --nova-stage-user-message-bg-from: color-mix(in srgb, var(--nova-user-message-bg-from) 60%, transparent);
+  --nova-stage-user-message-bg-to: color-mix(in srgb, var(--nova-user-message-bg-to) 60%, transparent);
+}
+
+.nova-story-stage-content[data-artwork="true"] .nova-user-message {
+  --nova-user-message-bg-from: var(--nova-stage-user-message-bg-from);
+  --nova-user-message-bg-to: var(--nova-stage-user-message-bg-to);
+}
+
+/* Keep prose on the reading scrim; only outer panels add a translucent surface. */
+.nova-story-stage-content[data-artwork="true"] :is(
+  .nova-chat-canvas,
+  .story-state-ledger__tabs-list,
+  .nova-tool-content
+) {
+  background: transparent;
+}
+
+.nova-story-stage-content[data-artwork="true"] :is(.story-state-ledger, .nova-tool-surface) {
+  border-color: color-mix(in srgb, var(--nova-text) 18%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--nova-text) 4%, transparent), transparent 3rem),
+    color-mix(in srgb, var(--nova-surface) 50%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--nova-text) 5%, transparent),
+    0 4px 14px rgba(0, 0, 0, 0.1);
+}
+
+/* Keep sticky navigation translucent while blurring fields that scroll beneath it. */
+.nova-story-stage-content[data-artwork="true"] .story-state-ledger__navigation {
+  background: transparent;
+  backdrop-filter: blur(12px);
+}
+
+/* Tool details already sit inside a panel, so they must not stack another surface. */
+.nova-story-stage-content[data-artwork="true"] .nova-tool-surface .nova-tool-surface {
+  background: transparent;
+  box-shadow: none;
+}
+
+.nova-story-stage-content[data-artwork="true"] .story-state-ledger__section[data-decorated] {
+  border-color: color-mix(in srgb, var(--nova-text) 9%, transparent);
+  background: color-mix(in srgb, var(--nova-text) 3%, transparent);
+}
+
+.nova-story-stage-content[data-artwork="true"] .nova-tool-surface {
+  --nova-hover: color-mix(in srgb, var(--nova-surface-3) 25%, transparent);
+}
+
+/* Character layout follows the stage width, including when the console is open. */
+.nova-story-artwork { container-type: inline-size; }
+.nova-stage-characters {
+  position: absolute;
+  inset: 0;
+}
+.nova-stage-character {
+  position: absolute;
+  bottom: 0;
+  height: var(--character-height, 70%);
+  width: max-content;
+  max-width: 70%;
+  /* Distribute positions instead of dividing image widths: a crowd overlaps. */
+  left: calc(15% + var(--cast-position) * 70%);
+  translate: calc(var(--cast-position) * -100%);
+}
+@container (min-width: 768px) {
+  .nova-stage-characters:not([data-layout="center"]) .nova-stage-character {
+    --side-width: 45%;
+    max-width: var(--side-width);
+  }
+  .nova-stage-character[data-side="left"] {
+    left: calc(var(--side-position) * var(--side-width));
+    translate: calc(var(--side-position) * -100%);
+  }
+  .nova-stage-character[data-side="right"] {
+    left: auto;
+    right: calc((1 - var(--side-position)) * var(--side-width));
+    translate: calc((1 - var(--side-position)) * 100%);
   }
 }

@@ -7,9 +7,9 @@ import (
 	"reflect"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/internal/agents/conversationjournal"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestDomainCommitContextSurvivesMessageWindowTrimming(t *testing.T) {
@@ -29,13 +29,13 @@ func TestDomainCommitContextSurvivesMessageWindowTrimming(t *testing.T) {
 			identity := DomainCommitIdentity{CommandID: "history", OperationID: "history-run", Cycle: 1}
 			for sequence := 0; sequence < batches; sequence++ {
 				messages := domainContextToolMessages(sequence, 1)
-				if _, err := sess.CommitContextBatch(t.Context(), sess.ContextCursor(), identity, sequence, messages); err != nil {
+				if _, err := sess.CommitContextBatch(t.Context(), sess.ContextCursor(), identity, sequence, messages, nil); err != nil {
 					t.Fatal(err)
 				}
 			}
 			intent, err := NewDomainCommitIntent(
 				DomainCommitIdentity{CommandID: "new-input", OperationID: "new-run", Cycle: 1},
-				agent.UserMessage("continue writing"), MessageMetadata{},
+				agentschema.UserMessage("continue writing"), MessageMetadata{},
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -69,7 +69,7 @@ func TestDomainCommitContextSurvivesMessageWindowTrimming(t *testing.T) {
 			}
 			next, err := NewDomainCommitIntent(
 				DomainCommitIdentity{CommandID: "next-input", OperationID: "next-run", Cycle: 1},
-				agent.UserMessage("continue after restart"), MessageMetadata{},
+				agentschema.UserMessage("continue after restart"), MessageMetadata{},
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -99,7 +99,7 @@ func TestDomainCommitContextIgnoresDisplayWindowOffset(t *testing.T) {
 	}
 	intent, err := NewDomainCommitIntent(
 		DomainCommitIdentity{CommandID: "new-input", OperationID: "new-run", Cycle: 1},
-		agent.UserMessage("continue writing"), MessageMetadata{},
+		agentschema.UserMessage("continue writing"), MessageMetadata{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +121,7 @@ func TestDomainCommitOutsideEffectiveWindowRemainsIdempotent(t *testing.T) {
 			t.Cleanup(func() { _ = sess.Close() })
 			intent, err := NewDomainCommitIntent(
 				DomainCommitIdentity{CommandID: "old-input", OperationID: "old-run", Cycle: 1},
-				agent.UserMessage("start writing"), MessageMetadata{},
+				agentschema.UserMessage("start writing"), MessageMetadata{},
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -135,7 +135,7 @@ func TestDomainCommitOutsideEffectiveWindowRemainsIdempotent(t *testing.T) {
 			}
 			for _, phase := range []string{"trimmed", "cleared", "reopened"} {
 				if phase == "cleared" {
-					if err := sess.AppendClearMarker(); err != nil {
+					if err := appendReleasedClearMarker(sess); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -149,7 +149,7 @@ func TestDomainCommitOutsideEffectiveWindowRemainsIdempotent(t *testing.T) {
 					}
 				}
 				t.Run(phase, func(t *testing.T) {
-					if _, _, found, err := sess.SnapshotContextForDomainCommit(intent.Identity, agent.User, intent.Hash); err != nil || found {
+					if _, _, found, err := sess.SnapshotContextForDomainCommit(intent.Identity, agentschema.User, intent.Hash); err != nil || found {
 						t.Errorf("evicted input: found=%t err=%v", found, err)
 					}
 					if retry, err := sess.CommitDomainMessage(intent); err != nil || retry != receipt || sess.MessageCountTotal() != pairs*2+1 {
@@ -161,13 +161,13 @@ func TestDomainCommitOutsideEffectiveWindowRemainsIdempotent(t *testing.T) {
 	}
 }
 
-func domainContextToolMessages(start, pairs int) []*agent.Message {
-	messages := make([]*agent.Message, 0, pairs*2)
+func domainContextToolMessages(start, pairs int) []*agentschema.Message {
+	messages := make([]*agentschema.Message, 0, pairs*2)
 	for index := start; index < start+pairs; index++ {
 		callID := fmt.Sprintf("call-%d", index)
 		messages = append(messages,
-			agent.AssistantMessage("checking", []agent.ToolCall{{ID: callID, Type: "function", Function: agent.FunctionCall{Name: "inspect", Arguments: `{}`}}}),
-			agent.ToolMessage(agent.TextToolResult("evidence"), callID, agent.WithToolName("inspect")),
+			agentschema.AssistantMessage("checking", []agentschema.ToolCall{{ID: callID, Type: "function", Function: agentschema.FunctionCall{Name: "inspect", Arguments: `{}`}}}),
+			agentschema.ToolMessage(agentschema.TextToolResult("evidence"), callID, agentschema.WithToolName("inspect")),
 		)
 	}
 	return messages

@@ -12,11 +12,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"denova/internal/agents/sessionjournal"
 	"denova/internal/localfs"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentcompaction "github.com/alfredxw/denova/agent/context/compaction"
 )
 
 const releasedProductCompactionBackupDirectory = "product-session-v0.3.3-compaction"
@@ -37,7 +38,7 @@ func migrateReleasedContextCompaction(
 	if err != nil || !found {
 		return err
 	}
-	migrated, err := log.HasCapabilityRecord(agent.CompactionCapability)
+	migrated, err := log.HasCapabilityRecord(agentcompaction.CompactionCapability)
 	if err != nil {
 		return err
 	}
@@ -51,7 +52,7 @@ func migrateReleasedContextCompaction(
 		return fmt.Errorf("backup released Product Session Compaction: %w", err)
 	}
 	changed, err := log.ImportCapabilityIfAbsent(
-		ctx, agent.CompactionCapability, migration.State, migration.Deleted,
+		ctx, agentcompaction.CompactionCapability, migration.State, migration.Deleted,
 	)
 	if err != nil {
 		return fmt.Errorf("convert released Product Session Compaction: %w", err)
@@ -94,11 +95,21 @@ func (s *Session) releasedContextCompactionMigration(agentKind string) (released
 	if createdAt.IsZero() {
 		createdAt = s.UpdatedAt
 	}
-	state := agent.CompactionState{
+	state := struct {
+		ID              string                            `json:"id"`
+		Revision        uint64                            `json:"revision"`
+		SourceRevision  string                            `json:"source_revision"`
+		Summary         string                            `json:"summary"`
+		TokenEstimate   int                               `json:"token_estimate"`
+		Metrics         agentcompaction.CompactionMetrics `json:"metrics"`
+		ReplacementFrom int                               `json:"replacement_from"`
+		ReplacementTo   int                               `json:"replacement_to"`
+		CreatedAt       time.Time                         `json:"created_at"`
+	}{
 		ID: record.ID, Revision: revision,
 		SourceRevision: fmt.Sprintf("product-session-v0.3.3:%s", record.ID),
 		Summary:        record.Summary, TokenEstimate: record.TokensAfter,
-		Metrics: agent.CompactionMetrics{
+		Metrics: agentcompaction.CompactionMetrics{
 			EstimatedTokensBefore: record.TokensBefore,
 			EstimatedTokensAfter:  record.TokensAfter,
 			ContextWindowTokens:   record.ContextWindowTokens,

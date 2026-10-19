@@ -459,6 +459,9 @@ func (s *Store) visibleInboxItem(item TriggerInboxItem) bool {
 
 func (s *Store) inboxLocations() []taskStoreLocation {
 	locations := []taskStoreLocation{{store: NewStore(s.userDir, ""), scope: ScopeUser}}
+	if s.workspaceStateRoot != "" && len(s.knownWorkspaces) == 0 {
+		return append(locations, taskStoreLocation{store: s, scope: ScopeWorkspace})
+	}
 	seen := map[string]bool{}
 	appendWorkspace := func(workspace string) {
 		canonical := canonicalStoreRoot(workspace)

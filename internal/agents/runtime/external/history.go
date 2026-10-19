@@ -1,0 +1,199 @@
+package external
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+
+	"denova/config"
+	"denova/internal/agents/conversationjournal"
+	agentrun "denova/internal/agents/run"
+	externaljournal "denova/internal/agents/runtime/external/journal"
+	"denova/internal/agents/session"
+	agenttool "denova/internal/agents/tool"
+	"denova/internal/agents/toolruntime"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
+)
+
+// History captures admission facts and a canonical source interval, without
+// loading its messages. Messages reconstructs that interval only when needed.
+type History struct {
+	Cursor               conversationjournal.Cursor
+	ContextRevision      uint64
+	Revision             uint64
+	Selection            config.RuntimeSelection
+	ContinuesOperationID string
+	Checkpoint           *externaljournal.Checkpoint
+	PriorMutations       []agenttool.Mutation
+	session              *session.Session
+	source               session.ExternalContextSource
+}
+
+func CommandReceipt(ctx context.Context, sess *session.Session, commandID string) (agentrun.CommandReceipt, bool, error) {
+	var receipt agentrun.CommandReceipt
+	found := false
+	err := sess.ReadExternal(ctx, func(state session.ExternalState) error {
+		for _, operation := range state.Projection.Operations {
+			if operation.CommandID != commandID {
+				continue
+			}
+			receipt = agentrun.CommandReceipt{CommandID: agentrun.CommandID(commandID), OperationID: agentrun.OperationID(operation.ID), Cursor: agentrun.Cursor(operation.Accepted.Cursor)}
+			found = true
+			break
+		}
+		return nil
+	})
+	return receipt, found, err
+}
+
+// PrepareHistory requires an idle runtime and captures the pre-admission
+// boundary. Only checkpoint and interrupted-ancestor receipts are read here;
+// callers may load Messages after admission while the Session remains open.
+func PrepareHistory(ctx context.Context, sess *session.Session) (History, error) {
+	history := History{session: sess}
+	err := sess.ReadExternal(ctx, func(state session.ExternalState) error {
+		history.Cursor, history.Revision, history.Selection = state.Cursor, state.Config.Revision, state.Config.Engine()
+		history.ContextRevision = state.ContextRevision
+		history.source = state.ContextSource
+		if state.Projection.Checkpoint != nil {
+			record, err := state.Read(*state.Projection.Checkpoint)
+			if err != nil {
+				return err
+			}
+			var checkpoint externaljournal.Checkpoint
+			if err := json.Unmarshal(record.Data, &checkpoint); err != nil {
+				return err
+			}
+			history.Checkpoint = &checkpoint
+		}
+		if err := state.Projection.RequireIdle(); err != nil {
+			return err
+		}
+		var latest conversationjournal.Cursor
+		for _, operation := range state.Projection.Operations {
+			if operation.Accepted.Cursor > latest {
+				latest = operation.Accepted.Cursor
+				history.ContinuesOperationID = ""
+				if operation.Status == externaljournal.Interrupted {
+					history.ContinuesOperationID = operation.ID
+				}
+			}
+		}
+		// Interrupted continuations inherit committed domain effects as well as
+		// prose, so the original post-run verification can finish after recovery.
+		ancestors := map[string]bool{}
+		var receipts []externaljournal.Locator
+		for id := history.ContinuesOperationID; id != ""; {
+			if ancestors[id] {
+				return fmt.Errorf("cyclic external continuation")
+			}
+			operation := state.Projection.Operations[id]
+			if operation == nil {
+				return fmt.Errorf("external continuation source is missing")
+			}
+			ancestors[id] = true
+			for _, tool := range operation.Tools {
+				receipts = append(receipts, *tool.Finished)
+			}
+			record, err := state.Read(operation.Accepted)
+			if err != nil {
+				return err
+			}
+			var accepted externaljournal.Accepted
+			if err := json.Unmarshal(record.Data, &accepted); err != nil {
+				return err
+			}
+			id = accepted.ContinuesOperationID
+		}
+		// Preserve canonical effect order without scanning unrelated history.
+		sort.Slice(receipts, func(i, j int) bool {
+			if receipts[i].Cursor == receipts[j].Cursor {
+				return receipts[i].Index < receipts[j].Index
+			}
+			return receipts[i].Cursor < receipts[j].Cursor
+		})
+		for _, locator := range receipts {
+			record, err := state.Read(locator)
+			if err != nil {
+				return err
+			}
+			var finished externaljournal.FinishedTool
+			if err := json.Unmarshal(record.Data, &finished); err != nil {
+				return err
+			}
+			if finished.Receipt == nil {
+				continue
+			}
+			for _, effect := range finished.Receipt.Effects {
+				if effect.Kind != toolruntime.AgentToolMutationEffectKind {
+					continue
+				}
+				mutation, err := toolruntime.DecodeAgentToolMutationEffect(effect)
+				if err != nil {
+					return err
+				}
+				history.PriorMutations = append(history.PriorMutations, mutation)
+			}
+		}
+		return nil
+	})
+	return history, err
+}
+
+// Messages loads the captured pre-admission interval, including after a new
+// operation starts. It never includes that operation's input or later guidance.
+func (history History) Messages(ctx context.Context) ([]Message, error) {
+	var messages []Message
+	err := history.session.ReadExternal(ctx, func(state session.ExternalState) error {
+		return state.ScanContext(history.source, func(source session.ExternalContextRecord) error {
+			if source.Message != nil {
+				message := source.Message
+				role, content := string(message.Role), message.Content
+				if message.Role == agentschema.ToolRole {
+					role, content = "user", "Confirmed tool observation ("+message.ToolName+"):\n"+content
+				}
+				projected := Message{Role: role, Text: content, Cursor: uint64(source.Cursor)}
+				if message.Role == agentschema.ToolRole {
+					projected.ToolImages = message.Attachments
+				} else {
+					projected.Attachments = message.Attachments
+				}
+				messages = append(messages, projected)
+			}
+			if source.Runtime == nil || source.Runtime.Kind != externaljournal.ToolFinished {
+				return nil
+			}
+			var finished externaljournal.FinishedTool
+			if err := json.Unmarshal(source.Runtime.Data, &finished); err != nil {
+				return err
+			}
+			operation := state.Projection.Operations[source.Runtime.OperationID]
+			if operation == nil {
+				return nil
+			}
+			tool := operation.Tools[finished.ExecutionID]
+			// Arguments and outcome are facts, never provider-specific tool-call IDs.
+			start, err := state.Read(tool.Started)
+			if err != nil {
+				return err
+			}
+			var started externaljournal.StartedTool
+			if err := json.Unmarshal(start.Data, &started); err != nil {
+				return err
+			}
+			text := fmt.Sprintf("Confirmed tool observation: %s\nArguments: %s\nSuccess: %t\nResult: %s", tool.Name, started.Arguments, finished.Success, finished.Result)
+			projected := Message{Role: "user", Text: text, Cursor: uint64(source.Cursor)}
+			if finished.Receipt != nil {
+				projected.ToolImages = finished.Receipt.Attachments
+			}
+			messages = append(messages, projected)
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return messages, nil
+}

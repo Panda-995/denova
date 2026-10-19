@@ -35,6 +35,7 @@ type InstallResult struct {
 }
 
 type ApplyResult struct {
+	ID      string `json:"id"`
 	Status  string `json:"status"`
 	Version string `json:"version"`
 	LogPath string `json:"log_path,omitempty"`

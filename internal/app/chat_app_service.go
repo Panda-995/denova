@@ -64,7 +64,8 @@ type ideChatRuntime struct {
 
 func sharedConversationRuntime(runtime ideChatRuntime) conversationapp.Runtime {
 	return conversationapp.Runtime{
-		ProjectID: runtime.projectID, ProjectType: runtime.projectType, ProjectStore: runtime.projectStore,
+		PageInstructions: (agentChatHost{app: runtime.app}).PageInstructions,
+		ProjectID:        runtime.projectID, ProjectType: runtime.projectType, ProjectStore: runtime.projectStore,
 		AgentKind: runtime.agentKind, Session: runtime.sess, State: runtime.state,
 		BookService: runtime.bookService, ExecutionRuntime: runtime.executionRuntime, Workspace: runtime.workspace,
 		VersionService: runtime.versionService, Config: runtime.cfg, IDETeller: runtime.ideTeller,

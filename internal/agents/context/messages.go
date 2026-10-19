@@ -1,16 +1,18 @@
 package context
 
-import agent "github.com/alfredxw/denova/agent"
+import (
+	agentschema "github.com/alfredxw/denova/agent/schema"
+)
 
 // CloneMessages returns a deep-enough model-message snapshot using the Agent
 // library's canonical clone semantics.
-func CloneMessages(messages []*agent.Message) []*agent.Message {
+func CloneMessages(messages []*agentschema.Message) []*agentschema.Message {
 	if messages == nil {
 		return nil
 	}
-	cloned := make([]*agent.Message, len(messages))
+	cloned := make([]*agentschema.Message, len(messages))
 	for index, message := range messages {
-		cloned[index] = agent.CloneMessage(message)
+		cloned[index] = agentschema.CloneMessage(message)
 	}
 	return cloned
 }

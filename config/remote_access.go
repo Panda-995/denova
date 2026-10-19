@@ -37,7 +37,7 @@ func HTTPListenHost(allowLANAccess bool) string {
 
 func HTTPURL(host string, port int) string {
 	if port <= 0 {
-		port = 8080
+		port = 7789
 	}
 	return "http://" + host + ":" + strconv.Itoa(port)
 }
@@ -51,18 +51,9 @@ func LANHTTPURL(port int) string {
 }
 
 func LANAddress() string {
-	interfaces, err := net.Interfaces()
+	addrs, err := lanInterfaceAddresses()
 	if err != nil {
 		return LANHTTPHost
-	}
-	var addrs []net.Addr
-	for _, iface := range interfaces {
-		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-		if addresses, err := iface.Addrs(); err == nil {
-			addrs = append(addrs, addresses...)
-		}
 	}
 	return selectLANAddress(addrs)
 }
@@ -94,6 +85,9 @@ func selectLANAddress(addrs []net.Addr) string {
 // replacing the user-level settings file. Blank password input preserves the
 // existing password hash.
 func PrepareUserSettingsForWrite(existing, incoming Settings) (Settings, error) {
+	if incoming.GameCreationDefaults != nil || incoming.GameLastCreation != nil {
+		return Settings{}, fmt.Errorf("game creation defaults belong to a Project")
+	}
 	out := preserveTerminalCommandRegistryPresence(incoming)
 	if err := validateSettingsCheckpointGuidance(out); err != nil {
 		return Settings{}, err

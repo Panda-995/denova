@@ -1,3 +1,4 @@
+import type { SpeechContentSettings } from '@/features/speech/text'
 import type { SSEEvent } from '@/lib/api'
 import type { ChatAttachment } from '@/lib/api-client/types'
 
@@ -5,6 +6,10 @@ export type InteractiveSubmode = 'story' | 'timeline'
 
 export type StoryPlanningMode = 'enabled' | 'disabled'
 export type StoryTitleSource = 'pending' | 'generated' | 'user'
+
+export interface StorySpeechSettings extends SpeechContentSettings {
+  auto_read: boolean
+}
 
 export interface StorySummary {
   id: string
@@ -18,6 +23,8 @@ export interface StorySummary {
   module_refs?: StoryDirectorModuleRefs
   reply_target_chars: number
   choice_count: number
+  speech_settings?: StorySpeechSettings
+  presentation_settings?: StoryPresentationSettings
   image_settings?: StoryImageSettings
   check_settings?: Partial<StoryCheckSettings>
   opening: StoryOpeningConfig
@@ -203,6 +210,8 @@ export interface InteractiveStoryUpdateInput {
   module_refs?: StoryDirectorModuleRefs
   reply_target_chars?: number
   choice_count?: number
+  speech_settings?: StorySpeechSettings
+  presentation_settings?: StoryPresentationSettings
   image_settings?: StoryImageSettings
   check_settings?: StoryCheckSettings
   opening?: StoryOpeningConfig
@@ -278,6 +287,8 @@ export interface ActorStateField {
   default?: unknown
   min?: number
   max?: number
+  /** Numeric capacity Field ID in the same Actor/template; mutually exclusive with max. */
+  max_field?: string
   options?: string[]
   description?: string
   update_instruction?: string
@@ -370,6 +381,7 @@ export interface TurnEvent {
   user_context_only?: boolean
   narrative: string
   thinking?: string
+  execution_cursor?: string
   run_id?: string
   agent_kind?: string
   display_events?: TurnDisplayEvent[]
@@ -393,19 +405,44 @@ export interface UpdateBranchPlanResult {
   context_revision: number
 }
 
+export interface StoryPresentationSettings {
+  /** Allow Agent background changes; manual choices and the current image remain available. */
+  background: boolean
+  /** Initial background before the first committed stage; never overrides a saved turn. */
+  default_background?: PresentationMaterial
+  characters: boolean
+}
+
+export interface PresentationMaterial {
+  item_id: string
+  asset_id: string
+  path: string
+  name: string
+  /** Original-image focal point; absent means center. Saved with this scene. */
+  focus?: { x: number; y: number }
+}
+
+export interface TurnPresentation {
+  background?: PresentationMaterial
+  characters?: PresentationMaterial[]
+}
+
 export interface TurnResult {
+  presentation?: TurnPresentation
   state_updates: Array<{ op: 'replace' | 'delta' | 'create' | string; path: string; value: unknown }>
   choices: string[]
 }
 
 export interface TurnDisplayEvent {
+  phase?: string
+  runtime_managed?: boolean
   agent_cycle?: number
   id?: string
-  role: 'assistant' | 'thinking' | 'tool_call' | 'tool_result' | 'narrative'
+  role: 'assistant' | 'thinking' | 'tool_call' | 'tool_result' | 'narrative' | 'context_compaction' | 'todo_updated'
   content?: string
   name?: string
   args?: string
-  status?: 'running' | 'success' | 'error'
+  status?: 'running' | 'success' | 'error' | 'discarded'
   result?: string
   tool_presentation?: import('@/lib/api').ToolPresentation
   created_at?: string
@@ -725,6 +762,7 @@ export interface RuleResolutionRerollInput {
 }
 
 export interface Snapshot {
+  pending_display_events?: TurnDisplayEvent[]
   story_id: string
   branch_id: string
   context_revision?: number
@@ -749,6 +787,7 @@ export interface Snapshot {
 // Keep this wire DTO separate from Snapshot because the UI also merges SSE
 // deltas into its local projection.
 export interface InteractiveSnapshotResponse {
+  pending_display_events?: TurnDisplayEvent[]
   story_id: string
   branch_id: string
   context_revision?: number
@@ -927,25 +966,11 @@ export interface StateSchemaInitializationStatus {
 export interface ContextCompactionProjection {
   id: string
   branch_id: string
-  agent_kind?: string
-  epoch: number
+  revision: number
   summary: string
-  retained_turns: number
-  estimated_tokens_before?: number
-  observed_prompt_tokens?: number
-  observed_estimate_tokens?: number
   tokens_before: number
   tokens_after: number
-  target_ratio?: number
-  context_window_tokens: number
-  strategy?: string
-  threshold: number
-  reason?: string
-  phase?: string
-  recovery_band?: number
-  candidate_fingerprint?: string
-  candidate_generation?: number
-  source_turn_count: number
+  source_message_count: number
 }
 
 export interface BranchSummary {
@@ -977,6 +1002,8 @@ export interface StoryGraph {
 }
 
 export interface InteractiveTurnPersistedEvent {
+  /** Transport replay restores history without automatic playback. */
+  replayed?: boolean
   story_id: string
   branch_id: string
   turn_count: number

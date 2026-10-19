@@ -14,6 +14,19 @@ const (
 	LegacyDataDirName = ".nova"
 )
 
+// IsUserDataRoot identifies a user-level Denova data directory by its Project
+// or released Book registry. Callers handling legacy workspace-private state
+// must exclude these roots so global resources never become Project content.
+// This inspects markers only; registry validation belongs to its owning store.
+func IsUserDataRoot(directory string) bool {
+	for _, name := range []string{"projects.json", "books.json"} {
+		if info, err := os.Stat(filepath.Join(directory, name)); err == nil && !info.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
 // DirName returns the active workspace-private directory name.
 // Existing .denova wins for new workspaces. When both names exist because a
 // legacy workspace was opened during the Denova rename, old .nova state is kept

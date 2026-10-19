@@ -3,18 +3,21 @@ package app
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+
 	agentchat "denova/internal/agents/chat"
 	agentexecution "denova/internal/agents/execution"
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
+	interactiveapp "denova/internal/app/interactive"
 	apptask "denova/internal/app/task"
-	"encoding/hex"
-	"encoding/json"
-	"fmt"
-	agent "github.com/alfredxw/denova/agent"
-	"log/slog"
-	"strings"
-	"sync"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 const maxRememberedInteractiveStarts = 128
@@ -32,7 +35,7 @@ type InteractiveAgentStartRequest struct {
 	Locale               string
 	InputVisibility      agentrun.InputVisibility
 	AttachmentIDs        []string
-	AttachedFiles        []agent.Attachment
+	AttachedFiles        []agentschema.Attachment
 }
 
 type interactiveStartIdentity struct {
@@ -212,13 +215,13 @@ func (s *InteractiveAppService) resolveInteractiveStart(request InteractiveAgent
 	chatRequest := agentchat.CaptureChatRequestCallerInput(agentchat.ChatRequest{
 		CommandID: request.CommandID, Message: request.Message, ResumeInterruptionID: request.ResumeInterruptionID,
 		AttachmentIDs: append([]string(nil), request.AttachmentIDs...),
-		AttachedFiles: append([]agent.Attachment(nil), request.AttachedFiles...),
+		AttachedFiles: append([]agentschema.Attachment(nil), request.AttachedFiles...),
 		StyleScenes:   append([]string(nil), request.StyleScenes...), Locale: request.Locale,
 		InputVisibility: request.InputVisibility,
 	})
 	if request.ResumeInterruptionID != "" {
 		var pendingInterruption *session.Interruption
-		if pending, pendingErr := store.PendingTurnInterruption(request.StoryID, branchID); pendingErr != nil {
+		if pending, pendingErr := interactiveapp.ExternalTurnInterruption(store, request.StoryID, branchID); pendingErr != nil {
 			return interactiveStartIdentity{}, pendingErr
 		} else if pending != nil {
 			pendingInterruption = &session.Interruption{
@@ -301,7 +304,7 @@ type InteractiveTaskInfo struct {
 	BranchID             string
 	Message              string
 	RegenerateFromTurnID string
-	Attachments          []agent.Attachment
+	Attachments          []agentschema.Attachment
 }
 
 type interactiveTaskRun struct {

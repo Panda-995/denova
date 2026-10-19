@@ -1,0 +1,314 @@
+package interactiveapp
+
+import (
+	"context"
+	"fmt"
+	"reflect"
+	"slices"
+	"strings"
+	"testing"
+
+	"denova/config"
+	"denova/internal/agents/canonicalstore"
+	agentchat "denova/internal/agents/chat"
+	agentcompaction "denova/internal/agents/context/compaction"
+	agentstructural "denova/internal/agents/context/structural"
+	agentconversation "denova/internal/agents/conversation"
+	agentexecution "denova/internal/agents/execution"
+	agentlifecycle "denova/internal/agents/lifecycle"
+	agentrun "denova/internal/agents/run"
+	productsession "denova/internal/agents/session"
+	agenttoolruntime "denova/internal/agents/toolruntime"
+	"denova/internal/interactive"
+	"denova/internal/project"
+
+	"github.com/alfredxw/denova/agent"
+	agenthistory "github.com/alfredxw/denova/agent/context/history"
+	agentmiddleware "github.com/alfredxw/denova/agent/engine/middleware"
+	agentmodel "github.com/alfredxw/denova/agent/model"
+	agentstream "github.com/alfredxw/denova/agent/model/stream"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
+	"github.com/alfredxw/denova/agent/tool/permission"
+	toolresult "github.com/alfredxw/denova/agent/tool/result"
+)
+
+const incrementalIntent = "Verify 24 sources. Corrected budget is 72519, not 72591; preserve evidence IDs."
+
+type countedWritingHistory struct {
+	*agentconversation.SessionConversation
+	reads   *int
+	request agentchat.ChatRequest
+}
+
+func (c countedWritingHistory) CanonicalMessages(ctx context.Context) ([]*agentschema.Message, error) {
+	*c.reads++
+	return c.SessionConversation.CanonicalMessages(ctx)
+}
+func (c countedWritingHistory) VisitCanonicalMessages(ctx context.Context, visit func(*agentschema.Message) error) error {
+	*c.reads++
+	return c.SessionConversation.VisitCanonicalMessages(ctx, visit)
+}
+func (c countedWritingHistory) ReadCanonicalWindow(ctx context.Context, count int, archive *agenthistory.HistoryArchive) ([]*agentschema.Message, error) {
+	*c.reads++
+	return c.SessionConversation.ReadCanonicalWindow(ctx, count, archive)
+}
+func (c countedWritingHistory) NewAgentConversationCommitter(options agentrun.Options) (agentlifecycle.ConversationCommitter, error) {
+	return agentlifecycle.NewSessionConversationCommitter(agentlifecycle.SessionCommitterConfig{Conversation: c.SessionConversation, Session: c.CanonicalSession(), Options: options, Request: c.request})
+}
+
+type countedGameHistory struct {
+	*Conversation
+	reads *int
+}
+
+func (c countedGameHistory) CanonicalMessages(ctx context.Context) ([]*agentschema.Message, error) {
+	*c.reads++
+	return c.Conversation.CanonicalMessages(ctx)
+}
+
+func (c countedGameHistory) ReadCanonicalWindow(ctx context.Context, count int, archive *agenthistory.HistoryArchive) ([]*agentschema.Message, error) {
+	*c.reads++
+	return c.Conversation.ReadCanonicalWindow(ctx, count, archive)
+}
+
+// Model responses are deterministic; both products use the actual Denova
+// manager, primary snapshot fork, final request validator and canonical store.
+type longProductModel struct {
+	t               *testing.T
+	step, summaries int
+	resume          bool
+	inputs          [][]*agentschema.Message
+	inputEstimates  []int
+}
+
+func (m *longProductModel) Generate(_ context.Context, messages []*agentschema.Message, options ...agentmodel.ModelOption) (*agentschema.Message, error) {
+	if strings.HasPrefix(messages[len(messages)-1].Content, "[Runtime context compaction request]") {
+		m.summaries++
+		if m.summaries > 1 && !containsMessageContent(messages, "Incremental evidence checkpoint") {
+			m.t.Error("summary lost previous checkpoint")
+		}
+		return agentschema.AssistantMessage(fmt.Sprintf("Incremental evidence checkpoint %d. Goal: verify 24 sources. Budget corrected from 72591 to 72519. Evidence IDs: source-1 through source-%d. Completed sources remain verified. Pending: read remaining sources, then report.", m.summaries, m.step-1), nil), nil
+	}
+	m.inputs = append(m.inputs, messages)
+	estimate := agentmodel.EstimateRequestTextTokens(messages, agentmodel.GetCommonOptions(nil, options...).Tools)
+	m.inputEstimates = append(m.inputEstimates, estimate)
+	if !m.resume && !containsMessageContent(messages, incrementalIntent) {
+		m.t.Error("current input disappeared")
+	}
+	calls := map[string]bool{}
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			calls[call.ID] = true
+		}
+		if message.Role == agentschema.ToolRole && !calls[message.ToolCallID] {
+			m.t.Errorf("orphan result %s", message.ToolCallID)
+		}
+	}
+	if m.step > 0 && !m.resume && !containsMessageContent(messages, fmt.Sprintf("source-%d", m.step)) {
+		m.t.Errorf("latest source %d disappeared", m.step)
+	}
+	var response *agentschema.Message
+	if m.step == 24 || m.resume {
+		response = agentschema.AssistantMessage("All evidence verified. Corrected budget 72519.", nil)
+	} else {
+		m.step++
+		response = agentschema.AssistantMessage("Inspect the next source", []agentschema.ToolCall{{ID: fmt.Sprintf("evidence-%d", m.step), Type: "function", Function: agentschema.FunctionCall{Name: "evidence", Arguments: fmt.Sprintf(`{"step":%d}`, m.step)}}})
+	}
+	response.ResponseMeta = &agentschema.ResponseMeta{Usage: &agentschema.TokenUsage{PromptTokens: estimate}}
+	return response, nil
+}
+func (m *longProductModel) Stream(ctx context.Context, messages []*agentschema.Message, options ...agentmodel.ModelOption) (*agentstream.StreamReader[*agentschema.Message], error) {
+	result, err := m.Generate(ctx, messages, options...)
+	if err != nil {
+		return nil, err
+	}
+	return agentstream.StreamReaderFromArray([]*agentschema.Message{result}), nil
+}
+
+func TestProductsCompactRepeatedlyWithinOneRunAndColdReopen(t *testing.T) {
+	for _, kind := range []string{agentrun.AgentKindIDE, agentrun.AgentKindInteractiveStory} {
+		for _, maintenance := range []string{"summary_only", "elision_then_summary"} {
+			t.Run(kind+"/"+maintenance, func(t *testing.T) {
+				t.Parallel()
+				ctx := t.Context()
+				workspace, dataDir := t.TempDir(), t.TempDir()
+				registry := project.NewRegistry(dataDir)
+				record, err := registry.Add(workspace, project.TypeGeneral, "Incremental checkpoint")
+				if err != nil {
+					t.Fatal(err)
+				}
+				layout, err := registry.EnsureStore(record)
+				if err != nil {
+					t.Fatal(err)
+				}
+				journals, err := canonicalstore.New(dataDir, registry)
+				if err != nil {
+					t.Fatal(err)
+				}
+				stories := interactive.NewStore(workspace)
+				defer stories.Close()
+				story, err := stories.CreateStory(interactive.CreateStoryRequest{Title: "Incremental checkpoint", StoryTellerID: "classic"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				products, err := productsession.NewStore(layout.SessionsDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer products.Close()
+				writing, err := products.GetOrCreate("incremental-writing")
+				if err != nil {
+					t.Fatal(err)
+				}
+				newRuntime := func() *agentexecution.Runtime {
+					runtime, err := agentexecution.NewAgentRuntime(ctx, dataDir, agentexecution.WithSessionStore(journals), agentexecution.WithProfiles(publicGameNoopProfile(workspace, story.ID)), agentexecution.WithToolMutationApplier(func(context.Context, agenttoolruntime.CommittedToolMutation) error { return nil }))
+					if err != nil {
+						t.Fatal(err)
+					}
+					return runtime
+				}
+				runtime := newRuntime()
+				defer func() { _ = runtime.Close(context.Background()) }()
+				cfg := &config.Config{Workspace: workspace, OpenAIContextWindowTokens: 64_000}
+				model := &longProductModel{t: t}
+				identity := agentschema.CapabilityIdentity{Kind: "test.long-product", Version: 1}
+				manager, err := agentcompaction.NewAgentManagerForModel(cfg, kind, 64_000)
+				if err != nil {
+					t.Fatal(err)
+				}
+				executions := map[int]int{}
+				tool, err := agenttool.InferTool("evidence", "Read one source", func(_ context.Context, input struct {
+					Step int `json:"step"`
+				}) (string, error) {
+					executions[input.Step]++
+					return fmt.Sprintf("source-%d: corrected budget 72519.\n%s\nsource-%d: verified.", input.Step, strings.Repeat("证", 6000), input.Step), nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				toolset, err := agenttool.StaticToolsIdentified(agentschema.CapabilityIdentity{Kind: "test.long-product-tools", Version: 1}, agenttool.ToolDefinition{Tool: tool, Descriptor: agenttool.ToolDescriptor{Source: agenttool.ToolSourceRead, Execution: agenttool.ToolExecutionParallelRead, MutationScope: agenttool.ToolMutationNone, PostCheck: agenttool.ToolPostCheckNone, Recovery: agenttool.ToolRecoveryReadOnly, ResultRecoveryKind: agentschema.ToolResultRecoveryRead, ResultProjection: agentschema.ToolResultBoundedModelContext, ResultRetention: agentschema.ToolResultDeferred, Steering: agenttool.SteeringFinishCurrent, MaxResultBytes: 32 << 10}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				options := agentrun.Options{ProjectID: record.ID, AgentKind: kind, Workspace: workspace, StateRoot: layout.StoreRoot, SessionID: writing.ID}
+				if kind == agentrun.AgentKindInteractiveStory {
+					options = publicGameOptions(workspace, story.ID, "main")
+					options.ProjectID = record.ID
+				}
+				historyReads := 0
+				cycle := func(input, command string) agentexecution.Cycle {
+					definition := agent.Definition{Key: "long-product", Name: "long-product", Model: model, ModelIdentity: identity, Tools: toolset, Permission: permission.FullAccess(), Compaction: manager}
+					if maintenance == "elision_then_summary" {
+						definition.Elision = agentcompaction.NewElisionPolicyForModel(cfg, kind, 64_000)
+						definition.ResultProcessor = toolresult.Standard(toolresult.Policy{MaxBytes: 32 << 10, ContextWindowTokens: 64_000})
+					}
+					var conversation agentchat.Conversation = countedWritingHistory{agentconversation.NewSessionConversationForAgent(writing, cfg, kind), &historyReads, agentchat.ChatRequest{CommandID: command, Message: input}}
+					if kind == agentrun.AgentKindInteractiveStory {
+						game := NewConversation(stories, "", workspace, story.ID, "main", input, 800, cfg)
+						conversation = countedGameHistory{game, &historyReads}
+						if input != "" {
+							definition.Middlewares = []agentmiddleware.Middleware{gameSubmissionForTest(t, game, input, input)}
+						}
+					}
+					return agentexecution.Cycle{Definition: definition, Conversation: conversation, Options: options, Request: agentchat.ChatRequest{CommandID: command, Message: input}}
+				}
+				run, err := runtime.Start(ctx, agentexecution.StartRequest{Cycle: cycle(incrementalIntent, "long-run")})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if outcome := run.Wait(ctx); outcome.Status != agentrun.OutcomeCompleted {
+					t.Fatalf("run failed: %+v", outcome)
+				}
+				if maintenance == "summary_only" && model.summaries < 3 {
+					t.Fatalf("one Run generated only %d checkpoints", model.summaries)
+				}
+				for step := 1; step <= 24; step++ {
+					if executions[step] != 1 {
+						t.Errorf("source %d executed %d times", step, executions[step])
+					}
+				}
+				status, err := runtime.RuntimeStatusProjection(ctx, options)
+				if err != nil || maintenance == "summary_only" && status.Compaction == nil {
+					t.Fatalf("checkpoint missing: %+v %v", status.Compaction, err)
+				}
+				if maintenance == "elision_then_summary" {
+					if model.summaries != 0 {
+						t.Fatalf("recoverable tool bodies still required %d automatic summaries", model.summaries)
+					}
+					before, err := runtime.Inspect(ctx, cycle("Preview the evidence", "elision-preview"))
+					if err != nil || before.ElisionMetrics.ResultsElided == 0 || !containsMessageContent(before.ModelRequest.Messages, "[Earlier tool output elided;") {
+						t.Fatalf("Elision not projected: %+v %v", before.ElisionMetrics, err)
+					}
+					if err := runtime.Close(ctx); err != nil {
+						t.Fatal(err)
+					}
+					runtime = newRuntime()
+					after, err := runtime.Inspect(ctx, cycle("Preview the evidence", "elision-preview"))
+					// The final prospective user input includes a freshly captured
+					// runtime clock. Persisted history and Elision must remain identical.
+					count := len(before.ModelRequest.Messages)
+					if err != nil || count == 0 || len(after.ModelRequest.Messages) != count ||
+						!reflect.DeepEqual(before.ModelRequest.Messages[:count-1], after.ModelRequest.Messages[:count-1]) || before.ElisionMetrics != after.ElisionMetrics {
+						t.Fatalf("canonical product journal did not restore the same Elision projection: %v", err)
+					}
+				}
+				manual, err := runtime.ExecuteStructuralOperation(ctx, cycle("", "manual-calibration"), agentstructural.Spec{
+					CommandID: "manual-calibration", Action: agentstructural.Compact,
+					Ref: agentrun.ContextCompactionRef{Force: true},
+				})
+				if err != nil || !manual.Compaction.Triggered {
+					t.Fatalf("manual compaction before reopen: %+v %v", manual, err)
+				}
+				checkpointRevision := manual.Compaction.Revision
+				readsBeforeReopen := historyReads
+				summariesBeforeReopen := model.summaries
+				if err := runtime.Close(ctx); err != nil {
+					t.Fatal(err)
+				}
+				runtime = newRuntime()
+				model.resume = true
+				resumed, err := runtime.Start(ctx, agentexecution.StartRequest{Cycle: cycle("Report the verified budget and evidence.", "cold-continuation")})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if outcome := resumed.Wait(ctx); outcome.Status != agentrun.OutcomeCompleted {
+					t.Fatalf("cold continuation failed: %+v", outcome)
+				}
+				if historyReads != readsBeforeReopen+1 {
+					t.Fatalf("cold continuation must restore the canonical window once: before=%d after=%d", readsBeforeReopen, historyReads)
+				}
+				if maintenance == "summary_only" && readsBeforeReopen != 1 {
+					t.Fatalf("warm execution reloaded compacted history %d times", readsBeforeReopen)
+				}
+				latest := model.inputs[len(model.inputs)-1]
+				if !containsMessageContent(latest, "Incremental evidence checkpoint") || !containsMessageContent(latest, "72519") {
+					t.Fatal("cold continuation lost checkpoint facts")
+				}
+				if model.summaries != summariesBeforeReopen {
+					t.Fatal("manual compaction caused another summary on cold continuation")
+				}
+				var previousUsage *agentschema.ResponseMeta
+				for index := len(latest) - 1; index >= 0; index-- {
+					if latest[index].ResponseMeta != nil && latest[index].ResponseMeta.Usage != nil {
+						previousUsage = latest[index].ResponseMeta
+						break
+					}
+				}
+				// Game materializes its final narrative separately, so the latest
+				// retained provider usage may belong to the preceding tool response.
+				previousEstimates := model.inputEstimates[:len(model.inputEstimates)-1]
+				if previousUsage == nil || previousUsage.InputEstimate == nil || previousUsage.InputEstimate.Version != agentmodel.InputEstimateVersion || previousUsage.InputEstimate.Model != identity || previousUsage.Usage.PromptTokens != previousUsage.InputEstimate.Tokens || !slices.Contains(previousEstimates, previousUsage.InputEstimate.Tokens) {
+					if previousUsage != nil {
+						t.Fatalf("product journal lost the original request/usage pair after compaction and reopen: usage=%+v estimate=%+v; original estimates=%v", previousUsage.Usage, previousUsage.InputEstimate, previousEstimates)
+					}
+					t.Fatal("product journal lost provider usage after compaction and reopen")
+				}
+				status, err = runtime.RuntimeStatusProjection(ctx, options)
+				if err != nil || status.Compaction == nil || status.Compaction.Revision != checkpointRevision {
+					t.Fatalf("cold checkpoint changed: %+v %v", status.Compaction, err)
+				}
+			})
+		}
+	}
+}

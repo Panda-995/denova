@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { MessageItem } from './MessageItem'
+import { NovaMotionProvider } from '@/features/motion/motion-preferences'
 
 describe('MessageItem streaming Markdown', () => {
   it('renders animated Markdown, math, CJK emphasis, links, and project images', () => {
@@ -100,7 +101,7 @@ describe('MessageItem streaming Markdown', () => {
 
     expect(container.querySelector('[data-streamdown="strong"]')).toHaveTextContent('正在分析。')
     expect(container.querySelector('.katex-display')).toBeInTheDocument()
-    expect(container.querySelector('[data-sd-animate]')).toBeInTheDocument()
+    expect(container.querySelector('[data-sd-animate]')).not.toBeInTheDocument()
     expect(container.querySelector('img[alt="分析图"]')).toHaveAttribute(
       'src',
       '/api/projects/project-thinking/files/asset?path=assets%2Fimage%2Fgenerated%2Fanalysis.png',
@@ -113,5 +114,34 @@ describe('MessageItem streaming Markdown', () => {
 
     expect(container.querySelector('[data-streamdown="strong"]')).toHaveTextContent('正在分析。')
     expect(container.querySelector('[data-sd-animate]')).not.toBeInTheDocument()
+  })
+
+  it('enables thinking word animations only for explicit full motion and reacts during streaming', () => {
+    const message = { role: 'thinking' as const, content: '**Streaming text** remains readable.', streaming: true }
+    const { container, rerender } = render(
+      <NovaMotionProvider intensity="system"><MessageItem message={message} /></NovaMotionProvider>,
+    )
+    expect(container.querySelector('[data-sd-animate]')).not.toBeInTheDocument()
+
+    rerender(<NovaMotionProvider intensity="full"><MessageItem message={message} /></NovaMotionProvider>)
+    expect(container.querySelector('[data-sd-animate]')).toBeInTheDocument()
+    expect(container.querySelector('[data-streamdown="strong"]')).toHaveTextContent('Streaming text')
+
+    for (const intensity of ['reduced', 'off', 'system']) {
+      rerender(<NovaMotionProvider intensity={intensity}><MessageItem message={message} /></NovaMotionProvider>)
+      expect(container.querySelector('[data-sd-animate]')).not.toBeInTheDocument()
+      expect(container).toHaveTextContent('remains readable.')
+    }
+  })
+
+  it('preserves reply word animations across thinking motion preferences', () => {
+    const message = { role: 'assistant' as const, content: 'Streaming reply text.', streaming: true }
+    const { container, rerender } = render(<NovaMotionProvider intensity="system"><MessageItem message={message} /></NovaMotionProvider>)
+    expect(container.querySelector('[data-sd-animate]')).toBeInTheDocument()
+    for (const intensity of ['full', 'reduced', 'off']) {
+      rerender(<NovaMotionProvider intensity={intensity}><MessageItem message={message} /></NovaMotionProvider>)
+      expect(container.querySelector('[data-sd-animate]')).toBeInTheDocument()
+      expect(container).toHaveTextContent('Streaming reply text.')
+    }
   })
 })

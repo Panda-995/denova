@@ -11,9 +11,14 @@ import (
 const ResolvedLoreContextMaxBytes = interactive.StoryContextMaxBytes
 
 func buildInteractiveStoryLoreContext(workspace string, plan *interactive.BranchPlan, userAction string) (string, error) {
-	items, err := lore.NewStore(workspace).List()
+	store := lore.NewStore(workspace)
+	items, err := store.List()
 	if err != nil {
 		return "", fmt.Errorf("read interactive-story lore: %w", err)
+	}
+	index, err := store.IndexGuide()
+	if err != nil {
+		return "", fmt.Errorf("read interactive-story lore guide: %w", err)
 	}
 	byName := loreItemsByName(items)
 
@@ -26,14 +31,14 @@ func buildInteractiveStoryLoreContext(workspace string, plan *interactive.Branch
 	seen := map[string]bool{}
 	for _, name := range refs {
 		item, ok := byName[strings.ToLower(strings.TrimSpace(name))]
-		if !ok || item.LoadMode == lore.LoadModeResident {
+		if !ok || index.Guide.IncludesFullBody(item) {
 			continue
 		}
 		selected = append(selected, item)
 		seen[item.ID] = true
 	}
 	for _, item := range items {
-		if seen[item.ID] || item.LoadMode == lore.LoadModeResident || !loreItemMentionedByName(item, userAction) {
+		if seen[item.ID] || index.Guide.IncludesFullBody(item) || !loreItemMentionedByName(item, userAction) {
 			continue
 		}
 		selected = append(selected, item)

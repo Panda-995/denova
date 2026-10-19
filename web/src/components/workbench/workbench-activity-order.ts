@@ -1,6 +1,7 @@
+import { isPluginPageRoute, type PluginPageRoute } from '@/stores/workspace-store'
 import type { ReactNode } from 'react'
 
-export type ActivityItemID = 'writing' | 'story' | 'lore' | 'teller' | 'versions' | 'books' | 'agentchat' | 'skills' | 'agents' | 'automations' | 'trajectory'
+export type ActivityItemID = PluginPageRoute | 'writing' | 'story' | 'market' | 'lore' | 'teller' | 'versions' | 'books' | 'agentchat' | 'skills' | 'agents' | 'automations' | 'trajectory'
 export type ActivityOrderScope = 'workspace'
 
 export interface ActivityItem {
@@ -13,11 +14,17 @@ export interface ActivityItem {
 
 const ACTIVITY_ORDER_STORAGE_KEY = 'nova.activity.order.workspace.v1'
 const ACTIVITY_HIDDEN_STORAGE_KEY = 'nova.activity.hidden.workspace.v1'
-const DEFAULT_ACTIVITY_ORDER: ActivityItemID[] = ['writing', 'story', 'agentchat', 'trajectory', 'lore', 'teller', 'versions', 'books', 'skills', 'agents', 'automations']
+const DEFAULT_ACTIVITY_ORDER: ActivityItemID[] = ['writing', 'story', 'agentchat', 'trajectory', 'lore', 'teller', 'versions', 'books', 'skills', 'agents', 'automations', 'market']
 
 export function sortActivityItems(items: ActivityItem[], order: ActivityItemID[], defaultOrder: ActivityItemID[]) {
+  // New creation pages sit beside writing and games. Once reordered by the
+  // user, their saved position takes precedence just like built-in items.
+  const pageIDs = items.map(item => item.id).filter(isPluginPageRoute)
+  const defaults = [...defaultOrder]
+  defaults.splice(defaults.indexOf('story') + 1, 0, ...pageIDs)
+  const effectiveOrder = insertMissingActivityItems(order, defaults)
   const orderIndex = new Map<ActivityItemID, number>()
-  order.forEach((id, index) => orderIndex.set(id, index))
+  effectiveOrder.forEach((id, index) => orderIndex.set(id, index))
   const defaultIndex = new Map<ActivityItemID, number>()
   defaultOrder.forEach((id, index) => defaultIndex.set(id, index))
   return [...items].sort((a, b) => {
@@ -73,7 +80,7 @@ export function storeHiddenActivityIDs(ids: ActivityItemID[]) {
 }
 
 export function isActivityItemID(value: string): value is ActivityItemID {
-  return DEFAULT_ACTIVITY_ORDER.includes(value as ActivityItemID)
+  return isPluginPageRoute(value) || DEFAULT_ACTIVITY_ORDER.includes(value as ActivityItemID)
 }
 
 function readStoredActivityOrder(): ActivityItemID[] {
@@ -84,8 +91,7 @@ function readStoredActivityOrder(): ActivityItemID[] {
     if (!raw) return defaultOrder
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return defaultOrder
-    const validIDs = new Set(defaultOrder)
-    const storedIDs = parsed.filter((id): id is ActivityItemID => validIDs.has(id))
+    const storedIDs = parsed.filter((id): id is ActivityItemID => typeof id === 'string' && isActivityItemID(id))
     return insertMissingActivityItems(storedIDs, defaultOrder)
   } catch {
     return defaultOrder

@@ -1,0 +1,177 @@
+import { createRequire } from 'node:module'
+import { expect, test } from '../support/fixtures'
+import { createAndOpenBook, createStory } from '../support/api'
+import type { LoreItem } from '../../src/lib/api'
+
+for (const theme of ['dark', 'light']) {
+  test(`full state finds character Lore and opens its existing editor in ${theme}`, async ({ page, request }) => {
+    test.setTimeout(120_000)
+    await request.patch('/api/settings', { data: { layer: 'user', changes: { theme, language: 'zh-CN' } } })
+    const book = await createAndOpenBook(request, `State Lore ${theme}`)
+    const loreURL = `/api/projects/${book.projectId}/book/lore/items`
+    const name = '旅行者LongCharacterName'.repeat(8)
+    const brief = '她在雾港寻找失踪的同伴。A traveller seeking a missing companion. '.repeat(6)
+    const created = await request.post(loreURL, { data: { id: 'hero-record', name, type: 'character', brief_description: brief, content: 'The full biography stays in the library.' } })
+    expect(created.ok(), await created.text()).toBe(true)
+    const sharp = createRequire(import.meta.url)('sharp') as typeof import('sharp').default
+    const portrait = await sharp(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="112"><circle cx="40" cy="30" r="18" fill="#d3b586"/><path d="M20 55H60L75 112H5Z" fill="#40323f"/></svg>')).png().toBuffer()
+    const uploaded = await request.post(`${loreURL}/hero-record/materials/upload`, {
+      multipart: { file: { name: 'portrait.png', mimeType: 'image/png', buffer: portrait } },
+    })
+    expect(uploaded.ok(), await uploaded.text()).toBe(true)
+    const uploadedItem = await uploaded.json() as LoreItem
+    const cover = await request.post(`${loreURL}/hero-record/materials`, { data: { op: 'cover', asset_id: uploadedItem.resolved_materials![0].id } })
+    expect(cover.ok(), await cover.text()).toBe(true)
+    const story = await createStory(request, '角色关联验证')
+    const selected = await request.patch(`/api/interactive/stories/${story.id}`, { data: { protagonist: { mode: 'lore', source_lore_item_id: 'hero-record' } } })
+    expect(selected.ok(), await selected.text()).toBe(true)
+    const started = await request.post('/api/interactive/chat', { data: { command_id: `state-lore-${story.id}`, mode: 'story', story_id: story.id, branch: 'main', start_opening: true } })
+    expect(started.ok(), await started.text()).toBe(true)
+    const snapshotURL = `/api/interactive/stories/${story.id}/snapshot?branch=main`
+    await expect.poll(async () => (await (await request.get(snapshotURL)).json()).turns.length).toBe(1)
+    const original = await (await request.get(snapshotURL)).json()
+    expect(original.state.actors.protagonist.lore_item_id).toBeUndefined()
+    const actorName = name.toUpperCase()
+    // Ordinary Actors use normalized unique library names; protagonists retain
+    // their existing source reference without adding metadata to state updates.
+    await page.route('**/api/**/snapshot*', async route => {
+      const snapshot = structuredClone(original)
+      snapshot.state.actors.namesake = { ...snapshot.state.actors.protagonist, id: 'namesake', name: `  ${actorName}  `, role: 'supporting' }
+      snapshot.state.actors.stranger = { ...snapshot.state.actors.protagonist, id: 'stranger', name: '路人', role: 'supporting' }
+      await route.fulfill({ json: snapshot })
+    })
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto('/')
+    const sidebar = page.getByLabel('工作台侧边栏')
+    await sidebar.getByRole('button', { name: '游戏', exact: true }).click()
+    await expect(page.getByRole('button', { name: '角色资料', exact: true })).toHaveCount(0)
+    const ledger = page.getByRole('region', { name: '当前状态', exact: true })
+    const stageLore = ledger.getByRole('complementary', { name: '角色资料', exact: true })
+    await expect(stageLore).toBeVisible()
+    const stageCover = stageLore.getByRole('button', { name: `查看 ${name} 的封面`, exact: true })
+    await expect.poll(() => stageLore.getByRole('img').evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true)
+    const previewSections = ledger.getByRole('tabpanel').locator('.story-state-ledger__preview .story-state-ledger__section')
+    await expect(previewSections).toHaveCount(2)
+    const coverBounds = (await stageLore.boundingBox())!
+    const firstSection = (await previewSections.first().boundingBox())!
+    expect(coverBounds.x + coverBounds.width).toBeLessThanOrEqual(firstSection.x)
+    await expect.poll(() => ledger.getByRole('tabpanel').locator('.story-state-ledger__preview').evaluate(el => {
+      const image = el.querySelector('aside img')!.getBoundingClientRect()
+      // Groups can share a row; the cover follows the whole preview area.
+      const sections = [...el.querySelectorAll('.story-state-ledger__section')].map(section => section.getBoundingClientRect())
+      return Math.max(Math.abs(image.top - Math.min(...sections.map(section => section.top))), Math.abs(image.bottom - Math.max(...sections.map(section => section.bottom))))
+    })).toBeLessThanOrEqual(1)
+    expect(await ledger.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
+    await stageCover.click()
+    const viewer = page.getByRole('dialog', { name, exact: true })
+    await expect(viewer).toBeVisible()
+    await viewer.getByRole('button', { name: '放大', exact: true }).click()
+    await viewer.press('Escape')
+    await expect(stageCover).toBeFocused()
+    await ledger.getByRole('button', { name: /^展开全部/ }).click()
+    const thirdSection = ledger.getByRole('tabpanel').locator('.story-state-ledger__section').nth(2)
+    await expect(thirdSection).toBeVisible()
+    expect((await thirdSection.boundingBox())!.width).toBeGreaterThan(firstSection.width)
+    await page.screenshot({ path: test.info().outputPath(`stage-cover-${theme}-wide.png`) })
+    await ledger.getByRole('tab', { name: '世界状态', exact: true }).click()
+    await expect(stageLore).toHaveCount(0)
+    await ledger.getByRole('tab', { name: '路人', exact: true }).click()
+    await expect(stageLore).toHaveCount(0)
+    await ledger.getByRole('tab', { name: actorName, exact: true }).click()
+    await expect(stageLore).toBeVisible()
+    await ledger.getByRole('tab', { name: original.state.actors.protagonist.name, exact: true }).click()
+    await stageLore.getByRole('button', { name: '打开资料项', exact: true }).click()
+    await expect(page.getByLabel('名称', { exact: true })).toHaveValue(name)
+    await sidebar.getByRole('button', { name: '游戏', exact: true }).click()
+    await page.getByRole('button', { name: '查看完整状态', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '故事状态', exact: true })
+    const activePanel = dialog.getByRole('tabpanel')
+    const row = dialog.getByRole('complementary', { name: '角色资料', exact: true })
+    await expect(row).toBeVisible()
+    await expect(activePanel.getByText('资料库当前设定 · 与当前回合状态分别保存', { exact: true })).toBeVisible()
+    await expect(activePanel.getByText(brief, { exact: true })).toBeVisible()
+    await expect(dialog.getByRole('img', { name, exact: true })).toBeVisible()
+    await expect.poll(() => dialog.getByRole('img', { name, exact: true }).evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true)
+    await expect(dialog.getByText('The full biography stays in the library.', { exact: true })).toHaveCount(0)
+    const bounds = (await dialog.boundingBox())!
+    expect(bounds.width).toBeLessThanOrEqual(1152)
+    expect(bounds.height).toBeLessThanOrEqual(900 * 0.85 + 1)
+    expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
+    const profileBounds = (await row.boundingBox())!
+    const stateBounds = (await activePanel.locator('.story-state-ledger__section').first().boundingBox())!
+    expect(profileBounds.x + profileBounds.width).toBeLessThanOrEqual(stateBounds.x + 1)
+    await page.screenshot({ path: test.info().outputPath(`state-lore-${theme}-wide.png`) })
+    await dialog.getByRole('tab', { name: actorName, exact: true }).click()
+    await expect(row).toBeVisible()
+    await expect(activePanel.getByText(brief, { exact: true })).toBeVisible()
+    await dialog.getByRole('tab', { name: '路人', exact: true }).click()
+    await expect(row).toHaveCount(0)
+    await dialog.getByRole('tab', { name: original.state.actors.protagonist.name, exact: true }).click()
+    await expect(row).toBeVisible()
+    await dialog.press('Escape')
+    // Also exercise the console entry, including its nested mobile drawer.
+    await page.setViewportSize({ width: 390, height: 844 })
+    await ledger.getByRole('button', { name: '展开状态面板', exact: true }).click()
+    await expect(stageLore).toBeVisible()
+    expect(await ledger.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
+    // Read both positions in one frame while the chat follows the expanding panel.
+    await expect.poll(() => ledger.getByRole('tabpanel').locator('.story-state-ledger__preview').evaluate(el => {
+      const portrait = el.querySelector('aside')!.getBoundingClientRect()
+      const section = el.querySelector('section')!.getBoundingClientRect()
+      return portrait.bottom <= section.top
+    })).toBe(true)
+    await page.screenshot({ path: test.info().outputPath(`stage-cover-${theme}-narrow.png`) })
+    await page.getByRole('button', { name: '显示控制台', exact: true }).click()
+    const consolePanel = page.getByRole('dialog', { name: '控制台', exact: true })
+    await consolePanel.getByRole('tab', { name: '总览', exact: true }).click()
+    await consolePanel.getByRole('button', { name: /^完整状态/ }).click()
+    await expect(row).toBeVisible()
+    expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
+    expect((await dialog.boundingBox())!.width).toBeLessThanOrEqual(390 - 16)
+    await page.screenshot({ path: test.info().outputPath(`state-lore-${theme}-narrow.png`) })
+    await dialog.getByRole('button', { name: '打开资料项', exact: true }).click()
+    await expect(dialog).toBeHidden()
+    await expect(consolePanel).toBeHidden()
+    await expect(page.getByLabel('名称', { exact: true })).toHaveValue(name)
+    const afterOpen = await (await request.get(snapshotURL)).json()
+    expect(afterOpen.state).toEqual(original.state)
+    expect(afterOpen.current_turn.narrative).toBe(original.current_turn.narrative)
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await sidebar.getByRole('button', { name: '写作', exact: true }).click()
+    await expect(page.getByTestId('interactive-shell')).toBeHidden()
+    await sidebar.getByRole('button', { name: '游戏', exact: true }).click()
+    const item = ((await (await request.get(loreURL)).json()).items as LoreItem[]).find(item => item.id === 'hero-record')!
+    const renamed = await request.put(`${loreURL}/hero-record`, { data: { ...item, name: 'Current library name', brief_description: '' } })
+    expect(renamed.ok(), await renamed.text()).toBe(true)
+    const renamedItem = (await renamed.json()).item as LoreItem
+    const clearedCover = await request.post(`${loreURL}/hero-record/materials`, { data: { op: 'cover' } })
+    expect(clearedCover.ok(), await clearedCover.text()).toBe(true)
+    await page.reload()
+    await expect(ledger).toBeVisible()
+    await expect(stageLore).toHaveCount(0)
+    await page.getByRole('button', { name: '查看完整状态', exact: true }).click()
+    await expect(dialog.getByText('Current library name', { exact: true })).toBeVisible()
+    await expect(dialog.getByText(renamedItem.brief_description, { exact: true })).toBeVisible()
+    await expect(dialog.getByRole('img')).toHaveCount(0)
+    const afterRename = await (await request.get(snapshotURL)).json()
+    expect(afterRename.state).toEqual(original.state)
+    await dialog.getByRole('tab', { name: actorName, exact: true }).click()
+    await expect(row).toHaveCount(0)
+    await dialog.press('Escape')
+    if (theme === 'light') {
+      await request.patch('/api/settings', { data: { layer: 'user', changes: { language: 'en-US' } } })
+      await page.reload()
+      await page.getByRole('button', { name: 'View full state', exact: true }).click()
+      const englishDialog = page.getByRole('dialog', { name: 'Story state', exact: true })
+      await expect(englishDialog.getByRole('complementary', { name: 'Character Lore', exact: true })).toBeVisible()
+      await expect(englishDialog.getByText('Current library setting · Saved separately from turn state', { exact: true })).toBeVisible()
+      await expect(englishDialog.getByRole('button', { name: 'Open Lore item', exact: true })).toBeVisible()
+      await englishDialog.press('Escape')
+    }
+    const removed = await request.delete(`${loreURL}/hero-record`)
+    expect(removed.ok(), await removed.text()).toBe(true)
+    await page.reload()
+    await page.getByRole('button', { name: theme === 'light' ? 'View full state' : '查看完整状态', exact: true }).click()
+    await expect(page.getByRole('complementary', { name: theme === 'light' ? 'Character Lore' : '角色资料', exact: true })).toHaveCount(0)
+  })
+}

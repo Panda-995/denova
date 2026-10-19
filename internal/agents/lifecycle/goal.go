@@ -9,34 +9,34 @@ import (
 	"denova/internal/agents/modelio"
 	agentrun "denova/internal/agents/run"
 
-	agent "github.com/alfredxw/denova/agent"
-	publicgoal "github.com/alfredxw/denova/agent/goal"
+	publicgoal "github.com/alfredxw/denova/agent/engine/goal"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 // NewGoalManager returns Denova's adapter for the public revisioned Goal
-// capability. The public manager remains the sole state authority; this
-// adapter only gives autonomous continuations valid product HostData.
-func NewGoalManager() agent.GoalManager {
+// capability. Native owns evaluation and state transitions; this adapter only
+// prepares Denova continuation HostData. External runtimes do not call it.
+func NewGoalManager() publicgoal.GoalManager {
 	return denovaGoalManager{delegate: publicgoal.Standard()}
 }
 
-type denovaGoalManager struct{ delegate agent.GoalManager }
+type denovaGoalManager struct{ delegate publicgoal.GoalManager }
 
-func (manager denovaGoalManager) Identity() agent.CapabilityIdentity {
-	return agent.CapabilityIdentity{Kind: "denova.goal.standard", Version: 3}
+func (manager denovaGoalManager) Identity() agentschema.CapabilityIdentity {
+	return agentschema.CapabilityIdentity{Kind: "denova.goal.standard", Version: 3}
 }
 
-func (manager denovaGoalManager) Apply(ctx context.Context, request agent.GoalApplyRequest) (agent.GoalState, error) {
+func (manager denovaGoalManager) Apply(ctx context.Context, request publicgoal.GoalApplyRequest) (publicgoal.GoalState, error) {
 	return manager.delegate.Apply(ctx, request)
 }
 
-func (manager denovaGoalManager) Prepare(ctx context.Context, request agent.GoalPrepareRequest) (agent.GoalPreparation, error) {
+func (manager denovaGoalManager) Prepare(ctx context.Context, request publicgoal.GoalPrepareRequest) (publicgoal.GoalPreparation, error) {
 	return manager.delegate.Prepare(ctx, request)
 }
 
-func (manager denovaGoalManager) AfterRun(ctx context.Context, request agent.GoalAfterRunRequest) (agent.GoalAfterRunDecision, error) {
+func (manager denovaGoalManager) AfterRun(ctx context.Context, request publicgoal.GoalAfterRunRequest) (publicgoal.GoalAfterRunDecision, error) {
 	decision, err := manager.delegate.AfterRun(modelio.WithTraceSource(ctx, "goal_evaluation"), request)
-	if err != nil || decision.Verdict != agent.GoalVerdictContinue {
+	if err != nil || decision.Verdict != publicgoal.GoalVerdictContinue {
 		return decision, err
 	}
 	data, err := DecodeTurnHostData(request.Input)
@@ -71,4 +71,4 @@ func (manager denovaGoalManager) AfterRun(ctx context.Context, request agent.Goa
 	return decision, nil
 }
 
-var _ agent.GoalManager = denovaGoalManager{}
+var _ publicgoal.GoalManager = denovaGoalManager{}

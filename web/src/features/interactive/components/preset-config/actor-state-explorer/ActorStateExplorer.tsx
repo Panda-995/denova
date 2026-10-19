@@ -183,7 +183,9 @@ export function ActorStateExplorer({ value, onChange, onValidityChange, layout =
       case 'field': {
         const templates = [...(value.templates || [])]
         const tpl = { ...templates[data.templateIndex] }
-        tpl.fields = (tpl.fields || []).filter((_, i) => i !== data.fieldIndex)
+        tpl.fields = (tpl.fields || []).filter((_, i) => i !== data.fieldIndex).map((field) => (
+          field.max_field === data.field.name ? { ...field, max_field: undefined } : field
+        ))
         templates[data.templateIndex] = tpl
         onChange({ ...value, templates })
         break

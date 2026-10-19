@@ -30,9 +30,11 @@ export function BookCoverThumbnail({ book, version, previewURL, title, decorativ
     >
       {showImage ? (
         <img
+          loading="lazy"
+          decoding="async"
           src={src}
           alt={decorative ? '' : imageTitle}
-          className="h-full w-full object-cover"
+          className="absolute inset-0 h-full w-full object-cover"
           onError={() => setFailed(true)}
         />
       ) : (

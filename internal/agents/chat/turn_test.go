@@ -1,27 +1,27 @@
 package chat
 
 import (
-	"denova/internal/agents/run"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	agentcontext "denova/internal/agents/context"
 	"denova/internal/agents/prompts"
+	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
 	"denova/internal/book"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestMergeToolCalls(t *testing.T) {
 	idx := 0
-	calls := mergeToolCalls(nil, []agent.ToolCall{
-		{Index: &idx, Function: agent.FunctionCall{Name: "write", Arguments: `{"path":`}},
+	calls := mergeToolCalls(nil, []agentschema.ToolCall{
+		{Index: &idx, Function: agentschema.FunctionCall{Name: "write", Arguments: `{"path":`}},
 	})
-	calls = mergeToolCalls(calls, []agent.ToolCall{
-		{Index: &idx, Function: agent.FunctionCall{Arguments: `"chapters/ch01.md"}`}},
+	calls = mergeToolCalls(calls, []agentschema.ToolCall{
+		{Index: &idx, Function: agentschema.FunctionCall{Arguments: `"chapters/ch01.md"}`}},
 	})
 
 	if len(calls) != 1 {
@@ -37,11 +37,11 @@ func TestMergeToolCalls(t *testing.T) {
 
 func TestMergeToolCallsHandlesSparseIndexes(t *testing.T) {
 	idx := 2
-	calls := mergeToolCalls(nil, []agent.ToolCall{
-		{Index: &idx, ID: "call-2", Function: agent.FunctionCall{Name: "edit", Arguments: `{"path":`}},
+	calls := mergeToolCalls(nil, []agentschema.ToolCall{
+		{Index: &idx, ID: "call-2", Function: agentschema.FunctionCall{Name: "edit", Arguments: `{"path":`}},
 	})
-	calls = mergeToolCalls(calls, []agent.ToolCall{
-		{Index: &idx, Function: agent.FunctionCall{Arguments: `"chapters/ch02.md"}`}},
+	calls = mergeToolCalls(calls, []agentschema.ToolCall{
+		{Index: &idx, Function: agentschema.FunctionCall{Arguments: `"chapters/ch02.md"}`}},
 	})
 
 	if len(calls) != 3 {

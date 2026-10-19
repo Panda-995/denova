@@ -8,16 +8,18 @@ import (
 	agentlifecycle "denova/internal/agents/lifecycle"
 	agentrun "denova/internal/agents/run"
 
-	agent "github.com/alfredxw/denova/agent"
+	"github.com/alfredxw/denova/agent"
+	agentevent "github.com/alfredxw/denova/agent/lifecycle/event"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
-// RecoveryObservation attaches a new display stream to an active in-process
-// Agent Run. It does not resume work after a process restart.
+// RecoveryObservation observes accepted work without executing it. Resume
+// performs the selected attach, continue, or cancel action explicitly.
 type RecoveryObservation struct {
 	publicBackend     *publicBackend
 	publicSession     *agent.Session
-	publicObservation agent.Observation
-	publicInitial     agent.SessionSnapshot
+	publicObservation agentevent.Observation
+	publicInitial     agentevent.SessionSnapshot
 	publicBinding     agentrun.RuntimeBinding
 	publicOptions     agentrun.Options
 	publicHandle      *publicRunHandle
@@ -25,6 +27,7 @@ type RecoveryObservation struct {
 
 	mu                      sync.Mutex
 	publicTerminalDelivered bool
+	publicAborted           bool
 }
 
 func (s *Runtime) OpenRecoveryObservation(ctx context.Context, options agentrun.Options) (*RecoveryObservation, error) {
@@ -102,8 +105,8 @@ func (r *RecoveryObservation) DisplayMetadata(ctx context.Context, action Runtim
 	}, nil
 }
 
-func publicAttachmentDescriptors(values []agent.Attachment) []agent.Attachment {
-	result := append([]agent.Attachment(nil), values...)
+func publicAttachmentDescriptors(values []agentschema.Attachment) []agentschema.Attachment {
+	result := append([]agentschema.Attachment(nil), values...)
 	for index := range result {
 		result[index].Path = ""
 		result[index].SHA256 = ""

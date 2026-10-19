@@ -1,15 +1,16 @@
+import type { AgentPageContext } from '@/lib/api-client/types'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useChat as useAIChat } from '@ai-sdk/react'
+import { useAgentStream } from './use-agent-stream'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { createAgentCommandID } from '@/lib/api'
 import type { AgentQueuedCommandAction, AgentRuntimeQueuedCommand, ContextAnalysis, IDEContext, SessionSummary, TextSelection } from '@/lib/api'
-import { withErrorLogID } from '@/lib/api-client'
+import { APIError, withErrorLogID } from '@/lib/api-client'
 import { fetchProjectSettings, fetchSettings } from '@/features/settings/api'
 import { formatApprovedPlanExecutionMessage } from '@/lib/plan-mode'
 import { agentCommandErrorMessage, agentCommandRetryKey, isKnownAgentCommandOutcome, mergeProjectedAgentQueue, rememberAgentCommandID } from '@/lib/agent-command'
 import { localizeAgentRuntimeError, localizeAgentRuntimeReason } from '@/lib/agent-runtime-error'
-import { AgentChatTransport, AgentUIMessageNormalizer, buildAgentChatRequestBody, type AgentUIMessage } from '@/lib/agent-ui'
+import { AgentChatTransport, normalizeAgentUIMessages, buildAgentChatRequestBody, type AgentChatRequestMetadata, type AgentUIMessage } from '@/lib/agent-ui'
 import { agentViewContent, type AgentPartRef } from '@/lib/agent-message-view'
 import { STREAMING_RENDER_INTERVAL_MS } from '@/lib/streaming/raf-update-batcher'
 import { isProjectChangeForProject, type WorkspaceChangeEvent } from '@/features/changes/types'
@@ -34,7 +35,7 @@ import {
   type WritingTaskStatus,
 } from './use-agent-runtime-recovery'
 import { writingAgentChatClient, type AgentChatClient } from './agent-chat-client'
-import { attachmentDescriptors, attachmentUploadsRetryIdentity, filesToAttachmentUploads, type ChatAttachmentUpload } from '@/lib/chat-attachments'
+import { attachmentDescriptors, attachmentUploadsRetryIdentity, filesToAttachmentUploads, type ChatAttachmentDescriptor, type ChatAttachmentUpload } from '@/lib/chat-attachments'
 
 interface ChatOptions {
   projectId?: string
@@ -45,6 +46,7 @@ interface ChatOptions {
 }
 
 export interface ChatSendOptions {
+  pageContext?: AgentPageContext
   attachments?: File[]
   writingSkill?: string
   ideContext?: IDEContext
@@ -69,6 +71,8 @@ export interface ChatSendOptions {
   }
   loreReferenceLabels?: Record<string, string>
   onSubmissionStart?: () => void
+  /** The server has durably accepted the command, before the model finishes its turn. */
+  onSubmissionAccepted?: () => void
   onSubmissionError?: () => void
 }
 
@@ -84,12 +88,11 @@ interface QueuedComposerDraft {
 export function useAgentChat(options: ChatOptions = {}) {
   const { t } = useTranslation()
   const { projectId = '', client = writingAgentChatClient, onAgentFileChange, onWorkspaceChange } = options
+  const terminalDiagnosticReceived = useRef(false)
   const transport = useMemo(() => new AgentChatTransport(client.transportOptions), [client])
   const [runtimeRecoverySignal, setRuntimeRecoverySignal] = useState(0)
   const projectStreamCycleRef = useRef<(operationID: string, cycle?: number) => void>(() => undefined)
   const refreshSessionsRef = useRef<() => Promise<SessionSummary[]>>(async () => [])
-  const messageNormalizerRef = useRef<AgentUIMessageNormalizer | null>(null)
-  messageNormalizerRef.current ??= new AgentUIMessageNormalizer()
   const [displayRehydrateRequest, setDisplayRehydrateRequest] = useState<WritingDisplayRehydrateRequest | null>(null)
   const {
     messages: uiMessages,
@@ -99,14 +102,16 @@ export function useAgentChat(options: ChatOptions = {}) {
     stop: stopAIStream,
     status,
     error,
-  } = useAIChat<AgentUIMessage>({
+    completion,
+  } = useAgentStream({
     transport,
     throttle: STREAMING_RENDER_INTERVAL_MS,
     onData: (part) => {
       if (part.type === 'data-agent-error') {
         const data = part.data as Record<string, unknown>
         const content = localizeAgentRuntimeError(data, t('chat.activity.unknownError'), t)
-        toast.error(withErrorLogID(content, data))
+        terminalDiagnosticReceived.current = data.terminal === true
+        toast.error(content)
         return
       }
       if (part.type === 'data-agent-activity') {
@@ -116,6 +121,15 @@ export function useAgentChat(options: ChatOptions = {}) {
           return
         }
         if (data.event === 'agent_cycle_started') {
+          const commandID = typeof data.command_id === 'string' ? data.command_id.trim() : ''
+          const attachments = data.attachments as ChatAttachmentDescriptor[] | undefined
+          if (commandID && Array.isArray(attachments) && attachments.length > 0) {
+            // Acceptance supplies persisted IDs; match the exact optimistic
+            // input so replay or another queued cycle cannot rebind its files.
+            setUIMessages(current => current.map(message => message.role === 'user' && message.id === commandID
+              ? { ...message, metadata: { ...message.metadata, attachments } }
+              : message))
+          }
           const operationID = typeof data.operation_id === 'string' ? data.operation_id.trim() : ''
           const cycle = typeof data.cycle === 'number' ? data.cycle : Number(data.cycle)
           projectStreamCycleRef.current(operationID, Number.isSafeInteger(cycle) ? cycle : undefined)
@@ -149,38 +163,28 @@ export function useAgentChat(options: ChatOptions = {}) {
       void onWorkspaceChange?.(event)
     },
     onError: (error) => {
+      // The task may settle before attachment; runtime recovery reloads the
+      // authoritative projection and history for this expected typed conflict.
+      if (error instanceof APIError && error.code === 'agent_runtime.rehydrate_required') return
+      if (terminalDiagnosticReceived.current) { terminalDiagnosticReceived.current = false; return }
       toast.error(withErrorLogID(error.message || t('chat.activity.unknownError'), error))
     },
     onFinish: () => {
+      terminalDiagnosticReceived.current = false
       void onAgentFileChange?.()
       void refreshSessionsRef.current()
     },
   })
-  const prepareStreamResumeBoundary = useCallback(() => {
-    setUIMessages((current) => {
-      const tail = current.at(-1)
-      if (tail?.role !== 'assistant') return current
-      // AI SDK reconnects by mutating the last assistant message. Keep the
-      // canonical tail intact so a SubAgent message cannot lend its metadata
-      // to the root Task replay (or vice versa).
-      return [
-        ...current,
-        {
-          id: `agent-stream-resume-boundary:${tail.id}`,
-          role: 'system',
-          parts: [],
-        },
-      ]
-    })
-  }, [setUIMessages])
-  const messages = useMemo(() => (
-    messageNormalizerRef.current!.normalize(uiMessages).flatMap<AgentUIMessage>((message) => {
+  const { messages, textConflicts } = useMemo(() => {
+    const textConflicts: string[] = []
+    const messages = normalizeAgentUIMessages(uiMessages, identity => textConflicts.push(identity)).flatMap<AgentUIMessage>((message) => {
       const visibleParts = message.parts.filter((part) => part.type !== 'data-agent-error')
       if (visibleParts.length === message.parts.length) return [message]
       if (visibleParts.length === 0) return []
       return [{ ...message, parts: visibleParts }]
     })
-  ), [uiMessages])
+    return { messages, textConflicts }
+  }, [uiMessages])
   const transportStreaming = status === 'submitted' || status === 'streaming'
   const {
     activeSessionId,
@@ -209,6 +213,8 @@ export function useAgentChat(options: ChatOptions = {}) {
   const retryCommandIDsRef = useRef(new Map<string, string>())
   const initialStartCommandIDsRef = useRef(new Map<string, string>())
   const queuedComposerDraftsRef = useRef(new Map<string, QueuedComposerDraft>())
+  const commandBindingRef = useRef({ client, projectId, sessionID: '' })
+  commandBindingRef.current = { client, projectId, sessionID: client.fixedSessionId || activeSessionId }
   const projectedOperationIDRef = useRef('')
   const activePlanMode = planModeForSession(planModes, activeSessionId, defaultPlanMode)
 
@@ -269,34 +275,46 @@ export function useAgentChat(options: ChatOptions = {}) {
     [t],
   )
 
-  const { abortRecovery, projectStreamCycle, recoveryPending, resumeActiveChat, runtimeProjection, setRuntimeProjection } = useWritingAgentRuntimeRecovery({
+  const { abortRecovery, resumeTask: continueTask, projectStreamCycle, recoveryPending, recoveryFailed, resumeActiveChat, synchronizeActiveChat, runtimeProjection, setRuntimeProjection } = useWritingAgentRuntimeRecovery({
     activeSessionId,
     displayRehydrateRequest,
     loadHistoryAuthoritative,
     onDisplayRehydrated: notifyDisplayRehydrated,
     onDisplayTerminalRestored: restoreDisplayTerminal,
     onSettled: () => setAbortPending(false),
-    prepareStreamResumeBoundary,
     runtimeRecoverySignal,
     resumeStream,
     transport,
     transportError: error,
     transportStatus: status,
+    transportCompletion: completion,
     transportStreaming,
     client,
   })
   projectStreamCycleRef.current = projectStreamCycle
+  useEffect(() => {
+    if (!transportStreaming || !textConflicts.length) return
+    console.warn('[useAgentChat.ts] Reloading conflicting Agent display segments', { sessionID: activeSessionId, identities: textConflicts })
+    // Closing only the display connection triggers the existing canonical
+    // inspection/reconnect path. The accepted server operation keeps running.
+    stopAIStream()
+  }, [activeSessionId, stopAIStream, textConflicts, transportStreaming])
   const isStreaming = transportStreaming || recoveryPending
   // Recovery inspection temporarily sets recoveryPending even for an idle
   // conversation. Project-level running state must represent real execution,
   // not that startup probe.
   const isExecutionActive = transportStreaming || runtimeProjection?.active === true
-  const activityContent = recoveryPending ? t('chat.activity.recovering') : status === 'submitted' ? t('chat.activity.thinking') : ''
+  const lastPart = messages.at(-1)?.parts.at(-1)
+  const retry = lastPart?.type === 'data-agent-activity' && lastPart.data.event === 'model_retry' ? lastPart.data : undefined
+  const activityContent = recoveryPending ? t('chat.activity.recovering') : retry && transportStreaming
+    ? t(retry.output_state === 'complete' ? 'chat.activity.modelRepair' : 'chat.activity.modelRetry', {
+      attempt: Number(retry.attempt) + 1, total: Number(retry.max_attempts), seconds: Math.ceil(Number(retry.delay_ms) / 1000),
+    }) : status === 'submitted' ? t('chat.activity.thinking') : ''
 
   useEffect(() => {
-    if (!runtimeProjection?.pending_ask) return
-    appendDataMessage(setUIMessages, 'data-agent-ask', { ...runtimeProjection.pending_ask })
-  }, [runtimeProjection?.pending_ask, setUIMessages])
+    const pending = runtimeProjection?.pending_asks ?? (runtimeProjection?.pending_ask ? [runtimeProjection.pending_ask] : [])
+    for (const question of pending) appendDataMessage(setUIMessages, 'data-agent-ask', { ...question })
+  }, [runtimeProjection?.pending_ask, runtimeProjection?.pending_asks, setUIMessages])
 
   useEffect(() => {
     const operationID = runtimeProjection?.active_operation_id?.trim() || ''
@@ -396,11 +414,7 @@ export function useAgentChat(options: ChatOptions = {}) {
       const command = isStreaming || sendOptions.attachments?.length ? '' : agentBypassCommand(canonicalInput)
       if (command) {
         const result = await client.executeCommand(command)
-        if (command === 'clear') {
-          await loadHistory()
-          await loadSessions()
-          return true
-        }
+        if (command === 'compact') await loadHistory()
         appendDataMessage(setUIMessages, 'data-agent-system', {
           content: result,
         })
@@ -441,6 +455,7 @@ export function useAgentChat(options: ChatOptions = {}) {
           content: s.content,
         })),
         ide_context: normalizeIDEContext(sendOptions.ideContext),
+        page_context: sendOptions.pageContext,
         plan_mode: prepared.planMode,
         writing_skill: sendOptions.writingSkill,
         image_preset_id: sendOptions.imagePresetId,
@@ -460,10 +475,10 @@ export function useAgentChat(options: ChatOptions = {}) {
       const retryBody = { ...body, attachments: attachmentUploadsRetryIdentity(attachmentUploads) }
 
       const userReferences = buildUserMessageReferences(prepared, sendOptions)
-      if (isStreaming) {
+      if (isStreaming || runtimeProjection?.phase === 'suspended') {
         if (abortPending || commandSubmittingRef.current) return false
         const operationID = runtimeProjection?.active_operation_id?.trim()
-        if (!runtimeProjection?.active || !operationID) {
+        if ((!runtimeProjection?.active && runtimeProjection?.phase !== 'suspended') || !operationID) {
           toast.error(t('chat.runtime.operationUnavailable'))
           return false
         }
@@ -489,9 +504,7 @@ export function useAgentChat(options: ChatOptions = {}) {
               ...current,
               cursor: receipt.cursor,
               active_operation_id: receipt.operation_id,
-              recovery_paused: false,
-              runtime_recoverable: false,
-              recovery_actions: [],
+              ...(current.phase !== 'suspended' ? { recovery_paused: false, runtime_recoverable: false, recovery_actions: [] } : {}),
               queue: mergeProjectedAgentQueue(current.queue, {
                 command_id: commandID,
                 operation_id: receipt.operation_id,
@@ -500,11 +513,13 @@ export function useAgentChat(options: ChatOptions = {}) {
               }),
             }
           })
+          if (runtimeProjection?.phase === 'suspended') setRuntimeProjection(await client.getActiveChatTask(targetSessionID))
           setReferences((current) => current.filter((item) => !prepared.composerReferences.includes(item)))
           setLoreReferences((current) => current.filter((item) => !prepared.composerLoreReferences.includes(item)))
           setStyleScenes((current) => current.filter((item) => !prepared.composerStyleScenes.includes(item)))
           setTextSelections((current) => current.filter((item) => !prepared.composerTextSelections.includes(item)))
           sendOptions.onSubmissionStart?.()
+          sendOptions.onSubmissionAccepted?.()
           return true
         } catch (error) {
           if (isKnownAgentCommandOutcome(error)) retryCommandIDsRef.current.delete(retryKey)
@@ -523,6 +538,7 @@ export function useAgentChat(options: ChatOptions = {}) {
       try {
         const pendingRequest = sendMessage(
           {
+            id: initialCommandID,
             role: 'user',
             metadata: {
               ...(sendOptions.hideUserMessage ? { display_hidden: true } : {}),
@@ -531,7 +547,7 @@ export function useAgentChat(options: ChatOptions = {}) {
             },
             parts: [{ type: 'text', text: sendOptions.displayMessage || resumeDisplayMessage || canonicalInput }],
           },
-          { body },
+          { body, metadata: { onSubmissionAccepted: sendOptions.onSubmissionAccepted } satisfies AgentChatRequestMetadata },
         )
         setReferences((current) => current.filter((item) => !prepared.composerReferences.includes(item)))
         setLoreReferences((current) => current.filter((item) => !prepared.composerLoreReferences.includes(item)))
@@ -589,14 +605,18 @@ export function useAgentChat(options: ChatOptions = {}) {
 
   const submitQueuedControl = useCallback(
     async (item: AgentRuntimeQueuedCommand, action: AgentQueuedCommandAction, reason?: string) => {
-      if (abortPending || commandSubmittingRef.current) return false
-      const operationID = runtimeProjection?.active_operation_id?.trim()
+      if (abortPending || commandSubmittingRef.current || sessionTransitionPendingRef.current) return false
+      const operationID = item.operation_id.trim()
       const targetSessionID = (client.fixedSessionId || activeSessionId).trim()
-      if (!runtimeProjection?.active || !operationID || item.operation_id !== operationID) {
+      const bindingIsCurrent = () => {
+        const current = commandBindingRef.current
+        return current.client === client && current.projectId === projectId && current.sessionID === targetSessionID && !sessionTransitionPendingRef.current
+      }
+      if (action === 'steer_queued' && ((!runtimeProjection?.active && runtimeProjection?.phase !== 'suspended') || operationID !== runtimeProjection?.active_operation_id)) {
         toast.error(t('chat.runtime.operationUnavailable'))
         return false
       }
-      if (!runtimeProjection.queue?.some((candidate) => candidate.command_id === item.command_id)) {
+      if (!operationID || !runtimeProjection?.queue?.some((candidate) => candidate.command_id === item.command_id && candidate.operation_id === operationID)) {
         toast.error(t('chat.runtime.invalidCommand'))
         return false
       }
@@ -612,8 +632,9 @@ export function useAgentChat(options: ChatOptions = {}) {
       try {
         const receipt = await client.submitQueuedChatCommand(action, commandID, operationID, item.command_id, targetSessionID, reason)
         retryCommandIDsRef.current.delete(retryKey)
+        if (!bindingIsCurrent()) return false
         setRuntimeProjection((current) => {
-          if (!current || current.active_operation_id !== operationID) return current
+          if (!current || (action === 'steer_queued' && current.active_operation_id !== operationID)) return current
           const queue = action === 'cancel_queued'
             ? (current.queue || []).filter((candidate) => candidate.command_id !== item.command_id)
             : (current.queue || []).map((candidate) => candidate.command_id === item.command_id
@@ -621,9 +642,8 @@ export function useAgentChat(options: ChatOptions = {}) {
               : candidate)
           return {
             ...current,
-            cursor: receipt.cursor,
-            active_operation_id: receipt.operation_id,
-            ...(action === 'steer_queued' ? {
+            cursor: Math.max(current.cursor || 0, receipt.cursor),
+            ...(action === 'steer_queued' && current.phase !== 'suspended' ? {
               recovery_paused: false,
               runtime_recoverable: false,
               recovery_actions: [],
@@ -631,9 +651,14 @@ export function useAgentChat(options: ChatOptions = {}) {
             queue,
           }
         })
+        if (action === 'steer_queued' && runtimeProjection?.phase === 'suspended') {
+          const projection = await client.getActiveChatTask(targetSessionID)
+          if (bindingIsCurrent()) setRuntimeProjection(projection)
+        }
         return true
       } catch (error) {
         if (isKnownAgentCommandOutcome(error)) retryCommandIDsRef.current.delete(retryKey)
+        if (!bindingIsCurrent()) return false
         toast.error(agentCommandErrorMessage(error, t))
         return false
       } finally {
@@ -642,7 +667,7 @@ export function useAgentChat(options: ChatOptions = {}) {
         setQueueActionPendingCommandID('')
       }
     },
-    [abortPending, activeSessionId, client, runtimeProjection, setRuntimeProjection, t],
+    [abortPending, activeSessionId, client, projectId, runtimeProjection, setRuntimeProjection, t],
   )
 
   const steerQueuedCommand = useCallback(
@@ -686,6 +711,7 @@ export function useAgentChat(options: ChatOptions = {}) {
         sendOptions.ideContext,
         sendOptions.imagePresetId,
         sendOptions.tellerId,
+        sendOptions.pageContext,
       )
     },
     [client, isStreaming, prepareAgentRequest, t],
@@ -709,6 +735,31 @@ export function useAgentChat(options: ChatOptions = {}) {
   const exitPlanMode = useCallback(() => {
     setActivePlanMode(false)
   }, [setActivePlanMode])
+
+  const suspend = useCallback(async () => {
+    const operationID = runtimeProjection?.active_operation_id?.trim()
+    if (!operationID || commandSubmittingRef.current) return
+    commandSubmittingRef.current = true
+    setCommandSubmitting(true)
+    const key = agentCommandRetryKey(operationID, 'suspend', {})
+    try {
+      const commandID = rememberAgentCommandID(retryCommandIDsRef.current, key, createAgentCommandID)
+      const sessionID = (client.fixedSessionId || activeSessionId).trim()
+      await client.submitChatCommand('suspend', commandID, operationID, sessionID)
+      retryCommandIDsRef.current.delete(key)
+      setRuntimeProjection(await client.getActiveChatTask(sessionID))
+    } catch (error) {
+      if (isKnownAgentCommandOutcome(error)) retryCommandIDsRef.current.delete(key)
+      toast.error(agentCommandErrorMessage(error, t))
+    } finally {
+      commandSubmittingRef.current = false
+      setCommandSubmitting(false)
+    }
+  }, [activeSessionId, client, runtimeProjection, setRuntimeProjection, t])
+
+  const resumeTask = useCallback(async () => {
+    try { await continueTask() } catch (error) { toast.error(agentCommandErrorMessage(error, t)) }
+  }, [continueTask, t])
 
   const stop = useCallback(async () => {
     if (abortPending || commandSubmittingRef.current || sessionTransitionPendingRef.current) return
@@ -803,6 +854,8 @@ export function useAgentChat(options: ChatOptions = {}) {
 
   return {
     messages,
+    suspend,
+    resumeTask,
     sessions,
     activeSessionId,
     sessionTransitionPending,
@@ -813,6 +866,7 @@ export function useAgentChat(options: ChatOptions = {}) {
     commandSubmitting,
     queueActionPendingCommandID,
     activityContent,
+    recoveryFailed,
     references,
     loreReferences,
     styleScenes,
@@ -834,6 +888,7 @@ export function useAgentChat(options: ChatOptions = {}) {
     hasEarlierMessages,
     isLoadingEarlierHistory,
     resumeActiveChat,
+    synchronizeActiveChat,
     createChatSession,
     switchChatSession,
     renameChatSession,

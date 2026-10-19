@@ -28,7 +28,7 @@ func (log *Log) HasCapabilityRecord(capability string) (bool, error) {
 	if err != nil || stream == nil {
 		return false, err
 	}
-	_, exists := stream.Capabilities[capability]
+	_, exists := stream.Recovery.CapabilityRecord(capability)
 	return exists, nil
 }
 
@@ -56,7 +56,7 @@ func (log *Log) ImportCapabilityIfAbsent(
 		return false, err
 	}
 	if stream != nil {
-		if _, exists := stream.Capabilities[capability]; exists {
+		if _, exists := stream.Recovery.CapabilityRecord(capability); exists {
 			return false, nil
 		}
 	}
@@ -82,4 +82,46 @@ func (log *Log) ImportCapabilityIfAbsent(
 		return false, err
 	}
 	return true, nil
+}
+
+// Released Game checkpoints selected whole Story Turns independently of Agent's
+// raw message range. That coverage cannot be recovered reliably. Ignore only
+// that projection on read; the original JSONL remains intact and the next Run
+// can build a checkpoint from canonical history. No model or write occurs here.
+func projectReleasedGameCompaction(record agentsession.Record) (agentsession.Record, error) {
+	if record.Kind != capabilitySetKind {
+		return record, nil
+	}
+	var payload struct {
+		Capability string `json:"capability"`
+		State      struct {
+			Version     uint16 `json:"version"`
+			ContextData *struct {
+				Type    string `json:"type"`
+				Version uint16 `json:"version"`
+			} `json:"context_data"`
+		} `json:"state"`
+	}
+	if err := json.Unmarshal(record.Data, &payload); err != nil {
+		return record, err
+	}
+	if payload.Capability != "agent.compaction" || payload.State.Version != 0 || payload.State.ContextData == nil || payload.State.ContextData.Type != "denova.interactive.compaction" || payload.State.ContextData.Version != 1 {
+		return record, nil
+	}
+	record.Kind = capabilityDeleteKind
+	record.Data = json.RawMessage(`{"capability":"agent.compaction"}`)
+	return record, nil
+}
+
+func usesIncrementalCompaction(record agentsession.Record) bool {
+	if record.Kind != capabilitySetKind {
+		return false
+	}
+	var payload struct {
+		Capability string `json:"capability"`
+		State      struct {
+			Version uint16 `json:"version"`
+		} `json:"state"`
+	}
+	return json.Unmarshal(record.Data, &payload) == nil && payload.Capability == "agent.compaction" && payload.State.Version == 2
 }

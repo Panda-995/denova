@@ -1,3 +1,4 @@
+import { useVirtualizedMessageState } from './VirtualizedMessageState'
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { CheckCircle2, ClipboardCheck, Circle, Loader2, Pencil, RefreshCw, X } from 'lucide-react'
@@ -44,8 +45,8 @@ export function ContextCompactionBlock({ message }: { message: ContextCompaction
               <span className={`rounded-full border px-1.5 py-0.5 text-[10px] ${status === 'error' ? 'border-[var(--nova-danger-border)] bg-[var(--nova-danger-bg)] text-[var(--nova-danger)]' : 'border-[var(--nova-border)] bg-[var(--nova-surface-2)] text-[var(--nova-text-muted)]'}`}>
                 {t(`chat.contextCompaction.status.${status}`)}
               </span>
-              {message.epoch ? (
-                <span className="font-mono text-[10px] text-[var(--nova-text-faint)]">epoch {message.epoch}</span>
+              {message.revision ? (
+                <span className="font-mono text-[10px] text-[var(--nova-text-faint)]">{t('chat.contextCompaction.revision', { revision: message.revision })}</span>
               ) : null}
               {message.attempt && message.attempt > 1 ? (
                 <span className="font-mono text-[10px] text-[var(--nova-text-faint)]">{t('chat.contextCompaction.attempt', { count: message.attempt })}</span>
@@ -64,7 +65,9 @@ export function ContextCompactionBlock({ message }: { message: ContextCompaction
           data-nova-scroll-lock="context-compaction-summary"
           className="min-w-0 max-w-full max-h-40 overflow-x-hidden overflow-y-auto border-t border-[var(--nova-border)] bg-[var(--nova-surface-2)] px-3 py-2.5 text-[11px] leading-relaxed text-[var(--nova-text-muted)] whitespace-pre-wrap [overflow-anchor:none] [overflow-wrap:anywhere]"
         >
-          {summary || (isRunning ? t('chat.contextCompaction.waiting') : t('chat.contextCompaction.empty'))}
+          {summary || (message.runtime_managed
+            ? t(isRunning ? 'chat.contextCompaction.runtimeRunning' : status === 'success' ? 'chat.contextCompaction.runtimeCompleted' : 'chat.contextCompaction.runtimeFailed')
+            : isRunning ? t('chat.contextCompaction.waiting') : t('chat.contextCompaction.empty'))}
         </div>
       </div>
     </div>
@@ -74,7 +77,7 @@ export function ContextCompactionBlock({ message }: { message: ContextCompaction
 export function ProposedPlanBlock({ projectId, message, highlightDialogue, onApprove, onContinue, onExit, onLayoutChange }: { projectId: string; message: ProposedPlanChatMessage; highlightDialogue?: boolean; onApprove?: (message: ChatMessage) => void; onContinue?: (message: ChatMessage) => void; onExit?: () => void; onLayoutChange?: () => void }) {
   const { t } = useTranslation()
   const display = planDisplayContent(message.content || '')
-  const [localAction, setLocalAction] = useState<ChatPlanAction | undefined>(message.plan_action)
+  const [localAction, setLocalAction] = useVirtualizedMessageState<ChatPlanAction | undefined>('plan-action', message.plan_action)
   const planAction = message.plan_action || localAction
   useEffect(() => {
     if (message.plan_action) setLocalAction(message.plan_action)

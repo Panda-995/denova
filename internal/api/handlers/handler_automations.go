@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -33,6 +34,18 @@ func (h *Handlers) HandleAutomationTemplates(ctx context.Context, c *app.Request
 	writeJSON(c, consts.StatusOK, automation.TemplateListResult{
 		Templates: h.app.Automation().Templates(c.Query("locale")),
 	})
+}
+
+func (h *Handlers) HandleAutomationCatalog(ctx context.Context, c *app.RequestContext) {
+	groups, err := h.app.Automation().CatalogSnapshot()
+	if err != nil {
+		slog.ErrorContext(ctx, "[automation] failed to resolve Project catalog", "err", err)
+		writeErrorKey(c, consts.StatusInternalServerError, "api.automation.catalogReadFailed")
+		return
+	}
+	writeJSON(c, consts.StatusOK, struct {
+		Projects []automationapp.ProjectCatalog `json:"projects"`
+	}{Projects: groups})
 }
 
 func (h *Handlers) HandleAutomationInbox(ctx context.Context, c *app.RequestContext) {

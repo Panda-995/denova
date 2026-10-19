@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	agenttools "github.com/alfredxw/denova/agent/tools"
-
 	"denova/config"
+
+	agenttools "github.com/alfredxw/denova/agent/tool/builtin"
 )
 
 // ReadAdapterBinding keeps each URI adapter attached to the capability that

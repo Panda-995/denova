@@ -7,12 +7,14 @@ import (
 	"testing"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	agentconversation "denova/internal/agents/conversation"
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
 	agenttoolruntime "denova/internal/agents/toolruntime"
+
+	"github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 func TestAgentRuntimeResolvesConsecutiveToolApprovals(t *testing.T) {
@@ -28,20 +30,20 @@ func TestAgentRuntimeResolvesConsecutiveToolApprovals(t *testing.T) {
 		t.Fatal(err)
 	}
 	var executions atomic.Int32
-	tool, err := agent.InferTool("approved_tool", "Exercise consecutive tool approvals", func(context.Context, struct{}) (string, error) {
+	tool, err := agenttool.InferTool("approved_tool", "Exercise consecutive tool approvals", func(context.Context, struct{}) (string, error) {
 		executions.Add(1)
 		return "complete", nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	toolset, err := agent.StaticToolsIdentified(agent.CapabilityIdentity{Kind: "tools.consecutive-permissions", Version: 1}, agent.ToolDefinition{
+	toolset, err := agenttool.StaticToolsIdentified(agentschema.CapabilityIdentity{Kind: "tools.consecutive-permissions", Version: 1}, agenttool.ToolDefinition{
 		Tool: tool,
-		Descriptor: agent.ToolDescriptor{
-			Source: agent.ToolSourceShell, Execution: agent.ToolExecutionParallelRead,
-			MutationScope: agent.ToolMutationNone, PostCheck: agent.ToolPostCheckNone,
-			Recovery: agent.ToolRecoveryReadOnly, ResultProjection: agent.ToolResultBoundedModelContext,
-			ResultRetention: agent.ToolResultDeferred, Steering: agent.SteeringFinishCurrent, MaxResultBytes: 64 << 10,
+		Descriptor: agenttool.ToolDescriptor{
+			Source: agenttool.ToolSourceShell, Execution: agenttool.ToolExecutionParallelRead,
+			MutationScope: agenttool.ToolMutationNone, PostCheck: agenttool.ToolPostCheckNone,
+			Recovery: agenttool.ToolRecoveryReadOnly, ResultProjection: agentschema.ToolResultBoundedModelContext,
+			ResultRetention: agentschema.ToolResultDeferred, Steering: agenttool.SteeringFinishCurrent, MaxResultBytes: 64 << 10,
 		},
 	})
 	if err != nil {
@@ -49,11 +51,11 @@ func TestAgentRuntimeResolvesConsecutiveToolApprovals(t *testing.T) {
 	}
 	model := &publicBackendTestModel{}
 	for index := 0; index < 3; index++ {
-		model.responses = append(model.responses, agent.AssistantMessage("", []agent.ToolCall{{
-			ID: fmt.Sprintf("provider-call-%d", index), Type: "function", Function: agent.FunctionCall{Name: "approved_tool", Arguments: `{}`},
+		model.responses = append(model.responses, agentschema.AssistantMessage("", []agentschema.ToolCall{{
+			ID: fmt.Sprintf("provider-call-%d", index), Type: "function", Function: agentschema.FunctionCall{Name: "approved_tool", Arguments: `{}`},
 		}}))
 	}
-	model.responses = append(model.responses, agent.AssistantMessage("finished", nil))
+	model.responses = append(model.responses, agentschema.AssistantMessage("finished", nil))
 	runtime, err := NewAgentRuntime(ctx, t.TempDir(), WithToolMutationApplier(
 		func(context.Context, agenttoolruntime.CommittedToolMutation) error { return nil },
 	))
@@ -70,7 +72,7 @@ func TestAgentRuntimeResolvesConsecutiveToolApprovals(t *testing.T) {
 	operation, err := runtime.Start(ctx, StartRequest{Cycle: Cycle{
 		Definition: agent.Definition{
 			Key: "consecutive-permissions", Name: "root", Model: model,
-			ModelIdentity: agent.CapabilityIdentity{Kind: "model.consecutive-permissions", Version: 1}, Tools: toolset,
+			ModelIdentity: agentschema.CapabilityIdentity{Kind: "model.consecutive-permissions", Version: 1}, Tools: toolset,
 		},
 		Conversation: agentconversation.NewSessionConversationForAgent(sess, nil, agentrun.AgentKindIDE),
 		Request:      agentchatRequest("permission-command", "perform three approved actions"),

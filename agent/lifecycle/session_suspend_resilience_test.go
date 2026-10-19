@@ -1,0 +1,193 @@
+package lifecycle
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	agentengine "github.com/alfredxw/denova/agent/engine"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentsession "github.com/alfredxw/denova/agent/session"
+)
+
+func TestSuspendReopenResumesSameRunWithoutRepeatingInput(t *testing.T) {
+	for _, phase := range []string{"model", "preparation"} {
+		t.Run(phase, func(t *testing.T) {
+			store := newObservingSessionStore()
+			first := &gatedLifecycleModel{started: make(chan struct{}), release: make(chan struct{})}
+			var source agentengine.Source = agentengine.Definition{Name: "test", Model: first}
+			if phase == "preparation" {
+				source = agentengine.SourceFunc(func(ctx context.Context, _ agentengine.PrepareRequest) (agentengine.Definition, error) {
+					close(first.started)
+					<-ctx.Done()
+					return agentengine.Definition{}, ctx.Err()
+				})
+			}
+			owner, err := New(context.Background(), source, WithSessionStore(store))
+			if err != nil {
+				t.Fatal(err)
+			}
+			session, err := owner.Session(context.Background(), agentsession.Named("suspended"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			run, err := session.Run(context.Background(), agentschema.Input{Text: "original task", IdempotencyKey: "start"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			<-first.started
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			suspension, err := session.SuspendAndClose(ctx, SuspendRequest{RunID: run.ID(), IdempotencyKey: "pause"})
+			if err != nil || suspension.Status != agentschema.ResultSuspended {
+				t.Fatalf("suspension=%#v error=%v", suspension, err)
+			}
+			if result, err := run.Wait(ctx); err != nil || result.Status != agentschema.ResultSuspended {
+				t.Fatalf("wait=%#v error=%v", result, err)
+			}
+			if repeated, err := session.SuspendAndClose(ctx, SuspendRequest{RunID: run.ID(), IdempotencyKey: "pause"}); err != nil || repeated.Receipt != suspension.Receipt {
+				t.Fatalf("repeated pause=%#v error=%v", repeated, err)
+			}
+			if _, err := session.SuspendAndClose(ctx, SuspendRequest{RunID: run.ID(), IdempotencyKey: "unaccepted"}); !errors.Is(err, agentschema.ErrSessionClosed) {
+				t.Fatalf("closed Session accepted a new pause command: %v", err)
+			}
+			if store.count(turnFinishedRecord) != 0 || store.count(turnInterruptedRecord) != 0 {
+				t.Fatal("pause settled the logical task")
+			}
+			close(first.release)
+			if err := owner.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			model := &lifecycleModel{responses: []*agentschema.Message{agentschema.AssistantMessage("done", nil), agentschema.AssistantMessage("added", nil)}}
+			owner, err = New(context.Background(), agentengine.Definition{Name: "test", Model: model}, WithSessionStore(store))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = owner.Close(context.Background()) })
+			session, err = owner.Session(context.Background(), agentsession.Named("suspended"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(model.calls()) != 0 {
+				t.Fatal("open executed the Run")
+			}
+			inspected, found, err := session.CommandRun(ctx, "start")
+			if err != nil || !found {
+				t.Fatalf("cold command lookup: %v %v", found, err)
+			}
+			snapshot := inspected.Snapshot()
+			if snapshot.Receipt != run.Receipt() || !snapshot.Suspended || snapshot.Result != nil {
+				t.Fatalf("pause became terminal: %+v", snapshot)
+			}
+
+			if _, err := session.Run(ctx, agentschema.Text("new task")); !errors.Is(err, agentschema.ErrSessionBusy) {
+				t.Fatalf("new Run error=%v", err)
+			}
+			if _, err := session.Queue(ctx, agentschema.Input{Text: "added input", IdempotencyKey: "message"}); err != nil {
+				t.Fatal(err)
+			}
+			if len(model.calls()) != 0 {
+				t.Fatal("Queue resumed the Run")
+			}
+			resumed, err := session.ResumeRun(ctx, ResumeRequest{RunID: run.ID(), IdempotencyKey: "resume"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resumed.ID() != run.ID() {
+				t.Fatal("resume changed the logical Run")
+			}
+			if result, err := resumed.Wait(ctx); err != nil || result.Status != agentschema.ResultCompleted {
+				t.Fatalf("result=%#v error=%v", result, err)
+			}
+			calls := model.calls()
+			if len(calls) != 2 || len(calls[0]) != 1 || calls[0][0].Content != "original task" {
+				t.Fatalf("resumed model messages=%#v", calls)
+			}
+
+			inspected, found, err = session.CommandRun(ctx, "start")
+			if err != nil || !found {
+				t.Fatalf("resumed command lookup: %v %v", found, err)
+			}
+			snapshot = inspected.Snapshot()
+			if snapshot.Receipt != run.Receipt() || snapshot.Suspended || snapshot.Result == nil || snapshot.Result.Status != agentschema.ResultCompleted {
+				t.Fatalf("resumed snapshot: %+v", snapshot)
+			}
+			if store.count(turnFinishedRecord) != 1 {
+				t.Fatalf("settlements=%d", store.count(turnFinishedRecord))
+			}
+		})
+	}
+}
+
+func TestRetriedPauseDoesNotStopAResumedRun(t *testing.T) {
+	for _, tree := range []bool{false, true} {
+		name := "session"
+		if tree {
+			name = "tree"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			model := &gatedLifecycleModel{started: make(chan struct{}), release: make(chan struct{})}
+			owner, err := New(ctx, agentengine.Definition{Name: "test", Model: model}, WithSessionStore(newObservingSessionStore()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer owner.Close(context.Background())
+			key := agentsession.Named("replayed-control")
+			sess, err := owner.Session(ctx, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run, err := sess.Run(ctx, agentschema.Text("original task"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			<-model.started
+			pause := func() (Suspension, error) {
+				request := SuspendRequest{RunID: run.ID(), IdempotencyKey: "pause-once"}
+				if tree {
+					return owner.SuspendTree(ctx, key, request)
+				}
+				return sess.SuspendAndClose(ctx, request)
+			}
+			stopped, err := pause()
+			if err != nil {
+				t.Fatal(err)
+			}
+			sess, err = owner.Session(ctx, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := ResumeRequest{RunID: run.ID(), IdempotencyKey: "resume-once"}
+			if tree {
+				run, err = owner.ResumeTree(ctx, key, request)
+			} else {
+				run, err = sess.ResumeRun(ctx, request)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			for model.callCount() != 2 {
+				select {
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				case <-time.After(time.Millisecond):
+				}
+			}
+			repeated, err := pause()
+			if err != nil || repeated.Receipt != stopped.Receipt {
+				t.Fatalf("pause receipt=%+v error=%v", repeated, err)
+			}
+			current, err := sess.Snapshot(ctx)
+			if err != nil || current.ActiveRunID != run.ID() || current.ActiveStatus == agentschema.ResultSuspended {
+				t.Fatalf("old pause stopped current execution: %+v error=%v", current, err)
+			}
+			close(model.release)
+			if result, err := run.Wait(ctx); err != nil || result.Status != agentschema.ResultCompleted {
+				t.Fatalf("resumed=%+v error=%v", result, err)
+			}
+		})
+	}
+}

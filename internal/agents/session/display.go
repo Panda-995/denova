@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 // AppendDisplayEvent 追加仅用于前端展示的事件，不进入 Agent 有效上下文。
@@ -19,6 +19,29 @@ func (s *Session) AppendDisplayEvent(event DisplayEvent) error {
 			event.CreatedAt = time.Now().UTC()
 		}
 		return s.appendDisplayEventLocked(event)
+	})
+}
+
+// DiscardDisplayEvents retracts unaccepted model previews. The original data
+// stays in the journal for diagnosis; public message projection omits it.
+func (s *Session) DiscardDisplayEvents(ids []string) error {
+	selected := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		selected[id] = true
+	}
+	return s.withCanonicalMutation(context.Background(), "discard model preview", func() error {
+		for index := range s.records {
+			record := &s.records[index]
+			if record.display == nil || !selected[record.display.ID] || record.display.Status == "discarded" {
+				continue
+			}
+			status := "discarded"
+			if err := s.appendJournalRecordLocked(displayPatchRecord{Type: historyTypeDisplayPatch, TargetRecordID: record.journalID, CreatedAt: time.Now().UTC(), Status: &status}); err != nil {
+				return err
+			}
+			record.display.Status = status
+		}
+		return nil
 	})
 }
 
@@ -287,7 +310,7 @@ func truncateUTF8ByBytes(value string, maxBytes int) string {
 }
 
 // UpdateDisplayToolResult stores the result preview for a persisted tool card.
-func (s *Session) UpdateDisplayToolResult(id, name, status, result string, presentation *agent.ToolPresentation) error {
+func (s *Session) UpdateDisplayToolResult(id, name, status, result string, presentation *agenttool.ToolPresentation) error {
 	id = strings.TrimSpace(id)
 	name = strings.TrimSpace(name)
 	return s.withCanonicalMutation(context.Background(), "update display tool result", func() error {

@@ -2,18 +2,18 @@ package modeltask
 
 import (
 	"context"
-	"denova/internal/agents/run"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-	"github.com/alfredxw/denova/agent/providers"
-
 	"denova/config"
 	"denova/internal/agents/modelio"
 	"denova/internal/agents/prompts"
+	agentrun "denova/internal/agents/run"
+
+	"github.com/alfredxw/denova/agent/model/providers"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 type chapterSplitRegexPayload struct {
@@ -80,9 +80,9 @@ func generateChapterSplitRegex(ctx context.Context, cfg *config.Config, modelCfg
 	if err != nil {
 		return "", err
 	}
-	messages := []*agent.Message{
-		agent.SystemMessage(composition.Instruction()),
-		agent.UserMessage(instruction),
+	messages := []*agentschema.Message{
+		agentschema.SystemMessage(composition.Instruction()),
+		agentschema.UserMessage(instruction),
 	}
 	if err := modelio.ValidateConfiguredInput(cfg, config.AgentKindToolAgent, messages, nil); err != nil {
 		return "", err

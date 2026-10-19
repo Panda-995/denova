@@ -1,8 +1,15 @@
-import { useEffect } from 'react'
+import { createContext, useContext, useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { MotionConfig, useReducedMotion } from 'motion/react'
 
 export type MotionIntensity = 'system' | 'full' | 'reduced' | 'off'
+
+const MotionIntensityContext = createContext<MotionIntensity>('system')
+
+/** Shares the normalized preference with renderers whose animations add DOM work. */
+export function useMotionIntensity(): MotionIntensity {
+  return useContext(MotionIntensityContext)
+}
 
 export function normalizeMotionIntensity(value?: string | null): MotionIntensity {
   if (value === 'full' || value === 'reduced' || value === 'off' || value === 'system') return value
@@ -28,8 +35,10 @@ export function NovaMotionProvider({
   }, [normalized])
 
   return (
-    <MotionConfig reducedMotion={reducedMotion}>
-      {children}
-    </MotionConfig>
+    <MotionIntensityContext.Provider value={normalized}>
+      <MotionConfig reducedMotion={reducedMotion}>
+        {children}
+      </MotionConfig>
+    </MotionIntensityContext.Provider>
   )
 }

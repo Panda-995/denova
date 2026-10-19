@@ -22,7 +22,7 @@ type ActorStateSchemaProposal struct {
 	Summary      string                              `json:"summary,omitempty"`
 	Requirements []ActorStateSchemaRequirementReview `json:"requirements,omitempty"`
 	Adaptation   ActorStateSchemaAdaptation          `json:"adaptation"`
-	// ReviewedLoreIDs is derived from successful read_lore_items results rather
+	// ReviewedLoreIDs is derived from successful full-body query_lore_items results rather
 	// than accepted from the model.
 	ReviewedLoreIDs []string `json:"-"`
 	// SourceLoreRevision is captured by the app, not supplied by the model.

@@ -1,16 +1,16 @@
 package chat
 
 import (
-	"denova/internal/agents/run"
 	"fmt"
 	"sort"
 	"strings"
 	"unicode/utf8"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	agentcontext "denova/internal/agents/context"
 	"denova/internal/agents/prompts"
+	agentrun "denova/internal/agents/run"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 type contextBuildLog struct {
@@ -79,7 +79,7 @@ func (l *contextBuildLog) Audit() []agentcontext.AuditPart {
 	return l.ledger.Parts()
 }
 
-func (l *contextBuildLog) auditForMessages(messages []*agent.Message) []agentcontext.AuditPart {
+func (l *contextBuildLog) auditForMessages(messages []*agentschema.Message) []agentcontext.AuditPart {
 	if l == nil || l.ledger == nil {
 		return nil
 	}
@@ -116,7 +116,7 @@ func (l *contextBuildLog) FullParts() []ContextAnalysisPart {
 	return result
 }
 
-func contextLedgerPartsForConversation(log *contextBuildLog, conversation Conversation, messages []*agent.Message) []agentcontext.AuditPart {
+func contextLedgerPartsForConversation(log *contextBuildLog, conversation Conversation, messages []*agentschema.Message) []agentcontext.AuditPart {
 	parts := log.auditForMessages(messages)
 	if reporter, ok := conversation.(FinalContextLedgerReporter); ok {
 		return append(parts, reporter.ContextLedgerPartsForMessages(messages)...)
@@ -138,7 +138,7 @@ func trimmedNonEmpty(values []string) []string {
 	return result
 }
 
-func messageListSummary(messages []*agent.Message) string {
+func messageListSummary(messages []*agentschema.Message) string {
 	if len(messages) == 0 {
 		return "count=0"
 	}
@@ -164,7 +164,7 @@ func messageListSummary(messages []*agent.Message) string {
 	return fmt.Sprintf("count=%d roles=%s total_bytes=%d total_chars=%d parts=[%s]", len(messages), roleCountSummary(roleCounts), totalBytes, totalChars, strings.Join(parts, "; "))
 }
 
-func messageSummary(index, total int, msg *agent.Message) string {
+func messageSummary(index, total int, msg *agentschema.Message) string {
 	if msg == nil {
 		return fmt.Sprintf("%d:<nil>", index)
 	}

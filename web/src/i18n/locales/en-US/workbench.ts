@@ -17,7 +17,7 @@ const workbench = {
   'workbench.activity.settings': 'Settings',
   'workbench.activity.skills': 'Skills',
   'workbench.activity.game': 'Game',
-  'workbench.activity.teller': 'Presets',
+  'workbench.activity.teller': 'Creative Setups',
   'workbench.activity.trajectory': 'Trajectory',
   'workbench.activity.toggleCollapse': 'Collapse',
   'workbench.activity.toggleExpand': 'Expand',
@@ -55,6 +55,7 @@ const workbench = {
   'workbench.starNotice.dismiss': 'Do not show the Star prompt again',
   'workbench.starNotice.title': 'Enjoying Denova?',
   'workbench.untitled': 'Untitled',
+  'workbench.updateNotice.ready': 'Version {{version}} is ready to restart',
   'workbench.updateNotice.available': 'New version {{version}}',
   'workbench.updateNotice.dismiss': 'Dismiss update notice',
 } as const

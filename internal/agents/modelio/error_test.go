@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/alfredxw/denova/agent/providers"
+	"github.com/alfredxw/denova/agent/model/providers"
 )
 
 func TestClassifyModelErrorUsesStructuredProviderStatus(t *testing.T) {

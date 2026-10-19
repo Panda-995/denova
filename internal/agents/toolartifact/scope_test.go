@@ -7,7 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 func TestWorkspaceScopeRemovalIsOwnedAndIsolated(t *testing.T) {
@@ -123,8 +124,8 @@ func writeScopedArtifact(t *testing.T, workspace string, scope WorkspaceScope, c
 	if err != nil {
 		t.Fatal(err)
 	}
-	writer, err := store.BeginToolArtifact(context.Background(), agent.ToolArtifactRequest{
-		ToolName: "read", ToolCallID: callID, Purpose: agent.ToolArtifactPurposeCompleteModelOutput,
+	writer, err := store.BeginToolArtifact(context.Background(), agenttool.ToolArtifactRequest{
+		ToolName: "read", ToolCallID: callID, Purpose: agentschema.ToolArtifactPurposeCompleteModelOutput,
 		MIMEType: "text/plain", Extension: "txt",
 	})
 	if err != nil {

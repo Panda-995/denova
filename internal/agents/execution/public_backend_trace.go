@@ -11,7 +11,10 @@ import (
 	agentrun "denova/internal/agents/run"
 	agenttool "denova/internal/agents/tool"
 
-	agent "github.com/alfredxw/denova/agent"
+	"github.com/alfredxw/denova/agent"
+	agentevent "github.com/alfredxw/denova/agent/lifecycle/event"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	sdktool "github.com/alfredxw/denova/agent/tool"
 )
 
 // publicAgentRunTrace projects the public Agent lifecycle into Denova's
@@ -105,7 +108,7 @@ func (trace *publicAgentRunTrace) bindContext(ctx context.Context, options agent
 	return agentrun.ContextWithObserver(ctx, observer)
 }
 
-func (trace *publicAgentRunTrace) record(registration *publicCycleRegistration, event agent.Event) error {
+func (trace *publicAgentRunTrace) record(registration *publicCycleRegistration, event agentevent.Event) error {
 	if trace == nil {
 		return nil
 	}
@@ -124,20 +127,20 @@ func (trace *publicAgentRunTrace) record(registration *publicCycleRegistration, 
 		return err
 	}
 	switch payload := event.Payload.(type) {
-	case agent.NestedEvent:
+	case agentevent.NestedEvent:
 		return trace.recordChildRun(agentrun.RunTraceReference{
 			ID: payload.Child.RunID, SessionID: payload.SessionID, AgentName: payload.Source.Name,
 			ParentCallID: payload.ParentCallID,
 		})
-	case agent.RunAccepted:
+	case agentevent.RunAccepted:
 		return trace.ledger.Record("run_started", map[string]any{
 			"phase": "accepted", "command_id": payload.CommandID,
 		})
-	case agent.RunStarted:
+	case agentevent.RunStarted:
 		return trace.ledger.Record("agent_cycle", map[string]any{
 			"phase": "started", "count": payload.Cycle,
 		})
-	case agent.ModelCompleted:
+	case agentevent.ModelCompleted:
 		trace.modelCallCount++
 		if trace.observer != nil && trace.observer.LLMSpanCount() >= trace.modelCallCount {
 			return nil
@@ -166,7 +169,7 @@ func (trace *publicAgentRunTrace) record(registration *publicCycleRegistration, 
 				"total_tokens":           payload.Usage.TotalTokens,
 			},
 		})
-	case agent.ToolStarted:
+	case agentevent.ToolStarted:
 		if trace.observer != nil && trace.observer.HasToolDecision(payload.CallID, payload.Name) {
 			return nil
 		}
@@ -176,10 +179,10 @@ func (trace *publicAgentRunTrace) record(registration *publicCycleRegistration, 
 		if providerCallID == "" {
 			providerCallID = payload.CallID
 		}
-		source := agenttool.ToolSourceOther
-		descriptor := agent.ToolDescriptor{}
+		source := sdktool.ToolSourceOther
+		descriptor := sdktool.ToolDescriptor{}
 		if payload.Descriptor != nil {
-			source = agenttool.ToolSource(payload.Descriptor.Source)
+			source = sdktool.ToolSource(payload.Descriptor.Source)
 			descriptor = *payload.Descriptor
 		}
 		return trace.ledger.RecordToolDecision(agenttool.Decision{
@@ -188,8 +191,8 @@ func (trace *publicAgentRunTrace) record(registration *publicCycleRegistration, 
 			MutationScope: descriptor.MutationScope, PostCheck: descriptor.PostCheck, Descriptor: descriptor,
 			ArgsBytes: len(payload.Arguments), ArgsComplete: &argsComplete,
 		})
-	case agent.ToolFinished:
-		if payload.Name == "task" && payload.Projection != nil {
+	case agentevent.ToolFinished:
+		if (payload.Name == "send" || payload.Name == "task") && payload.Projection != nil {
 			for _, child := range agentrun.TaskRunTraceReferences(payload.Projection.ModelContent) {
 				child.ParentCallID = payload.CallID
 				if err := trace.recordChildRun(child); err != nil {
@@ -201,7 +204,7 @@ func (trace *publicAgentRunTrace) record(registration *publicCycleRegistration, 
 			return nil
 		}
 		return trace.recordToolFinished(payload)
-	case agent.RunSettled:
+	case agentevent.RunSettled:
 		trace.finished = true
 		status := publicTraceStatus(payload.Status)
 		if trace.rootSpan != nil {
@@ -260,7 +263,7 @@ func (trace *publicAgentRunTrace) recordChildRun(child agentrun.RunTraceReferenc
 	return nil
 }
 
-func (trace *publicAgentRunTrace) recordToolFinished(payload agent.ToolFinished) error {
+func (trace *publicAgentRunTrace) recordToolFinished(payload agentevent.ToolFinished) error {
 	status := "success"
 	providerCallID := strings.TrimSpace(payload.ProviderCallID)
 	if providerCallID == "" {
@@ -323,13 +326,13 @@ func (trace *publicAgentRunTrace) close() error {
 
 func publicTraceStatus(status agent.ResultStatus) string {
 	switch status {
-	case agent.ResultCompleted:
+	case agentschema.ResultCompleted:
 		return "success"
-	case agent.ResultAborted:
+	case agentschema.ResultAborted:
 		return "aborted"
-	case agent.ResultBlocked:
+	case agentschema.ResultBlocked:
 		return "blocked"
-	case agent.ResultFailed, agent.ResultIncomplete:
+	case agentschema.ResultFailed, agentschema.ResultIncomplete:
 		return "error"
 	default:
 		return "error"

@@ -12,8 +12,10 @@ import (
 	"strings"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-	"github.com/alfredxw/denova/agent/providers"
+	agentmodel "github.com/alfredxw/denova/agent/model"
+	"github.com/alfredxw/denova/agent/model/providers"
+	agentstream "github.com/alfredxw/denova/agent/model/stream"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestLogFullModelInputWritesUntruncatedMessages(t *testing.T) {
@@ -40,16 +42,16 @@ func TestLogFullModelInputWritesUntruncatedMessages(t *testing.T) {
 			Model:   "test-model",
 			BaseURL: "https://example.test/v1",
 		},
-		Messages: []*agent.Message{
-			agent.SystemMessage("system"),
-			agent.UserMessage(longContent),
+		Messages: []*agentschema.Message{
+			agentschema.SystemMessage("system"),
+			agentschema.UserMessage(longContent),
 		},
-		Tools: []*agent.ToolInfo{
+		Tools: []*agentschema.ToolInfo{
 			{
 				Name: "read",
 				Desc: "Read a file",
-				ParamsOneOf: agent.NewParamsOneOfByParams(map[string]*agent.ParameterInfo{
-					"path": {Type: agent.String, Desc: "File path", Required: true},
+				ParamsOneOf: agentschema.NewParamsOneOfByParams(map[string]*agentschema.ParameterInfo{
+					"path": {Type: agentschema.String, Desc: "File path", Required: true},
 				}),
 			},
 		},
@@ -95,22 +97,22 @@ func TestLogFullModelInputWritesUntruncatedMessages(t *testing.T) {
 }
 
 func TestModelInputLoggingUsesStableToolSnapshot(t *testing.T) {
-	originalTools := []*agent.ToolInfo{
+	originalTools := []*agentschema.ToolInfo{
 		{
 			Name:  "read",
 			Desc:  "Read a file",
 			Extra: map[string]any{"capability": "file_read"},
-			ParamsOneOf: agent.NewParamsOneOfByParams(map[string]*agent.ParameterInfo{
-				"path": {Type: agent.String, Desc: "File path", Required: true},
+			ParamsOneOf: agentschema.NewParamsOneOfByParams(map[string]*agentschema.ParameterInfo{
+				"path": {Type: agentschema.String, Desc: "File path", Required: true},
 			}),
 		},
 	}
 	stableTools := cloneToolInfos(originalTools)
 	originalTools[0].Desc = "mutated before provider call"
 	originalTools[0].Extra["capability"] = "mutated"
-	originalTools[0].ParamsOneOf = agent.NewParamsOneOfByParams(map[string]*agent.ParameterInfo{
-		"path":   {Type: agent.String, Desc: "File path", Required: true},
-		"offset": {Type: agent.Number, Desc: "Line offset"},
+	originalTools[0].ParamsOneOf = agentschema.NewParamsOneOfByParams(map[string]*agentschema.ParameterInfo{
+		"path":   {Type: agentschema.String, Desc: "File path", Required: true},
+		"offset": {Type: agentschema.Number, Desc: "Line offset"},
 	})
 
 	capture := &toolCaptureChatModel{}
@@ -120,7 +122,7 @@ func TestModelInputLoggingUsesStableToolSnapshot(t *testing.T) {
 		config:    providers.ModelConfig{Model: "test-model"},
 		tools:     stableTools,
 	}
-	if _, err := wrapper.Generate(context.Background(), []*agent.Message{agent.UserMessage("hello")}); err != nil {
+	if _, err := wrapper.Generate(context.Background(), []*agentschema.Message{agentschema.UserMessage("hello")}); err != nil {
 		t.Fatal(err)
 	}
 	if len(capture.tools) != 1 {
@@ -137,7 +139,7 @@ func TestModelInputLoggingUsesStableToolSnapshot(t *testing.T) {
 	}
 
 	capture.tools[0].Desc = "provider mutated schema"
-	if _, err := wrapper.Generate(context.Background(), []*agent.Message{agent.UserMessage("again")}); err != nil {
+	if _, err := wrapper.Generate(context.Background(), []*agentschema.Message{agentschema.UserMessage("again")}); err != nil {
 		t.Fatal(err)
 	}
 	if capture.tools[0].Desc != "Read a file" {
@@ -146,16 +148,16 @@ func TestModelInputLoggingUsesStableToolSnapshot(t *testing.T) {
 }
 
 type toolCaptureChatModel struct {
-	tools []*agent.ToolInfo
+	tools []*agentschema.ToolInfo
 }
 
-func (m *toolCaptureChatModel) Generate(_ context.Context, _ []*agent.Message, opts ...agent.ModelOption) (*agent.Message, error) {
-	common := agent.GetCommonOptions(&agent.Options{}, opts...)
+func (m *toolCaptureChatModel) Generate(_ context.Context, _ []*agentschema.Message, opts ...agentmodel.ModelOption) (*agentschema.Message, error) {
+	common := agentmodel.GetCommonOptions(&agentmodel.Options{}, opts...)
 	m.tools = common.Tools
-	return agent.AssistantMessage("ok", nil), nil
+	return agentschema.AssistantMessage("ok", nil), nil
 }
 
-func (m *toolCaptureChatModel) Stream(context.Context, []*agent.Message, ...agent.ModelOption) (*agent.StreamReader[*agent.Message], error) {
+func (m *toolCaptureChatModel) Stream(context.Context, []*agentschema.Message, ...agentmodel.ModelOption) (*agentstream.StreamReader[*agentschema.Message], error) {
 	return nil, io.EOF
 }
 
@@ -180,14 +182,14 @@ func TestLogModelProviderRequestIDUpdatesModelInputRecord(t *testing.T) {
 		Config: providers.ModelConfig{
 			Model: "test-model",
 		},
-		Messages: []*agent.Message{
-			agent.UserMessage("hello"),
+		Messages: []*agentschema.Message{
+			agentschema.UserMessage("hello"),
 		},
 	})
 	if callID == "" {
 		t.Fatal("expected model input call id")
 	}
-	msg := agent.AssistantMessage("world", nil)
+	msg := agentschema.AssistantMessage("world", nil)
 	msg.Extra = map[string]any{"openai-request-id": " req-provider-123 "}
 
 	got := logModelProviderRequestIDForCall(callID, "test_agent", "test", "generate", "test-model", "", 0, msg)
@@ -234,11 +236,11 @@ func TestLogModelProviderRequestIDWithoutCallIDDoesNotAttachInputRecord(t *testi
 		Config: providers.ModelConfig{
 			Model: "test-model",
 		},
-		Messages: []*agent.Message{
-			agent.UserMessage("hello"),
+		Messages: []*agentschema.Message{
+			agentschema.UserMessage("hello"),
 		},
 	})
-	msg := agent.AssistantMessage("world", nil)
+	msg := agentschema.AssistantMessage("world", nil)
 	msg.Extra = map[string]any{"openai-request-id": "req-agent-456"}
 
 	logModelProviderRequestID("main_agent", "agent", "response", "", "run-1", 1, msg)
@@ -287,8 +289,8 @@ func TestLogModelProviderRequestIDKeepsExplicitConcurrentCallMapping(t *testing.
 		Config: providers.ModelConfig{
 			Model: "test-model",
 		},
-		Messages: []*agent.Message{
-			agent.UserMessage("first"),
+		Messages: []*agentschema.Message{
+			agentschema.UserMessage("first"),
 		},
 	})
 	secondCallID := logFullModelInput(modelInputLogOptions{
@@ -298,15 +300,15 @@ func TestLogModelProviderRequestIDKeepsExplicitConcurrentCallMapping(t *testing.
 		Config: providers.ModelConfig{
 			Model: "test-model",
 		},
-		Messages: []*agent.Message{
-			agent.UserMessage("second"),
+		Messages: []*agentschema.Message{
+			agentschema.UserMessage("second"),
 		},
 	})
 
-	firstMsg := agent.AssistantMessage("first response", nil)
+	firstMsg := agentschema.AssistantMessage("first response", nil)
 	firstMsg.Extra = map[string]any{"openai-request-id": "req-first"}
 	logModelProviderRequestIDForCall(firstCallID, "main_agent", "agent", "response", "", "run-1", 1, firstMsg)
-	msg := agent.AssistantMessage("second response", nil)
+	msg := agentschema.AssistantMessage("second response", nil)
 	msg.Extra = map[string]any{"openai-request-id": "req-second"}
 	logModelProviderRequestIDForCall(secondCallID, "main_agent", "agent", "response", "", "run-1", 2, msg)
 	modelInputLogWG.Wait()
@@ -364,8 +366,8 @@ func TestLogFullModelInputSkipsWhenDisabled(t *testing.T) {
 		Config: providers.ModelConfig{
 			Model: "test-model",
 		},
-		Messages: []*agent.Message{
-			agent.UserMessage("hidden unless dev mode is enabled"),
+		Messages: []*agentschema.Message{
+			agentschema.UserMessage("hidden unless dev mode is enabled"),
 		},
 	})
 

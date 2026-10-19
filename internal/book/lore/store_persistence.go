@@ -2,8 +2,9 @@ package lore
 
 import (
 	"context"
-	"denova/internal/localfs"
+	"denova/internal/revisionfile"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,8 +20,17 @@ func (s *Store) Ensure() error {
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(s.itemsPath()); err == nil {
-		return nil
+	if data, err := os.ReadFile(s.itemsPath()); err == nil {
+		var header struct {
+			Version int `json:"version"`
+		}
+		if err := json.Unmarshal(data, &header); err != nil {
+			return err
+		}
+		if header.Version == loreItemsVersion {
+			return nil
+		}
+		return s.save(collection)
 	} else if !os.IsNotExist(err) {
 		return err
 	}
@@ -35,74 +45,87 @@ func (s *Store) Ensure() error {
 
 func (s *Store) loadOrCreate() (Collection, error) {
 	path, _ := s.readableItemsPath()
-	data, err := os.ReadFile(path)
-	if err == nil {
-		// Version 1 remains readable regardless of where a user copied it; every
-		// subsequent typed save upgrades the same collection to version 2.
-		collection, decodeErr := decodeLoreCollectionJSON(data)
+	snapshot, err := revisionfile.Read(context.Background(), path)
+	if err == nil && snapshot.Exists {
+		// Reads project old categories without mutation. Ensure or the next typed
+		// write persists the new format after preserving the source snapshot.
+		collection, decodeErr := decodeCollectionSnapshot(snapshot)
 		if decodeErr != nil {
 			return Collection{}, fmt.Errorf("解析 Lore items 失败 path=%s: %w", path, decodeErr)
 		}
 		return collection, nil
 	}
-	if !os.IsNotExist(err) {
+	if err != nil {
 		return Collection{}, err
 	}
-	return Collection{Version: loreItemsVersion, Items: []Item{}}, nil
+	return Collection{Version: loreItemsVersion, Categories: DefaultCategories(), Items: []Item{}}, nil
 }
 
 func (s *Store) save(collection Collection) error {
 	collection.Version = loreItemsVersion
+	if err := validateCategories(collection); err != nil {
+		return err
+	}
 	normalized := make([]Item, 0, len(collection.Items))
 	for _, item := range collection.Items {
+		item.ResolvedMaterials = nil
 		normalized = append(normalized, normalizeLoreItem(item))
 	}
 	collection.Items = normalized
 	if err := validateLoreItemIdentities(collection.Items); err != nil {
 		return fmt.Errorf("拒绝保存无效 Lore collection: %w", err)
 	}
+	if err := validateMaterials(collection); err != nil {
+		return err
+	}
+	if err := validateIndexGuide(collection); err != nil {
+		return err
+	}
+	pruneIndexOrder(&collection)
 	path := s.itemsPath()
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := s.backupLegacyCategories(path); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(collection, "", "  ")
 	if err != nil {
 		return err
 	}
-	temp, err := os.CreateTemp(dir, ".items-*.tmp")
-	if err != nil {
-		return fmt.Errorf("创建资料库临时文件失败 path=%s: %w", path, err)
+	_, err = revisionfile.ReplaceIfRevision(context.Background(), path, "", append(data, '\n'), revisionfile.Options{})
+	return err
+}
+
+// Preserve each legacy snapshot before its first replacement, including a
+// restored historical version. Backups are recovery copies, never dual writes.
+func (s *Store) backupLegacyCategories(path string) error {
+	snapshot, err := revisionfile.Read(context.Background(), path)
+	if err != nil || !snapshot.Exists {
+		return err
 	}
-	tempPath := temp.Name()
-	defer os.Remove(tempPath)
-	closeTemp := func() {
-		if closeErr := temp.Close(); closeErr != nil {
-			slog.ErrorContext(context.Background(), fmt.Sprintf("[lore-store] close temp file failed path=%s err=%v", tempPath, closeErr))
-		}
+	var header struct {
+		Version int `json:"version"`
 	}
-	if err := temp.Chmod(0o644); err != nil {
-		closeTemp()
-		return fmt.Errorf("设置资料库临时文件权限失败 path=%s: %w", tempPath, err)
+	if err := json.Unmarshal(snapshot.Content, &header); err != nil {
+		return err
 	}
-	if _, err := temp.Write(append(data, '\n')); err != nil {
-		closeTemp()
-		return fmt.Errorf("写入资料库临时文件失败 path=%s: %w", tempPath, err)
+	if header.Version >= loreItemsVersion {
+		return nil
 	}
-	if err := temp.Sync(); err != nil {
-		closeTemp()
-		return fmt.Errorf("同步资料库临时文件失败 path=%s: %w", tempPath, err)
+	return s.backupCategorySnapshot("migration", snapshot)
+}
+
+func (s *Store) backupCategorySnapshot(reason string, snapshot revisionfile.Snapshot) error {
+	if !snapshot.Exists {
+		return nil
 	}
-	if err := temp.Close(); err != nil {
-		return fmt.Errorf("关闭资料库临时文件失败 path=%s: %w", tempPath, err)
+	backup := filepath.Join(s.workspace, "setting", "lore", "backups", "categories-"+reason+"-"+snapshot.Revision[7:]+".json")
+	_, err := revisionfile.ReplaceIfRevision(context.Background(), backup, revisionfile.MissingRevision, snapshot.Content, revisionfile.Options{})
+	if errors.Is(err, revisionfile.ErrRevisionConflict) {
+		return nil
 	}
-	if err := os.Rename(tempPath, path); err != nil {
-		return fmt.Errorf("原子替换资料库文件失败 path=%s: %w", path, err)
+	if err == nil {
+		slog.Info("[lore] saved category backup", "path", backup, "reason", reason)
 	}
-	if err := localfs.SyncDirectory(dir); err != nil {
-		slog.ErrorContext(context.Background(), fmt.Sprintf("[lore-store] directory durability failed path=%s err=%v", dir, err))
-	}
-	return nil
+	return err
 }
 
 func (s *Store) itemsPath() string {
@@ -111,4 +134,12 @@ func (s *Store) itemsPath() string {
 
 func (s *Store) hasItem(items []Item, id string) bool {
 	return loreItemIndex(items, id) >= 0
+}
+
+// WithMutationLock coordinates an application-level resource transaction with
+// normal Lore mutations. The callback must not call this Store's mutators.
+func (s *Store) WithMutationLock(operation func() error) error {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+	return operation()
 }

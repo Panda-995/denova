@@ -1,8 +1,10 @@
 import { expect, type APIRequestContext, type APIResponse } from '@playwright/test'
+import { randomUUID } from 'node:crypto'
 
 export interface E2EBook {
   projectId: string
   workspace: string
+  title: string
 }
 
 export interface E2EStory {
@@ -39,15 +41,25 @@ async function expectSuccessful(response: APIResponse): Promise<void> {
   expect(response.ok(), failureDetails).toBe(true)
 }
 
+export async function enablePlugin(request: APIRequestContext, pluginId: string): Promise<void> {
+  // Tests explicitly activate packages after reinstalling retained releases.
+  const response = await request.patch(`/api/platform/manage/packages/plugin/${encodeURIComponent(pluginId)}`, {
+    data: { enabled: true, removed: false },
+  })
+  await expectSuccessful(response)
+}
+
 export async function createAndOpenBook(request: APIRequestContext, title: string): Promise<E2EBook> {
+  // Every call owns its Project, including repeats and retries on one backend.
+  const uniqueTitle = `${title} ${randomUUID().slice(0, 8)}`
   const created = await request.post('/api/books/create', {
-    data: { title, author: 'Denova E2E' },
+    data: { title: uniqueTitle, author: 'Denova E2E' },
   })
   await expectSuccessful(created)
   const body = await created.json() as { project_id: string; workspace: string }
   const switched = await request.post('/api/workspace/switch', { data: { path: body.workspace } })
   await expectSuccessful(switched)
-  return { projectId: body.project_id, workspace: body.workspace }
+  return { projectId: body.project_id, workspace: body.workspace, title: uniqueTitle }
 }
 
 export async function createProjectFile(

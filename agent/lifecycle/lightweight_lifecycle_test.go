@@ -1,0 +1,661 @@
+package lifecycle
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	agentengine "github.com/alfredxw/denova/agent/engine"
+	agentevent "github.com/alfredxw/denova/agent/lifecycle/event"
+	agentmodel "github.com/alfredxw/denova/agent/model"
+	agentstream "github.com/alfredxw/denova/agent/model/stream"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentsession "github.com/alfredxw/denova/agent/session"
+)
+
+type lifecycleModel struct {
+	mu        sync.Mutex
+	responses []*agentschema.Message
+	inputs    [][]*agentschema.Message
+	options   []*agentmodel.Options
+}
+
+type observingSessionStore struct {
+	agentsession.Store
+	mu    sync.Mutex
+	kinds []string
+}
+
+func newObservingSessionStore() *observingSessionStore {
+	return &observingSessionStore{Store: agentsession.Memory()}
+}
+
+func (store *observingSessionStore) Open(ctx context.Context, key agentsession.Key) (agentsession.Log, error) {
+	log, err := store.Store.Open(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	return &observingSessionLog{Log: log, store: store}, nil
+}
+
+func (store *observingSessionStore) count(kind string) int {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	count := 0
+	for _, candidate := range store.kinds {
+		if candidate == kind {
+			count++
+		}
+	}
+	return count
+}
+
+type observingSessionLog struct {
+	agentsession.Log
+	store *observingSessionStore
+}
+
+func (log *observingSessionLog) Append(ctx context.Context, expected agentsession.Revision, records ...agentsession.Record) (agentsession.Revision, error) {
+	revision, err := log.Log.Append(ctx, expected, records...)
+	if err != nil {
+		return revision, err
+	}
+	log.store.mu.Lock()
+	for _, record := range records {
+		log.store.kinds = append(log.store.kinds, record.Kind)
+	}
+	log.store.mu.Unlock()
+	return revision, nil
+}
+
+func (model *lifecycleModel) Generate(_ context.Context, input []*agentschema.Message, options ...agentmodel.ModelOption) (*agentschema.Message, error) {
+	return model.next(input, options...)
+}
+
+func (model *lifecycleModel) Stream(_ context.Context, input []*agentschema.Message, options ...agentmodel.ModelOption) (*agentstream.StreamReader[*agentschema.Message], error) {
+	message, err := model.next(input, options...)
+	if err != nil {
+		return nil, err
+	}
+	return agentstream.StreamReaderFromArray([]*agentschema.Message{message}), nil
+}
+
+func (model *lifecycleModel) next(input []*agentschema.Message, options ...agentmodel.ModelOption) (*agentschema.Message, error) {
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	model.inputs = append(model.inputs, agentschema.CloneMessages(input))
+	model.options = append(model.options, agentmodel.GetCommonOptions(&agentmodel.Options{}, options...))
+	if len(model.responses) == 0 {
+		return nil, errors.New("lifecycle model exhausted")
+	}
+	message := agentschema.CloneMessage(model.responses[0])
+	model.responses = model.responses[1:]
+	return message, nil
+}
+
+func (model *lifecycleModel) calls() [][]*agentschema.Message {
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	result := make([][]*agentschema.Message, len(model.inputs))
+	for index := range model.inputs {
+		result[index] = agentschema.CloneMessages(model.inputs[index])
+	}
+	return result
+}
+
+func TestLightweightSessionRetainsTranscriptAcrossRuns(t *testing.T) {
+	store := agentsession.Memory()
+	model := &lifecycleModel{responses: []*agentschema.Message{
+		agentschema.AssistantMessage("first answer", nil), agentschema.AssistantMessage("second answer", nil),
+	}}
+	owner, err := New(context.Background(), agentengine.Definition{Name: "test", Model: model}, WithSessionStore(store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := owner.Session(context.Background(), agentsession.Named("main"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := session.Run(context.Background(), agentschema.Text("first question"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, err := first.Wait(context.Background()); err != nil || result.Status != agentschema.ResultCompleted {
+		t.Fatalf("first result = %#v, err = %v", result, err)
+	}
+	if err := owner.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	owner, err = New(context.Background(), agentengine.Definition{Name: "test", Model: model}, WithSessionStore(store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Close(context.Background()) })
+	session, err = owner.Session(context.Background(), agentsession.Named("main"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.Run(context.Background(), agentschema.Text("second question"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, err := second.Wait(context.Background()); err != nil || result.Status != agentschema.ResultCompleted {
+		t.Fatalf("second result = %#v, err = %v", result, err)
+	}
+	calls := model.calls()
+	if len(calls) != 2 || len(calls[1]) != 3 || calls[1][0].Content != "first question" || calls[1][1].Content != "first answer" {
+		t.Fatalf("second model transcript = %#v", calls)
+	}
+}
+
+func TestRunMarksTruncatedTextIncompleteAndKeepsPartialOutput(t *testing.T) {
+	response := agentschema.AssistantMessage("partial answer", nil)
+	response.ResponseMeta = &agentschema.ResponseMeta{FinishReason: "length"}
+	model := &lifecycleModel{responses: []*agentschema.Message{response}}
+	owner, err := New(context.Background(), agentengine.Definition{Name: "test", Model: model}, WithSessionStore(agentsession.Memory()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Close(context.Background()) })
+	session, err := owner.Session(context.Background(), agentsession.Named("truncated"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := session.Run(context.Background(), agentschema.Text("answer fully"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, waitErr := run.Wait(context.Background())
+	if result.Status != agentschema.ResultIncomplete || result.Reason != agentschema.ModelOutputTruncatedReason || waitErr == nil {
+		t.Fatalf("truncated result = %#v, err = %v", result, waitErr)
+	}
+	snapshot, err := session.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.RecentRuns) != 1 || snapshot.RecentRuns[0].Output != "partial answer" {
+		t.Fatalf("truncated output was not retained: %#v", snapshot.RecentRuns)
+	}
+}
+
+func TestRunPreservesDistinctIncompleteModelReasons(t *testing.T) {
+	tests := []struct {
+		finishReason string
+		wantReason   string
+	}{
+		{finishReason: "model_context_window_exceeded", wantReason: agentschema.ModelContextWindowExceededReason},
+		{finishReason: "content_filter", wantReason: agentschema.ModelOutputFilteredReason},
+		{finishReason: "incomplete", wantReason: agentschema.ModelOutputIncompleteReason},
+	}
+	for _, test := range tests {
+		t.Run(test.finishReason, func(t *testing.T) {
+			response := agentschema.AssistantMessage("partial answer", nil)
+			response.ResponseMeta = &agentschema.ResponseMeta{FinishReason: test.finishReason}
+			model := &lifecycleModel{responses: []*agentschema.Message{response}}
+			owner, err := New(context.Background(), agentengine.Definition{Name: "test", Model: model}, WithSessionStore(agentsession.Memory()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = owner.Close(context.Background()) })
+			session, err := owner.Session(context.Background(), agentsession.Named(test.finishReason))
+			if err != nil {
+				t.Fatal(err)
+			}
+			run, err := session.Run(context.Background(), agentschema.Text("answer fully"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, waitErr := run.Wait(context.Background())
+			if result.Status != agentschema.ResultIncomplete || result.Reason != test.wantReason || waitErr == nil {
+				t.Fatalf("incomplete result = %#v, err = %v", result, waitErr)
+			}
+			snapshot, err := session.Snapshot(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(snapshot.RecentRuns) != 1 || snapshot.RecentRuns[0].Output != "partial answer" {
+				t.Fatalf("partial output was not retained: %#v", snapshot.RecentRuns)
+			}
+		})
+	}
+}
+
+func TestActiveRunDoesNotPersistPartialTranscript(t *testing.T) {
+	store := newObservingSessionStore()
+	model := &gatedLifecycleModel{started: make(chan struct{}), release: make(chan struct{})}
+	owner, err := New(context.Background(), agentengine.Definition{Name: "test", Model: model}, WithSessionStore(store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Close(context.Background()) })
+	session, err := owner.Session(context.Background(), agentsession.Named("partial-transcript"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := session.Run(context.Background(), agentschema.Text("wait"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-model.started
+	var persisted journalTranscript
+	if _, err := session.log.Replay(context.Background(), func(record agentsession.Record) error {
+		if record.Kind == sessionTranscriptRecord {
+			var transcript persistedSessionTranscript
+			if err := json.Unmarshal(record.Data, &transcript); err != nil {
+				return err
+			}
+			var err error
+			persisted, err = decodeJournalTranscript(transcript.EngineState)
+			return err
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted.Messages) != 1 || persisted.Messages[0].Role != agentschema.User {
+		t.Fatalf("checkpoint retained unaccepted model output: %#v", persisted.Messages)
+	}
+	close(model.release)
+	if _, err := run.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCloseSessionsClosesActiveChildSessionTree(t *testing.T) {
+	ctx := context.Background()
+	model := &gatedLifecycleModel{started: make(chan struct{}), release: make(chan struct{})}
+	owner, err := New(ctx, agentengine.Definition{Name: "test", Model: model}, WithSessionStore(agentsession.Memory()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Close(context.Background()) })
+	parent, err := owner.Session(ctx, agentsession.Named("parent"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	attributes, err := ChildSessionAttributes(parent.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	attributes["agent"] = "researcher"
+	child, err := owner.Session(ctx, agentsession.Key{Namespace: "task.researcher", ID: "child", Attributes: attributes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := child.Run(ctx, agentschema.Text("wait"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-model.started
+	childSelector := agentsession.Selector{Namespace: "task.researcher", Attributes: map[string]string{"agent": "researcher"}}
+	if count, err := owner.CountActiveSessions(ctx, childSelector); err != nil || count != 1 {
+		t.Fatalf("active child count = %d, err = %v", count, err)
+	}
+	parentKey := parent.Key()
+	if err := owner.CloseSessions(ctx, agentsession.Selector{Namespace: parentKey.Namespace, ID: parentKey.ID}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := run.Wait(ctx)
+	if err != nil || result.Status != agentschema.ResultAborted {
+		t.Fatalf("closed child result = %#v, err = %v", result, err)
+	}
+	if count, err := owner.CountActiveSessions(ctx, childSelector); err != nil || count != 0 {
+		t.Fatalf("active child count after close = %d, err = %v", count, err)
+	}
+}
+
+type gatedLifecycleModel struct {
+	mu      sync.Mutex
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+	calls   int
+}
+
+func (model *gatedLifecycleModel) wait(ctx context.Context) (*agentschema.Message, error) {
+	model.mu.Lock()
+	model.calls++
+	model.mu.Unlock()
+	model.once.Do(func() { close(model.started) })
+	select {
+	case <-model.release:
+		return agentschema.AssistantMessage("done", nil), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (model *gatedLifecycleModel) Generate(ctx context.Context, _ []*agentschema.Message, _ ...agentmodel.ModelOption) (*agentschema.Message, error) {
+	return model.wait(ctx)
+}
+
+func (model *gatedLifecycleModel) Stream(ctx context.Context, _ []*agentschema.Message, _ ...agentmodel.ModelOption) (*agentstream.StreamReader[*agentschema.Message], error) {
+	message, err := model.wait(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return agentstream.StreamReaderFromArray([]*agentschema.Message{message}), nil
+}
+
+func (model *gatedLifecycleModel) callCount() int {
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	return model.calls
+}
+
+func TestSessionSnapshotProjectsOnlyLiveCoordination(t *testing.T) {
+	model := &gatedLifecycleModel{started: make(chan struct{}), release: make(chan struct{})}
+	owner, err := New(context.Background(), agentengine.Definition{Name: "test", Model: model})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Close(context.Background()) })
+	session, err := owner.Session(context.Background(), agentsession.Named("main"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := session.Run(context.Background(), agentschema.Text("first"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-model.started
+	queued, err := session.Queue(context.Background(), agentschema.Text("same run"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := testFollowUpRun(session, agentschema.Text("next run"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.handleEngineEvent(agentengine.ToolStarted{
+		CallID: "tool-1", Name: "read", ExecutionAuthorized: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := session.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.QueuedRuns) != 2 || snapshot.QueuedRuns[0].CommandID != queued.ID() ||
+		snapshot.QueuedRuns[0].ID != run.ID() || snapshot.QueuedRuns[1].ID != next.ID() {
+		t.Fatalf("queued runs = %#v", snapshot.QueuedRuns)
+	}
+	if len(snapshot.OpenTools) != 1 || snapshot.OpenTools[0].CallID != "tool-1" || snapshot.OpenTools[0].RunID != run.ID() {
+		t.Fatalf("open tools = %#v", snapshot.OpenTools)
+	}
+	if err := run.handleEngineEvent(agentengine.ToolFinished{CallID: "tool-1", Name: "read"}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = session.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.OpenTools) != 0 {
+		t.Fatalf("finished tool remained open: %#v", snapshot.OpenTools)
+	}
+	close(model.release)
+	if _, err := run.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := next.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunStartedAtBeginsOnlyWhenAQueuedRunActivates(t *testing.T) {
+	model := &gatedLifecycleModel{started: make(chan struct{}), release: make(chan struct{})}
+	owner, err := New(context.Background(), agentengine.Definition{Name: "test", Model: model})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Close(context.Background()) })
+	session, err := owner.Session(context.Background(), agentsession.Named("run-started-at"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := session.Run(context.Background(), agentschema.Text("active"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-model.started
+	if active.startedAtValue().IsZero() {
+		t.Fatal("active Run has no activation timestamp")
+	}
+	queued, err := testFollowUpRun(session, agentschema.Text("queued"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !queued.startedAtValue().IsZero() {
+		t.Fatalf("queued Run started during wait: %s", queued.startedAtValue())
+	}
+
+	close(model.release)
+	if _, err := active.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queued.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	startedAt := queued.startedAtValue()
+	if startedAt.IsZero() {
+		t.Fatal("queued Run did not record its activation timestamp")
+	}
+	for event := range queued.Events() {
+		if started, ok := event.Payload.(agentevent.RunStarted); ok {
+			if !started.StartedAt.Equal(startedAt) {
+				t.Fatalf("RunStarted timestamp = %s, want %s", started.StartedAt, startedAt)
+			}
+			return
+		}
+	}
+	t.Fatal("queued Run did not publish RunStarted")
+}
+
+func TestInspectUsesUTCStartedAtLikeAdmittedRuns(t *testing.T) {
+	owner, err := New(context.Background(), agentengine.Definition{Name: "test", Model: &lifecycleModel{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Close(context.Background()) })
+	session, err := owner.Session(context.Background(), agentsession.Named("inspection-started-at"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := session.Inspect(context.Background(), agentschema.Text("inspect"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.Run.StartedAt.Location() != time.UTC {
+		t.Fatalf("inspection StartedAt location = %s, want UTC", inspection.Run.StartedAt.Location())
+	}
+}
+
+func TestAbortingPendingRunDoesNotStartItsSuccessor(t *testing.T) {
+	model := &gatedLifecycleModel{started: make(chan struct{}), release: make(chan struct{})}
+	owner, err := New(context.Background(), agentengine.Definition{Name: "test", Model: model})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Close(context.Background()) })
+	session, err := owner.Session(context.Background(), agentsession.Named("pending-abort"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := session.Run(context.Background(), agentschema.Text("active"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-model.started
+	pending, err := testFollowUpRun(session, agentschema.Text("pending"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	successor, err := testFollowUpRun(session, agentschema.Text("successor"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pending.Abort(context.Background(), agentevent.AbortRequest{Reason: "no longer needed"}); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := pending.Wait(context.Background()); err != nil || result.Status != agentschema.ResultAborted || result.Reason != "no longer needed" {
+		t.Fatalf("pending result = %#v, err = %v", result, err)
+	}
+	if calls := model.callCount(); calls != 1 {
+		t.Fatalf("successor started before active Run settled: model calls = %d", calls)
+	}
+	close(model.release)
+	if _, err := active.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := successor.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAbortPreservesCallerReason(t *testing.T) {
+	model := &gatedLifecycleModel{started: make(chan struct{}), release: make(chan struct{})}
+	owner, err := New(context.Background(), agentengine.Definition{Name: "test", Model: model})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Close(context.Background()) })
+	session, err := owner.Session(context.Background(), agentsession.Named("abort-reason"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := session.Run(context.Background(), agentschema.Text("wait"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-model.started
+	if _, err := run.Abort(context.Background(), agentevent.AbortRequest{Reason: "cancelled by user"}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := run.Wait(context.Background())
+	if err != nil || result.Status != agentschema.ResultAborted || result.Reason != "cancelled by user" {
+		t.Fatalf("result = %#v, err = %v", result, err)
+	}
+}
+
+type activeStreamingLifecycleModel struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (*activeStreamingLifecycleModel) Generate(context.Context, []*agentschema.Message, ...agentmodel.ModelOption) (*agentschema.Message, error) {
+	return nil, errors.New("unexpected Generate")
+}
+
+func (model *activeStreamingLifecycleModel) Stream(ctx context.Context, _ []*agentschema.Message, _ ...agentmodel.ModelOption) (*agentstream.StreamReader[*agentschema.Message], error) {
+	first := true
+	return agentstream.StreamReaderWithConvert(agentstream.StreamReaderFromArray([]bool{true, false}), func(bool) (*agentschema.Message, error) {
+		if first {
+			first = false
+			model.once.Do(func() { close(model.started) })
+			return agentschema.AssistantMessage("partial", nil), nil
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}), nil
+}
+
+func TestAbortWhileStreamingPreservesCallerReason(t *testing.T) {
+	model := &activeStreamingLifecycleModel{started: make(chan struct{})}
+	owner, err := New(context.Background(), agentengine.Definition{Name: "test", Model: model})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Close(context.Background()) })
+	session, err := owner.Session(context.Background(), agentsession.Named("abort-stream-reason"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := session.Run(context.Background(), agentschema.Text("stream"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-model.started
+	if _, err := run.Abort(context.Background(), agentevent.AbortRequest{Reason: "user_requested"}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := run.Wait(context.Background())
+	if err != nil || result.Status != agentschema.ResultAborted || result.Reason != "user_requested" {
+		t.Fatalf("result = %#v, err = %v", result, err)
+	}
+}
+
+func TestCancelledControlContextDoesNotMutateRun(t *testing.T) {
+	model := &gatedLifecycleModel{started: make(chan struct{}), release: make(chan struct{})}
+	owner, err := New(context.Background(), agentengine.Definition{Name: "test", Model: model})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Close(context.Background()) })
+	session, err := owner.Session(context.Background(), agentsession.Named("cancelled-controls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := session.Run(context.Background(), agentschema.Text("wait"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-model.started
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := session.Queue(cancelled, agentschema.Text("queue")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Queue error = %v", err)
+	}
+	if _, err := run.Steer(cancelled, agentschema.Text("steer")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Steer error = %v", err)
+	}
+	if _, err := session.FollowUp(cancelled, agentschema.Text("follow up")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("FollowUp error = %v", err)
+	}
+	if _, err := run.Abort(cancelled, agentevent.AbortRequest{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Abort error = %v", err)
+	}
+	if snapshot, err := session.Snapshot(context.Background()); err != nil {
+		t.Fatal(err)
+	} else if len(snapshot.QueuedRuns) != 0 {
+		t.Fatalf("cancelled commands changed queue: %#v", snapshot.QueuedRuns)
+	}
+
+	queued, err := session.Queue(nil, agentschema.Text("accepted"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queued.Cancel(cancelled, agentevent.QueueControlRequest{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Cancel error = %v", err)
+	}
+	if _, err := queued.Interrupt(cancelled, agentevent.QueueControlRequest{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	if snapshot, err := session.Snapshot(context.Background()); err != nil {
+		t.Fatal(err)
+	} else if len(snapshot.QueuedRuns) != 1 || snapshot.QueuedRuns[0].Delivery != agentevent.DeliveryFollowUp {
+		t.Fatalf("cancelled queue controls changed queue: %#v", snapshot.QueuedRuns)
+	}
+	if _, err := queued.Cancel(nil, agentevent.QueueControlRequest{}); err != nil {
+		t.Fatal(err)
+	}
+
+	close(model.release)
+	if _, err := run.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testFollowUpRun(session *Session, input agentschema.Input) (*Run, error) {
+	receipt, err := session.FollowUp(context.Background(), input)
+	if err != nil {
+		return nil, err
+	}
+	run, _, err := session.AttachRun(context.Background(), receipt.RunID)
+	return run, err
+}

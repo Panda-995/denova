@@ -1,8 +1,10 @@
+import { ResourceExchangeActions } from '@/features/market/ResourceExchangeActions'
+import type { ResourceKind } from '@/features/market/api'
 import { closeMobilePanes } from '@/components/layout/mobile-pane-events'
 import { useEffect, useRef, useState } from 'react'
 import { Bot, Compass, Database, Dice5, RotateCcw, ScrollText, SlidersHorizontal, Sparkles, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { ConfigManagerChat } from '@/components/Chat/ConfigManagerChat'
 import { ConfigManagerToggle } from '@/components/Chat/ConfigManagerToggle'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
@@ -43,7 +45,7 @@ import type { ActorStateModule, EventPackageModule, GamePlanningTemplate, ImageP
 import { PresetResourcePane } from './PresetResourcePane'
 import { PresetDirectorySidebar } from './PresetDirectorySidebar'
 import { buildPresetDirectorySections, presetDirectoryEntryId } from './preset-directory-sections'
-import { applyPresetDirectoryOrder, usePresetDirectoryOrder } from './use-preset-directory-order'
+import { applyResourceDirectoryOrder, useResourceDirectoryOrder } from '@/components/resource-directory/use-resource-directory-order'
 import { usePresetDraftSync, usePresetResources } from './use-preset-resources'
 import { usePresetSelection } from './use-preset-selection'
 import { createPresetConflictResolver, usePresetResourceAutosave } from './usePresetResourceAutosave'
@@ -72,6 +74,7 @@ interface AutosaveController {
 const actionButtonClassName = 'gap-1.5 border-[var(--preset-line)] bg-[var(--preset-raised)] text-[var(--nova-text-muted)] shadow-none hover:bg-[var(--nova-hover)] hover:text-[var(--nova-text)]'
 const iconActionClassName = 'border-[var(--preset-line)] bg-transparent text-[var(--nova-text-muted)] shadow-none hover:border-[var(--nova-danger-border)] hover:bg-[var(--nova-danger-bg)] hover:text-[var(--nova-danger)]'
 const PRESET_CONFIG_INVALID_TOAST_ID = 'preset-config-invalid'
+const exchangeKinds: Record<PresetResourceKind, ResourceKind> = { teller: 'preset.narrative', event: 'preset.events', rule: 'preset.rules', 'actor-state': 'preset.actor_state', director: 'preset.game_planning', image: 'preset.image' }
 
 export function PresetSettingsPanel({
   projectId,
@@ -150,7 +153,7 @@ export function PresetSettingsPanel({
     refreshRuleSystems,
     refreshActorStates,
   } = resources
-  const presetDirectoryOrder = usePresetDirectoryOrder()
+  const presetDirectoryOrder = useResourceDirectoryOrder('nova.preset-directory-order')
 
   function reportPresetError(scope: string, fallback: string, error: unknown): void {
     console.warn(scope, error)
@@ -581,7 +584,7 @@ export function PresetSettingsPanel({
   const title = presetEditorTitle(presetResourceKind, presetDrafts, t)
   const subtitle = presetEditorSubtitle(presetResourceKind, presetDrafts, t)
 
-  const presetDirectorySections = applyPresetDirectoryOrder(buildPresetDirectorySections({
+  const presetDirectorySections = applyResourceDirectoryOrder(buildPresetDirectorySections({
     lists: { tellers, storyDirectors, imagePresets, eventPackages, ruleSystems, actorStates },
     onCreateKind: (kind) => void createPresetResource(kind),
     t,
@@ -690,6 +693,7 @@ export function PresetSettingsPanel({
               onSaveShortcut={flushActivePresetAutosave}
               actions={(
                 <>
+                  <ResourceExchangeActions projectID={projectId} resources={currentActivePresetId(presetResourceKind) ? [{ kind: exchangeKinds[presetResourceKind], scope: 'global', id: currentActivePresetId(presetResourceKind) }] : undefined} beforeOpen={flushPresetResourceAutoSave} onImported={async () => { await Promise.all([refreshTellers(), refreshEventPackages(), refreshRuleSystems(), refreshActorStates(), refreshStoryDirectors(), refreshImagePresets()]) }} />
                   {activeDraft ? (
                     <AutosaveStatusIndicator
                       status={activeAutosave.status}

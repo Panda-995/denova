@@ -32,7 +32,7 @@ describe('OverviewView', () => {
   it('keeps state compact and opens the shared full-state view', () => {
     render(<OverviewView snapshot={snapshot} planningEnabled={false} />)
 
-    expect(screen.getByText('本回合 1 项变化')).toBeInTheDocument()
+    expect(screen.getByText('1 项变化')).toBeInTheDocument()
     expect(screen.getByText('1 位角色 · 1 项世界状态')).toBeInTheDocument()
     expect(screen.queryByLabelText('选择状态展示方式')).not.toBeInTheDocument()
 

@@ -9,10 +9,11 @@ import (
 	"strings"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/internal/agents/conversationjournal"
+	externaljournal "denova/internal/agents/runtime/external/journal"
 	"denova/internal/agents/sessionjournal"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func loadSession(filePath string) (*Session, error) {
@@ -70,7 +71,7 @@ func loadSession(filePath string) (*Session, error) {
 		journalIncarnation: generation, journalLineCount: int(journal.Head().Cursor),
 		journal: journal, projection: projection,
 		messageBaseIndex: messageBase, messageCount: messageBase,
-		messages: make([]*agent.Message, 0), records: make([]historyRecord, 0),
+		messages: make([]*agentschema.Message, 0), records: make([]historyRecord, 0),
 		partialMaterialization: true,
 	}
 	if projection.PendingInterrupt != nil && projection.PendingInterruptCursor < startCursor {
@@ -90,18 +91,23 @@ func loadSession(filePath string) (*Session, error) {
 	// canonical transcript is bounded by logical messages. Read older retained
 	// message transactions directly so a tool-heavy turn cannot evict its user
 	// input merely because it produced many display updates.
-	for _, locator := range priorMessageTransactions {
-		messageRecords, readErr := journal.ReadRange(context.Background(), conversationjournal.Range{
-			After: locator.Cursor - 1, Through: locator.Cursor,
-		})
+	// One forward scan reads them all; a read per transaction rescanned the
+	// journal from its sparse anchor every time.
+	if len(priorMessageTransactions) > 0 {
+		cursors := make([]conversationjournal.Cursor, 0, len(priorMessageTransactions))
+		for _, locator := range priorMessageTransactions {
+			cursors = append(cursors, locator.Cursor)
+		}
+		messageRecords, readErr := journal.ReadTransactions(context.Background(), cursors)
 		if readErr != nil {
-			return nil, fmt.Errorf("read session canonical message transaction %s cursor %d: %w", filePath, locator.Cursor, readErr)
+			return nil, fmt.Errorf("read session canonical message transactions %s: %w", filePath, readErr)
 		}
-		if len(messageRecords) != 1 || messageRecords[0].Location.Cursor != locator.Cursor {
-			return nil, fmt.Errorf("session canonical message transaction missing %s cursor %d", filePath, locator.Cursor)
-		}
-		if err := appendConversationRecord(sess, messageRecords[0]); err != nil {
-			return nil, fmt.Errorf("restore session canonical message transaction %s cursor %d: %w", filePath, locator.Cursor, err)
+		// Canonical input/context and its Agent receipt share one transaction.
+		// Restore every payload, just as the normal recent-window path does.
+		for _, record := range messageRecords {
+			if err := appendConversationRecord(sess, record); err != nil {
+				return nil, fmt.Errorf("restore session canonical message transaction %s cursor %d: %w", filePath, record.Location.Cursor, err)
+			}
 		}
 	}
 	records, err := journal.ReadRange(context.Background(), conversationjournal.Range{After: startCursor - 1})
@@ -211,6 +217,9 @@ func appendRecordLine(sess *Session, line []byte, lineNumber int) error {
 		return err
 	}
 	switch typed.Type {
+	case platformRecordType:
+		_, err := decodePlatformRecord(line)
+		return err
 	case historyTypeClear:
 		return appendClearRecordLine(sess, line)
 	case historyTypeInterrupt:
@@ -221,12 +230,14 @@ func appendRecordLine(sess *Session, line []byte, lineNumber int) error {
 		return appendMessageRecordLine(sess, line, typed.Type)
 	case historyTypeContextBatch:
 		return appendContextBatchRecordLine(sess, line)
-	case historyTypeSessionPatch:
+	case historyTypeSessionPatch, historyTypeRuntimePatch:
 		return applySessionPatchLine(sess, line)
 	case historyTypeDisplayPatch:
 		return applyDisplayPatchLine(sess, line)
 	case historyTypeInterruptionPatch:
 		return applyInterruptionPatchLine(sess, line)
+	case externaljournal.RecordType:
+		return appendExternalRecordLine(sess, line, lineNumber)
 	case sessionjournal.RecordType:
 		return nil
 	case "":

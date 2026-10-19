@@ -4,17 +4,18 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"unicode/utf8"
-
-	agent "github.com/alfredxw/denova/agent"
 
 	"denova/config"
 	agentcontext "denova/internal/agents/context"
 	agentcompaction "denova/internal/agents/context/compaction"
+	"denova/internal/agents/modelio"
 	"denova/internal/agents/prompts"
 	agentrun "denova/internal/agents/run"
 	"denova/internal/book"
 	"denova/internal/interactive"
+
+	agentmodel "github.com/alfredxw/denova/agent/model"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 type ContextAnalysis struct {
@@ -31,22 +32,20 @@ type ContextAnalysis struct {
 	ReservedToolResultTokens int                        `json:"reserved_tool_result_tokens"`
 	ContextWindowTokens      int                        `json:"context_window_tokens"`
 	ContextUsageRatio        float64                    `json:"context_usage_ratio"`
-	CompactionEpoch          int                        `json:"compaction_epoch,omitempty"`
+	CompactionRevision       uint64                     `json:"compaction_revision,omitempty"`
 	CompactionActive         bool                       `json:"compaction_active,omitempty"`
 	WouldCompact             bool                       `json:"would_compact,omitempty"`
 	Compaction               *ContextAnalysisCompaction `json:"compaction,omitempty"`
 }
 
 type ContextAnalysisCompaction struct {
-	ID                 string  `json:"id,omitempty"`
-	Epoch              int     `json:"epoch"`
-	Summary            string  `json:"summary"`
-	TokensBefore       int     `json:"tokens_before"`
-	TokensAfter        int     `json:"tokens_after"`
-	TargetRatio        float64 `json:"target_ratio,omitempty"`
-	SourceMessageCount int     `json:"source_message_count,omitempty"`
-	SourceTurnCount    int     `json:"source_turn_count,omitempty"`
-	Removable          bool    `json:"removable"`
+	ID                 string `json:"id,omitempty"`
+	Revision           uint64 `json:"revision"`
+	Summary            string `json:"summary"`
+	TokensBefore       int    `json:"tokens_before"`
+	TokensAfter        int    `json:"tokens_after"`
+	SourceMessageCount int    `json:"source_message_count,omitempty"`
+	Removable          bool   `json:"removable"`
 }
 
 type ContextAnalysisPart struct {
@@ -60,7 +59,8 @@ type ContextAnalysisPart struct {
 	Content    string `json:"content"`
 	Note       string `json:"note,omitempty"`
 	Bytes      int    `json:"bytes"`
-	Chars      int    `json:"chars"`
+	// TokenEstimate measures the displayed text, excluding request framing and image pixels.
+	TokenEstimate int `json:"token_estimate"`
 	// Parts decomposes provider-neutral message fields and safe opaque-state
 	// metadata for diagnostics. Content remains the copyable message body.
 	Parts []ContextAnalysisPart `json:"parts,omitempty"`
@@ -81,21 +81,21 @@ type ContextAnalysisPartInput struct {
 func NewContextAnalysisPart(in ContextAnalysisPartInput) ContextAnalysisPart {
 	content := in.Content
 	return ContextAnalysisPart{
-		ID:         strings.TrimSpace(in.ID),
-		Source:     strings.TrimSpace(in.Source),
-		Title:      strings.TrimSpace(in.Title),
-		Role:       strings.TrimSpace(in.Role),
-		Kind:       strings.TrimSpace(in.Kind),
-		ToolName:   strings.TrimSpace(in.ToolName),
-		ToolCallID: strings.TrimSpace(in.ToolCallID),
-		Content:    content,
-		Note:       strings.TrimSpace(in.Note),
-		Bytes:      len(content),
-		Chars:      utf8.RuneCountInString(content),
+		ID:            strings.TrimSpace(in.ID),
+		Source:        strings.TrimSpace(in.Source),
+		Title:         strings.TrimSpace(in.Title),
+		Role:          strings.TrimSpace(in.Role),
+		Kind:          strings.TrimSpace(in.Kind),
+		ToolName:      strings.TrimSpace(in.ToolName),
+		ToolCallID:    strings.TrimSpace(in.ToolCallID),
+		Content:       content,
+		Note:          strings.TrimSpace(in.Note),
+		Bytes:         len(content),
+		TokenEstimate: agentmodel.EstimateTextTokens(content),
 	}
 }
 
-func contextAnalysisPartFromMessage(id, source, title string, msg *agent.Message) ContextAnalysisPart {
+func contextAnalysisPartFromMessage(id, source, title string, msg *agentschema.Message) ContextAnalysisPart {
 	if msg == nil {
 		return NewContextAnalysisPart(ContextAnalysisPartInput{ID: id, Source: source, Title: title})
 	}
@@ -108,9 +108,9 @@ func contextAnalysisPartFromMessage(id, source, title string, msg *agent.Message
 		Content: msg.Content,
 	}
 	switch msg.Role {
-	case agent.User:
+	case agentschema.User:
 		input.Kind = "body"
-	case agent.Assistant:
+	case agentschema.Assistant:
 		input.Kind = "body"
 		if len(msg.ToolCalls) > 0 {
 			input.Kind = "tool_call"
@@ -124,7 +124,7 @@ func contextAnalysisPartFromMessage(id, source, title string, msg *agent.Message
 				input.Content = strings.TrimRight(msg.Content, "\n") + "\n\n" + contextAnalysisToolCallsContent(msg.ToolCalls)
 			}
 		}
-	case agent.ToolRole:
+	case agentschema.ToolRole:
 		input.Kind = "tool_result"
 		input.ToolName = msg.ToolName
 		input.ToolCallID = msg.ToolCallID
@@ -140,7 +140,7 @@ func contextAnalysisPartFromMessage(id, source, title string, msg *agent.Message
 	return part
 }
 
-func contextAnalysisToolCallNames(calls []agent.ToolCall) string {
+func contextAnalysisToolCallNames(calls []agentschema.ToolCall) string {
 	names := make([]string, 0, len(calls))
 	seen := make(map[string]bool, len(calls))
 	for _, call := range calls {
@@ -154,7 +154,7 @@ func contextAnalysisToolCallNames(calls []agent.ToolCall) string {
 	return strings.Join(names, ", ")
 }
 
-func contextAnalysisToolCallIDs(calls []agent.ToolCall) string {
+func contextAnalysisToolCallIDs(calls []agentschema.ToolCall) string {
 	ids := make([]string, 0, len(calls))
 	for _, call := range calls {
 		if id := strings.TrimSpace(call.ID); id != "" {
@@ -164,7 +164,7 @@ func contextAnalysisToolCallIDs(calls []agent.ToolCall) string {
 	return strings.Join(ids, ", ")
 }
 
-func contextAnalysisToolCallsContent(calls []agent.ToolCall) string {
+func contextAnalysisToolCallsContent(calls []agentschema.ToolCall) string {
 	if len(calls) == 0 {
 		return ""
 	}
@@ -221,7 +221,7 @@ func BuildInteractiveStoryContextAnalysis(cfg *config.Config, state *book.State,
 	}
 	messages := turn.ModelContext.Messages
 	contextMessages := make([]ContextAnalysisPart, 0, len(messages))
-	compactionEpoch := 0
+	compactionRevision := uint64(0)
 	for i, msg := range messages {
 		if msg == nil {
 			continue
@@ -232,7 +232,7 @@ func BuildInteractiveStoryContextAnalysis(cfg *config.Config, state *book.State,
 		case agentcontext.IsCompactionSummaryMessage(msg):
 			source = "上下文压缩"
 			title = "模型可见历史检查点"
-			compactionEpoch = parseCompactionEpoch(msg.Content)
+			compactionRevision = parseCompactionRevision(msg.Content)
 		case i == len(messages)-1:
 			source = "本轮互动指令"
 			title = "本轮互动指令与动态上下文"
@@ -243,7 +243,10 @@ func BuildInteractiveStoryContextAnalysis(cfg *config.Config, state *book.State,
 		}
 		contextMessages = append(contextMessages, part)
 	}
-	usage := analyzeContextUsage(cfg, config.AgentKindInteractiveStory, systemPrompt, messages, teller.ReplyTargetChars)
+	usage, err := analyzeContextUsage(cfg, config.AgentKindInteractiveStory, systemPrompt, messages, teller.ReplyTargetChars)
+	if err != nil {
+		return ContextAnalysis{}, err
+	}
 	return ContextAnalysis{
 		AgentKind:                config.AgentKindInteractiveStory,
 		Mode:                     "interactive",
@@ -258,18 +261,18 @@ func BuildInteractiveStoryContextAnalysis(cfg *config.Config, state *book.State,
 		ReservedToolResultTokens: usage.toolResultReserve,
 		ContextWindowTokens:      usage.window,
 		ContextUsageRatio:        usage.ratio,
-		CompactionEpoch:          interactiveCompactionEpoch(compaction, compactionEpoch),
+		CompactionRevision:       interactiveCompactionRevision(compaction, compactionRevision),
 		CompactionActive:         compaction != nil && strings.TrimSpace(compaction.Summary) != "",
 		WouldCompact:             usage.wouldCompact,
 		Compaction:               contextAnalysisCompactionFromInteractive(compaction),
 	}, nil
 }
 
-func interactiveCompactionEpoch(compaction *interactive.ContextCompactionProjection, fallback int) int {
+func interactiveCompactionRevision(compaction *interactive.ContextCompactionProjection, fallback uint64) uint64 {
 	if compaction == nil {
 		return fallback
 	}
-	return compaction.Epoch
+	return compaction.Revision
 }
 
 func contextAnalysisCompactionFromInteractive(compaction *interactive.ContextCompactionProjection) *ContextAnalysisCompaction {
@@ -277,14 +280,13 @@ func contextAnalysisCompactionFromInteractive(compaction *interactive.ContextCom
 		return nil
 	}
 	return &ContextAnalysisCompaction{
-		ID:              compaction.ID,
-		Epoch:           compaction.Epoch,
-		Summary:         compaction.Summary,
-		TokensBefore:    compaction.TokensBefore,
-		TokensAfter:     compaction.TokensAfter,
-		TargetRatio:     compaction.TargetRatio,
-		SourceTurnCount: compaction.SourceTurnCount,
-		Removable:       true,
+		ID:                 compaction.ID,
+		Revision:           compaction.Revision,
+		Summary:            compaction.Summary,
+		TokensBefore:       compaction.TokensBefore,
+		TokensAfter:        compaction.TokensAfter,
+		SourceMessageCount: compaction.SourceMessageCount,
+		Removable:          true,
 	}
 }
 
@@ -298,18 +300,26 @@ type contextUsageAnalysis struct {
 	wouldCompact      bool
 }
 
-func analyzeContextUsage(cfg *config.Config, agentKind, systemPrompt string, messages []*agent.Message, expectedOutputChars int) contextUsageAnalysis {
+func analyzeContextUsage(cfg *config.Config, agentKind, systemPrompt string, messages []*agentschema.Message, expectedOutputChars int) (contextUsageAnalysis, error) {
 	modelSettings := config.ResolveAgentModel(cfg, agentKind)
 	contextSettings := config.ResolveAgentContext(cfg, agentKind)
-	estimatedMessages := make([]*agent.Message, 0, len(messages)+1)
+	estimatedMessages := make([]*agentschema.Message, 0, len(messages)+1)
 	if strings.TrimSpace(systemPrompt) != "" {
-		estimatedMessages = append(estimatedMessages, agent.SystemMessage(systemPrompt))
+		estimatedMessages = append(estimatedMessages, agentschema.SystemMessage(systemPrompt))
 	}
 	estimatedMessages = append(estimatedMessages, messages...)
-	tokens := agentcontext.EstimateTokens(estimatedMessages, nil)
+	model, err := modelio.ConfigFromResolved(modelSettings)
+	if err != nil {
+		return contextUsageAnalysis{}, err
+	}
+	size, err := model.InputEstimator().Estimate(estimatedMessages, nil)
+	if err != nil {
+		return contextUsageAnalysis{}, err
+	}
+	tokens := size.Tokens
 	completionReserve, toolResultReserve := agentcompaction.EstimateProjectionReserves(cfg, agentKind, expectedOutputChars)
 	if maxTokens := modelSettings.MaxTokens; maxTokens != nil {
-		totalReserve := agent.CapacityAwareTokenReserve(
+		totalReserve := agentmodel.CapacityAwareTokenReserve(
 			completionReserve+toolResultReserve, *maxTokens,
 			modelSettings.ContextWindowTokens, contextSettings.CompactionThreshold,
 		)
@@ -326,15 +336,15 @@ func analyzeContextUsage(cfg *config.Config, agentKind, systemPrompt string, mes
 		usage.ratio = float64(usage.projectedTokens) / float64(usage.window)
 		usage.wouldCompact = contextSettings.CompactionEnabled && usage.ratio >= contextSettings.CompactionThreshold
 	}
-	return usage
+	return usage, nil
 }
 
-func parseCompactionEpoch(content string) int {
+func parseCompactionRevision(content string) uint64 {
 	content = strings.TrimSpace(content)
 	if !strings.HasPrefix(content, agentcontext.CompactionSummaryPrefix) {
 		return 0
 	}
-	var epoch int
+	var epoch uint64
 	if _, err := fmt.Sscanf(content, agentcontext.CompactionSummaryPrefix+" epoch=%d", &epoch); err != nil {
 		return 0
 	}

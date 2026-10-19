@@ -1,59 +1,45 @@
-// Package webfs optionally embeds the built frontend so the Denova binary can
-// serve it without a web/ directory on disk.
-//
-// Build with the "embedweb" tag (after the frontend has been built and copied
-// to ./dist, which scripts/build.sh does) to embed the assets:
-//
-//	pnpm --dir web build && cp -r web/dist internal/webfs/dist && go build -tags embedweb ./cmd/denova
-//
-// Without the tag (the default, e.g. for development), no assets are embedded
-// and the app serves the frontend from an on-disk web directory as before.
+// Package webfs serves the frontend embedded by release builds. Build with the
+// embedweb tag after copying web/dist to internal/webfs/dist. Development builds
+// omit the tag and continue to serve disk assets or Vite.
 package webfs
 
 import (
 	"io/fs"
-	"os"
-	"path/filepath"
+	"net/http"
+	"path"
+	"strings"
 )
 
-// HasEmbedded reports whether the binary was built with embedded web assets.
-func HasEmbedded() bool { return hasEmbedded }
-
-// ExtractEmbedded writes the embedded assets to a fresh temp directory and
-// returns its path, so the existing file-based static handler can serve them.
-// Returns "" when no assets are embedded.
-func ExtractEmbedded() (string, error) {
+// Handler serves this binary's frontend directly, without extracting files or
+// consulting the working directory. Development builds return nil.
+func Handler() http.Handler {
 	if !hasEmbedded {
-		return "", nil
+		return nil
 	}
-	root, err := os.MkdirTemp("", "denova-web-*")
+	tree, err := fs.Sub(embeddedFS, "dist")
 	if err != nil {
-		return "", err
+		// The embedweb build contains this fixed directory.
+		panic(err)
 	}
-	// //go:embed all:dist keeps the "dist/" prefix in the tree; strip it so the
-	// extracted files land at root/index.html (what the static handler expects).
-	tree, subErr := fs.Sub(embeddedFS, "dist")
-	if subErr != nil {
-		os.RemoveAll(root)
-		return "", subErr
-	}
-	walkErr := fs.WalkDir(tree, ".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	return spaHandler(tree)
+}
+
+func spaHandler(tree fs.FS) http.Handler {
+	files := http.FileServerFS(tree)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.NotFound(w, r)
+			return
 		}
-		target := filepath.Join(root, path)
-		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
+		name := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+		info, err := fs.Stat(tree, name)
+		if err != nil || info.IsDir() || name == "index.html" {
+			// Client-side routes share the SPA shell; directories are never listed.
+			// Revalidate the shell so a browser cannot retain the previous build.
+			w.Header().Set("Cache-Control", "no-cache")
+			r = r.Clone(r.Context())
+			r.URL.Path = "/"
 		}
-		data, readErr := fs.ReadFile(tree, path)
-		if readErr != nil {
-			return readErr
-		}
-		return os.WriteFile(target, data, 0o644)
+		files.ServeHTTP(w, r)
 	})
-	if walkErr != nil {
-		os.RemoveAll(root)
-		return "", walkErr
-	}
-	return root, nil
 }

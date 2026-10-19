@@ -8,8 +8,13 @@ import (
 
 	agentrun "denova/internal/agents/run"
 
-	agent "github.com/alfredxw/denova/agent"
+	"github.com/alfredxw/denova/agent"
+	agentevent "github.com/alfredxw/denova/agent/lifecycle/event"
+	agentinteraction "github.com/alfredxw/denova/agent/lifecycle/interaction"
+	agenttrace "github.com/alfredxw/denova/agent/lifecycle/trace"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 	agentsession "github.com/alfredxw/denova/agent/session"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
 )
 
 // Lifecycle-facing aliases keep application packages on Denova's adapter
@@ -18,31 +23,31 @@ type Agent = agent.Agent
 type Session = agent.Session
 type Run = agent.Run
 type Input = agent.Input
-type Event = agent.Event
+type Event = agentevent.Event
 type Result = agent.Result
-type Snapshot = agent.SessionSnapshot
-type Observation = agent.Observation
-type InteractionResponse = agent.InteractionResponse
-type SessionKey = agent.SessionKey
-type SessionSelector = agent.SessionSelector
+type Snapshot = agentevent.SessionSnapshot
+type Observation = agentevent.Observation
+type InteractionResponse = agentinteraction.InteractionResponse
+type SessionKey = agentsession.Key
+type SessionSelector = agentsession.Selector
 
-type CanonicalAdapter = agent.CanonicalAdapter
-type CanonicalAdapterFuncs = agent.CanonicalAdapterFuncs
-type InputCommitRequest = agent.InputCommitRequest
-type OutputCommitRequest = agent.OutputCommitRequest
-type CommitReceipt = agent.CommitReceipt
-type OutputCommitReceipt = agent.OutputCommitReceipt
-type OutputProjection = agent.OutputProjection
-type ContextCommitRequest = agent.ContextCommitRequest
-type EffectRequest = agent.EffectRequest
-type EffectResult = agent.EffectResult
+type CanonicalAdapter = agentcanonical.CanonicalAdapter
+type CanonicalAdapterFuncs = agentcanonical.CanonicalAdapterFuncs
+type InputCommitRequest = agentcanonical.InputCommitRequest
+type OutputCommitRequest = agentcanonical.OutputCommitRequest
+type CommitReceipt = agentcanonical.CommitReceipt
+type OutputCommitReceipt = agentcanonical.OutputCommitReceipt
+type OutputProjection = agentcanonical.OutputProjection
+type ContextCommitRequest = agentcanonical.ContextCommitRequest
+type EffectRequest = agentcanonical.EffectRequest
+type EffectResult = agentcanonical.EffectResult
 
 // Config declares Denova-owned Session storage and optional integrations.
 type Config struct {
 	Store             agentsession.Store
-	Trace             agent.TraceSink
+	Trace             agenttrace.TraceSink
 	RunIDGenerator    agent.RunIDGenerator
-	CacheKeyGenerator agent.CacheKeyGenerator
+	CacheKeyGenerator agentschema.CacheKeyGenerator
 }
 
 // DefaultRunIDGenerator is Denova's application-owned execution identity

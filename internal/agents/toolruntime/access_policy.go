@@ -4,9 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
+
+	agentmiddleware "github.com/alfredxw/denova/agent/engine/middleware"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 // ToolAccessMode is a turn-scoped restriction layered on top of the Agent's
@@ -46,8 +47,8 @@ func toolAccessModeFromContext(ctx context.Context) ToolAccessMode {
 // schemas. WrapToolCall applies the same policy again as a fail-closed defense.
 func (m *OrchestratorMiddleware) BeforeAgent(
 	ctx context.Context,
-	run *agent.RunContext,
-) (context.Context, *agent.RunContext, error) {
+	run *agentmiddleware.RunContext,
+) (context.Context, *agentmiddleware.RunContext, error) {
 	if run == nil {
 		return ctx, run, nil
 	}
@@ -56,7 +57,7 @@ func (m *OrchestratorMiddleware) BeforeAgent(
 		return ctx, run, nil
 	}
 
-	filtered := make([]agent.ToolDefinition, 0, len(run.Tools))
+	filtered := make([]agenttool.ToolDefinition, 0, len(run.Tools))
 	for _, definition := range run.Tools {
 		if toolAllowedByAccessMode(mode, definition.Descriptor) {
 			filtered = append(filtered, definition)
@@ -67,18 +68,18 @@ func (m *OrchestratorMiddleware) BeforeAgent(
 	return ctx, &next, nil
 }
 
-func toolAllowedByAccessMode(mode ToolAccessMode, descriptor agent.ToolDescriptor) bool {
+func toolAllowedByAccessMode(mode ToolAccessMode, descriptor agenttool.ToolDescriptor) bool {
 	switch mode {
 	case ToolAccessModeDefault:
 		return true
 	case ToolAccessModePlanReadOnly:
-		if descriptor.MutationScope == agent.ToolMutationNone {
+		if descriptor.MutationScope == agenttool.ToolMutationNone {
 			return true
 		}
 		// Only planning controls may update session state. A scope-only rule
 		// would accidentally admit game/domain commits if Plan Mode is reused by
 		// another Agent kind in the future.
-		if descriptor.MutationScope == agent.ToolMutationSession {
+		if descriptor.MutationScope == agenttool.ToolMutationSession {
 			switch descriptor.Capability {
 			case config.AgentToolAsk, config.AgentToolTodo:
 				return true
@@ -90,7 +91,7 @@ func toolAllowedByAccessMode(mode ToolAccessMode, descriptor agent.ToolDescripto
 	}
 }
 
-func toolAccessModeBlockedMessage(mode ToolAccessMode, name string, descriptor agent.ToolDescriptor) string {
+func toolAccessModeBlockedMessage(mode ToolAccessMode, name string, descriptor agenttool.ToolDescriptor) string {
 	if mode != ToolAccessModePlanReadOnly {
 		return fmt.Sprintf(
 			"[tool error] Runtime access mode %q blocked tool %q (capability %q, mutation scope %s).",

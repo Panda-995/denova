@@ -4,7 +4,7 @@ Thanks for helping improve Denova. This project is in beta, so contribution work
 
 ## Setup
 
-Denova requires Go 1.26.6+, Node.js 22.13+, and pnpm.
+Denova requires Go 1.26.9+, Node.js 22.13+, and pnpm.
 
 ```bash
 corepack enable
@@ -22,7 +22,9 @@ Useful local commands:
 ./scripts/build.sh
 ```
 
-If a frontend command is missing, try the project script first, then use `npx` when appropriate. If port `5173` is already occupied by the user's Vite process, do not kill or replace it; use the existing hot-reload page.
+If a frontend command is missing, try the project script first, then use `npx` when appropriate. If port `7788` is already occupied by the user's Vite process, do not kill or replace it; use the existing hot-reload page.
+
+For optional real-model Writing and Game comparisons, run `./scripts/eval-creative.sh` and see [Creative evaluation](docs/creative-evaluation.md) for one-time configuration. This standalone tool runs manually or from a separate scheduler and is not part of CI or release gates.
 
 ## Development Principles
 

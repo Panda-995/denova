@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-	"github.com/alfredxw/denova/agent/providers"
+	"github.com/alfredxw/denova/agent/model/providers"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 // providerContinuationEvent stores the exact provider-owned state associated
@@ -88,7 +88,7 @@ func normalizeProviderContinuation(extra map[string]any) (map[string]any, error)
 }
 
 func cloneProviderContinuation(extra map[string]any) map[string]any {
-	message := agent.CloneMessage(&agent.Message{Extra: providers.ContinuationExtra(extra)})
+	message := agentschema.CloneMessage(&agentschema.Message{Extra: providers.ContinuationExtra(extra)})
 	return message.Extra
 }
 

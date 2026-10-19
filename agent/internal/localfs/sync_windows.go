@@ -2,7 +2,9 @@
 
 package localfs
 
-import "os"
+import (
+	"os"
+)
 
 // File.Sync maps to FlushFileBuffers on Windows, which rejects the read-only
 // directory handles returned by os.Open. File-level Sync still protects the

@@ -19,13 +19,14 @@ import (
 	"unicode/utf8"
 
 	"denova/internal/book"
+	"denova/internal/book/lore"
 	"denova/internal/portablepath"
 	projectdomain "denova/internal/project"
 	workspacechange "denova/internal/workspace/change"
 )
 
 const (
-	maxAssetBytes = 32 * 1024 * 1024
+	maxAssetBytes = lore.MaxMaterialUploadBytes
 	// DefaultTreeEntryLimit intentionally sits far above an ordinary creator
 	// project. It bounds response size without turning normal directory depth
 	// into repeated network round trips.
@@ -261,6 +262,9 @@ func resolveTreeTarget(
 func readDirectoryPage(ctx context.Context, root *os.Root, path string, includeIgnored bool, encodedCursor string, budget int) (DirectoryPage, error) {
 	directoryName := "."
 	if path != "" {
+		if err := portablepath.CheckPath(root.Name(), path); err != nil {
+			return DirectoryPage{}, classifyTreeReadError(path, err)
+		}
 		directoryName = filepath.FromSlash(path)
 	}
 	directory, err := root.Open(directoryName)
@@ -433,6 +437,9 @@ func (service *Service) ReadAsset(_ context.Context, projectID, path string) ([]
 	if err != nil {
 		return nil, "", err
 	}
+	if err := portablepath.CheckPath(runtime.layout.ContentRoot, rel); err != nil {
+		return nil, "", err
+	}
 	root, err := os.OpenRoot(runtime.layout.ContentRoot)
 	if err != nil {
 		return nil, "", err
@@ -459,7 +466,11 @@ func (service *Service) ReadAsset(_ context.Context, projectID, path string) ([]
 	}
 	contentType := detectMIMEType(rel, data)
 	if !isPreviewableImageMIME(contentType) {
-		return nil, "", fmt.Errorf("project asset %q is not a previewable image", rel)
+		mime, _, err := lore.MaterialFormat(data)
+		if err != nil || !strings.HasPrefix(mime, "audio/") {
+			return nil, "", fmt.Errorf("project asset %q is not a previewable image or supported audio file", rel)
+		}
+		contentType = mime
 	}
 	return data, contentType, nil
 }

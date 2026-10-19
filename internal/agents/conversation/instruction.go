@@ -6,12 +6,12 @@ import (
 	"strings"
 	"sync"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	agentcontext "denova/internal/agents/context"
 	"denova/internal/agents/prompts"
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 const maxInstructionStableContextTitleBytes = 512
@@ -87,7 +87,7 @@ func (c *InstructionConversation) AssembleModelContext(ctx context.Context, _ st
 		})
 	}
 	assembled, err := agentcontext.NewAssembler(input.Budget).Assemble(ctx, agentcontext.AssembleRequest{
-		Messages: []*agent.Message{agent.UserMessage(message)}, Fragments: fragments,
+		Messages: []*agentschema.Message{agentschema.UserMessage(message)}, Fragments: fragments,
 	})
 	if err != nil {
 		return agentcontext.ModelContextResult{}, err
@@ -150,17 +150,17 @@ func (c *InstructionConversation) ContextLedgerParts() []agentcontext.AuditPart 
 	if c == nil || strings.TrimSpace(c.stableContext) == "" {
 		return nil
 	}
-	return c.ContextLedgerPartsForMessages([]*agent.Message{agent.UserMessage(c.stableContextModelMessage())})
+	return c.ContextLedgerPartsForMessages([]*agentschema.Message{agentschema.UserMessage(c.stableContextModelMessage())})
 }
 
-func (c *InstructionConversation) ContextLedgerPartsForMessages(messages []*agent.Message) []agentcontext.AuditPart {
+func (c *InstructionConversation) ContextLedgerPartsForMessages(messages []*agentschema.Message) []agentcontext.AuditPart {
 	if c == nil || strings.TrimSpace(c.stableContext) == "" {
 		return nil
 	}
 	stableMessage := c.stableContextModelMessage()
 	included := false
 	for _, message := range messages {
-		if message != nil && message.Role == agent.User && strings.TrimSpace(message.Content) == stableMessage {
+		if message != nil && message.Role == agentschema.User && strings.TrimSpace(message.Content) == stableMessage {
 			included = true
 			break
 		}

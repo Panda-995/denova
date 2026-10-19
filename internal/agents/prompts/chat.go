@@ -167,7 +167,7 @@ const SelectionHeader = "\n\n---\nText selected by the user in the editor; opera
 func UnknownToolMessage(name string) string {
 	return fmt.Sprintf(
 		"[tool error] Tool %q does not exist or is currently unavailable. Diagnose the error:\n"+
-			"1) If the tool name is misspelled (for example, tod instead of todo), call the correct tool next.\n"+
+			"1) If the tool name is misspelled, use the matching name from the available tool definitions.\n"+
 			"2) If available tools cannot provide the capability, use another supported approach or answer the user in text.\n"+
 			"3) Do not call the same nonexistent tool again.",
 		name,

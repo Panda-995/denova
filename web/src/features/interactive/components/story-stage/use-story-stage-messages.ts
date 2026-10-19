@@ -18,18 +18,17 @@ import {
   readInteractiveImage,
   readInteractiveImageError,
 } from './interactive-images'
-import { publicRuleRollFromResolution } from './rule-roll'
 import { buildTokenUsageMessage, mergeTokenUsageMessages } from './token-usage'
 import { normalizeMessageContent } from './utils'
 
 interface UseStoryStageMessagesOptions {
+  pendingAsk?: import('@/lib/api').AgentAskInteraction
   snapshot: Snapshot | null
   rewindTurnId?: string
   liveMessages: AgentUIMessage[]
   streaming: boolean
   stageKey: string
   liveTurnNavigationAnchorId: string
-  publicRuleRollVisible: boolean
   optimisticInteractiveImages: Record<string, import('@/lib/api').InteractiveImage[]>
   belongsToStage: (stageKey: string) => boolean
   renderKeyFor: (turnId: string, role: 'user' | 'assistant') => string | undefined
@@ -39,13 +38,13 @@ interface UseStoryStageMessagesOptions {
 // the shared UI message protocol. This remains a UI-only read model and never
 // participates in model-context assembly.
 export function useStoryStageMessages({
+  pendingAsk,
   snapshot,
   rewindTurnId,
   liveMessages,
   streaming,
   stageKey,
   liveTurnNavigationAnchorId,
-  publicRuleRollVisible,
   optimisticInteractiveImages,
   belongsToStage,
   renderKeyFor,
@@ -77,18 +76,24 @@ export function useStoryStageMessages({
   const historyMessages = useMemo(
     () => storyPathTurns.flatMap((turn) => projectPersistedTurn(turn, {
       optimisticImages: optimisticInteractiveImages[turn.id],
-      publicRuleRollVisible,
       renderKeyFor,
     })),
-    [optimisticInteractiveImages, publicRuleRollVisible, renderKeyFor, storyPathTurns],
+    [optimisticInteractiveImages, renderKeyFor, storyPathTurns],
   )
 
   const agentMessages = useMemo(
     () => normalizeAgentUIMessages([
       ...historyMessages,
+      ...(snapshot?.pending_display_events || []).filter(event => !liveMessages.some(message => message.id === event.id)).map((event, index) => createAgentDataMessage({
+        id: event.id || `pending-${event.role}-${index}`,
+        type: event.role === 'todo_updated' ? 'agent-todo' : 'agent-context-compaction',
+        data: event.role === 'todo_updated' ? JSON.parse(event.content || '{}') : { ...event, status: event.status || 'success' },
+        metadata: displayEventMetadata(event),
+      })),
       ...(hasPersistedLiveTurn ? [] : liveMessages.filter((message) => !agentMessageHasDataPart(message, 'agent-token-usage'))),
+      ...(pendingAsk ? [createAgentDataMessage({ id: `ask-${pendingAsk.id}`, type: 'agent-ask', data: { ...pendingAsk } })] : []),
     ]),
-    [hasPersistedLiveTurn, historyMessages, liveMessages],
+    [hasPersistedLiveTurn, historyMessages, liveMessages, pendingAsk, snapshot?.pending_display_events],
   )
   const turnNavigationItems = useMemo<TurnNavigationItem[]>(() => {
     const items: TurnNavigationItem[] = storyPathTurns.map((turn) => ({
@@ -126,7 +131,6 @@ export function useStoryStageMessages({
 
 function projectPersistedTurn(turn: TurnEvent, options: {
   optimisticImages?: import('@/lib/api').InteractiveImage[]
-  publicRuleRollVisible: boolean
   renderKeyFor: (turnId: string, role: 'user' | 'assistant') => string | undefined
 }) {
   const messages: AgentUIMessage[] = turn.user_context_only ? [] : [createAgentTextMessage({
@@ -141,12 +145,15 @@ function projectPersistedTurn(turn: TurnEvent, options: {
       ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
     },
   })]
-  const displayEvents = turn.display_events || []
+  const displayEvents = (turn.display_events || []).filter(event => event.status !== 'discarded')
+  // A confirmed result may be a separate journal event. Fold it into its call
+  // without rewriting history or leaving a completed tool permanently running.
+  const toolResults = new Map(displayEvents.filter(event => event.role === 'tool_result' && event.id).map(event => [event.id, event]))
   if (!displayEvents.some((event) => event.role === 'thinking') && turn.thinking?.trim()) {
     messages.push(createAgentReasoningMessage({
       id: `${turn.id}-thinking`,
       text: turn.thinking,
-      metadata: { display_role: 'thinking' },
+      metadata: { display_role: 'thinking', navigation_turn_id: turn.id, execution_details_deferred: Boolean(turn.execution_cursor) },
     }))
   }
   const deferredImageEvents: TurnDisplayEvent[] = []
@@ -159,8 +166,24 @@ function projectPersistedTurn(turn: TurnEvent, options: {
       continue
     }
     const timeline = narrativeAnchored ? afterNarrative : beforeNarrative
-    const metadata = displayEventMetadata(event)
+    const metadata = { ...displayEventMetadata(event), navigation_turn_id: turn.id, execution_details_deferred: Boolean(turn.execution_cursor) }
     switch (event.role) {
+      case 'todo_updated':
+        timeline.push(createAgentDataMessage({
+          id: event.id || `${turn.id}-todo-${index}`,
+          type: 'agent-todo',
+          data: JSON.parse(event.content || '{}'),
+          metadata,
+        }))
+        break
+      case 'context_compaction':
+        timeline.push(createAgentDataMessage({
+          id: event.id || `${turn.id}-compaction-${index}`,
+          type: 'agent-context-compaction',
+          data: { ...event, status: event.status || 'success' },
+          metadata,
+        }))
+        break
       case 'thinking':
         timeline.push(createAgentReasoningMessage({
           id: event.id || `${turn.id}-thinking-${index}`,
@@ -169,18 +192,20 @@ function projectPersistedTurn(turn: TurnEvent, options: {
         }))
         break
       case 'tool_call': {
+        const result = toolResults.get(event.id)
+        const status = result?.status || event.status || 'success'
+        const output = result?.result ?? result?.content ?? event.result
         if (event.tool_presentation?.result === 'interactive_media') {
-          deferredImageEvents.push(event)
+          deferredImageEvents.push({ ...event, status, result: output })
           break
         }
-        const status = event.status || 'success'
         timeline.push(createAgentToolMessage({
           id: event.id || `${turn.id}-tool-${index}`,
           name: event.name || event.content || 'unknown_tool',
           state: status === 'error' ? 'output-error' : status === 'success' ? 'output-available' : 'input-available',
           input: event.args || '',
-          output: status === 'error' ? undefined : event.result || undefined,
-          errorText: status === 'error' ? event.result || '' : undefined,
+          output: status === 'error' ? undefined : output || undefined,
+          errorText: status === 'error' ? output || '' : undefined,
           metadata: { ...metadata, display_role: 'tool_call' },
         }))
         break
@@ -198,16 +223,6 @@ function projectPersistedTurn(turn: TurnEvent, options: {
     }
   }
   messages.push(...beforeNarrative)
-  const ruleRoll = options.publicRuleRollVisible ? publicRuleRollFromResolution(turn.rule_resolution) : null
-  if (ruleRoll) {
-    const id = `${turn.id}-rule-roll`
-    messages.push(createAgentDataMessage({
-      id,
-      type: 'agent-rule-roll',
-      metadata: { display_role: 'rule_roll', turn_id: turn.id, navigation_turn_id: turn.id },
-      data: { id, role: 'rule_roll', rule_roll: ruleRoll },
-    }))
-  }
   messages.push(projectNarrativeMessage(turn, deferredImageEvents, options))
   messages.push(...afterNarrative)
   return messages
@@ -237,6 +252,7 @@ function projectNarrativeMessage(
     agent_kind: turn.agent_kind,
     turn_versions: turn.versions,
     turn_version_index: turn.version_idx,
+    display_phase: 'final',
   }
   const message = createAgentTextMessage({
     id,

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"denova/internal/portablepath"
 )
 
 const (
@@ -29,6 +31,14 @@ func (registry *Registry) Layout(record Record) (Layout, error) {
 	workspace, err := registry.resolveLocation(record.Location)
 	if err != nil {
 		return Layout{}, err
+	}
+	if err := portablepath.CheckPath(registry.denovaDir, storeDirectoryName+"/"+record.StoreDirName); err != nil {
+		return Layout{}, fmt.Errorf("inspect Project Store path: %w", err)
+	}
+	if record.Location.Kind == LocationManaged && record.Location.Path != "." {
+		if err := portablepath.CheckPath(registry.denovaDir, record.Location.Path); err != nil {
+			return Layout{}, fmt.Errorf("inspect managed Project path: %w", err)
+		}
 	}
 	return Layout{
 		ProjectID:   record.ID,

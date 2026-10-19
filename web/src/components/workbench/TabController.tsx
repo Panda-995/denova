@@ -119,7 +119,9 @@ export function enforceTabLimit(tabs: Tab[], protectedKey: string | null, max: n
     current = current.filter((t) => tabKey(t) !== victim)
     activations.delete(victim)
   }
-  return current
+  // Activation rechecks limits. Preserve identity when no tab changed so the
+  // workbench does not render and persist the same list again after every switch.
+  return current.length === tabs.length && current.every((tab, index) => tab === tabs[index]) ? tabs : current
 }
 
 /** Tab 显示标题 */

@@ -1,7 +1,7 @@
 export interface StoryStageCommandItem {
   name: string
   description: string
-  hint: string
+  hint?: string
   builtIn: boolean
 }
 
@@ -13,9 +13,6 @@ interface SkillCommand {
 interface CommandLabels {
   compactDescription: string
   compactHint: string
-  goalDescription: string
-  goalHint: string
-  skillHint: string
 }
 
 interface StoryStageCommandMenu {
@@ -27,14 +24,8 @@ interface StoryStageCommandMenu {
 export function buildStoryStageCommandMenu(query: string | null, skills: SkillCommand[], labels: CommandLabels): StoryStageCommandMenu {
   if (query === null) return { commands: [], builtInItems: [], skillItems: [] }
   const normalizedQuery = query.toLowerCase()
-  const seen = new Set(['goal', 'compact'])
+  const seen = new Set(['compact'])
   const commands: StoryStageCommandItem[] = [
-    {
-      name: 'goal',
-      description: labels.goalDescription,
-      hint: labels.goalHint,
-      builtIn: true,
-    },
     {
       name: 'compact',
       description: labels.compactDescription,
@@ -49,7 +40,6 @@ export function buildStoryStageCommandMenu(query: string | null, skills: SkillCo
     commands.push({
       name: skill.name,
       description: skill.description || skill.name,
-      hint: labels.skillHint,
       builtIn: false,
     })
   }

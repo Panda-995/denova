@@ -37,6 +37,7 @@ export interface AgentChatHistoryItem {
   project_id: string
   project_name: string
   session: AgentChatSession
+  excerpt?: string
 }
 
 export interface AgentChatHistoryPage {
@@ -63,7 +64,7 @@ export interface HostDirectorySelection {
   canceled: boolean
 }
 
-let projectsReadInFlight: Promise<AgentChatProject[]> | null = null
+const projectsReadsInFlight = new Map<string, Promise<AgentChatProject[]>>()
 export const AGENT_CHAT_PROJECT_UPDATED_EVENT = 'nova:agent-chat-project-updated'
 
 export function notifyAgentChatProjectUpdated(projectId: string) {
@@ -71,10 +72,13 @@ export function notifyAgentChatProjectUpdated(projectId: string) {
   window.dispatchEvent(new CustomEvent(AGENT_CHAT_PROJECT_UPDATED_EVENT, { detail: { projectId: projectId.trim() } }))
 }
 
-/** Read every project with its conversations. This never switches the open workspace. */
-export function getAgentChatProjects(): Promise<AgentChatProject[]> {
-  if (projectsReadInFlight) return projectsReadInFlight
-  const request = requestJSON<{ projects?: AgentChatProject[] }>('/api/agent-chat/projects')
+/** Read all or one project's conversations without switching the open workspace. */
+export function getAgentChatProjects(projectId = ''): Promise<AgentChatProject[]> {
+  const id = projectId.trim()
+  const inFlight = projectsReadsInFlight.get(id)
+  if (inFlight) return inFlight
+  const suffix = id ? `?${new URLSearchParams({ project_id: id })}` : ''
+  const request = requestJSON<{ projects?: AgentChatProject[] }>(`/api/agent-chat/projects${suffix}`)
     .then((data) =>
       (data.projects ?? []).map((project) => ({
         ...project,
@@ -82,9 +86,9 @@ export function getAgentChatProjects(): Promise<AgentChatProject[]> {
       })),
     )
     .finally(() => {
-      projectsReadInFlight = null
+      projectsReadsInFlight.delete(id)
     })
-  projectsReadInFlight = request
+  projectsReadsInFlight.set(id, request)
   return request
 }
 
@@ -93,7 +97,7 @@ export function getAgentChatActivity(): Promise<AgentChatActivityBinding[]> {
   return requestJSON<{ bindings?: AgentChatActivityBinding[] }>('/api/agent-chat/activity').then((data) => data.bindings ?? [])
 }
 
-/** Search complete durable conversation metadata without switching the foreground workspace. */
+/** Search titles and saved visible messages without switching the foreground workspace. */
 export function getAgentChatHistory(
   options: {
     query?: string
@@ -114,6 +118,21 @@ export function getAgentChatHistory(
   return requestJSON<AgentChatHistoryPage>(`/api/agent-chat/history${suffix}`, {
     signal: options.signal,
   }).then((page) => ({ ...page, items: page.items ?? [] }))
+}
+
+/** Downloads the saved visible transcript without opening or switching its session. */
+export async function exportAgentChatMarkdown(projectId: string, sessionId: string): Promise<void> {
+  const params = new URLSearchParams({ session_id: sessionId })
+  const response = await fetchAPI(`${projectAPIPath(projectId, 'agent-chat/session/export')}?${params}`)
+  if (!response.ok) throw await responseAPIError(response)
+  const href = URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = href
+  link.download = `${sessionId}.md`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(href), 0)
 }
 
 /** Create a conversation inside any project, open or not. */

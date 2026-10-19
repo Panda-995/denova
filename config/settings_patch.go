@@ -38,9 +38,11 @@ func ParseSettingsLayer(value string) (SettingsLayer, error) {
 
 // ApplySettingsMergePatch applies RFC 7386 object merge semantics to a
 // Settings document. Missing fields are preserved, arrays are replaced, and a
-// JSON null clears a field. Strict decoding rejects misspelled or retired keys.
+// JSON null clears a field. Each external engine's model settings replace their
+// entire branch so effort cannot leak between models. Decoding remains strict.
 func ApplySettingsMergePatch(existing Settings, changes json.RawMessage) (Settings, error) {
-	if err := validateSettingsPatchObject(changes); err != nil {
+	patch, err := decodeSettingsPatchObject(changes)
+	if err != nil {
 		return Settings{}, err
 	}
 	document, err := json.Marshal(existing)
@@ -60,8 +62,48 @@ func ApplySettingsMergePatch(existing Settings, changes json.RawMessage) (Settin
 	if err := ensureSettingsJSONEOF(decoder); err != nil {
 		return Settings{}, fmt.Errorf("%w: %v", ErrInvalidSettingsPatch, err)
 	}
+	// A background is one association. Switching to "none" must also discard
+	// the previous item/image IDs rather than retaining them through object merge.
+	if patch.GameCreationDefaults != nil && patch.GameCreationDefaults.DefaultBackground != nil {
+		background := *patch.GameCreationDefaults.DefaultBackground
+		next.GameCreationDefaults.DefaultBackground = &background
+	}
+	for _, role := range []struct {
+		changed *RuntimePreferences
+		next    *RuntimePreferences
+	}{
+		{patch.AgentRuntimes.IDE, next.AgentRuntimes.IDE},
+		{patch.AgentRuntimes.General, next.AgentRuntimes.General},
+		{patch.AgentRuntimes.InteractiveStory, next.AgentRuntimes.InteractiveStory},
+	} {
+		if role.changed != nil && role.changed.Claude != nil {
+			value := *role.changed.Claude
+			role.next.Claude = &value
+		}
+		if role.changed != nil && role.changed.Codex != nil {
+			value := *role.changed.Codex
+			role.next.Codex = &value
+		}
+	}
+	if err := validateSettingsRuntimes(next); err != nil {
+		return Settings{}, fmt.Errorf("%w: %v", ErrInvalidSettingsPatch, err)
+	}
 	if err := validateSettingsCheckpointGuidance(next); err != nil {
 		return Settings{}, fmt.Errorf("%w: %v", ErrInvalidSettingsPatch, err)
+	}
+	if err := next.GameCreationDefaults.Validate(); err != nil {
+		return Settings{}, fmt.Errorf("%w: %v", ErrInvalidSettingsPatch, err)
+	}
+	if err := next.Market.Validate(); err != nil {
+		return Settings{}, err
+	}
+	switch next.InteractiveStageCharacterLayout {
+	case "", "center", "left", "right", "sides":
+	default:
+		return Settings{}, fmt.Errorf("%w: invalid stage character layout %q", ErrInvalidSettingsPatch, next.InteractiveStageCharacterLayout)
+	}
+	if size := next.InteractiveStageCharacterSize; size != nil && (*size < 0.4 || *size > 1) {
+		return Settings{}, fmt.Errorf("%w: stage character size must be between 0.4 and 1", ErrInvalidSettingsPatch)
 	}
 	return next, nil
 }
@@ -75,9 +117,9 @@ func ValidateWorkspaceSettingsPatch(changes json.RawMessage) error {
 	}
 	for field := range fields {
 		switch field {
-		case "agent_tools", "agent_prompts", "agent_skills", "agent_context",
+		case "agent_runtimes", "agent_tools", "agent_prompts", "agent_skills", "agent_context",
 			"general_sub_agents", "sub_agents", "default_image_agent_id",
-			"agent_tool_parallelism", "agent_subagent_parallelism":
+			"agent_tool_parallelism", "agent_subagent_parallelism", "game_creation_defaults":
 		default:
 			return fmt.Errorf("%w: field %q is not workspace-scoped", ErrInvalidSettingsPatch, field)
 		}
@@ -85,17 +127,17 @@ func ValidateWorkspaceSettingsPatch(changes json.RawMessage) error {
 	return nil
 }
 
-func validateSettingsPatchObject(changes json.RawMessage) error {
+func decodeSettingsPatchObject(changes json.RawMessage) (Settings, error) {
 	trimmed := bytes.TrimSpace(changes)
 	if len(trimmed) == 0 || trimmed[0] != '{' {
-		return fmt.Errorf("%w: changes must be a JSON object", ErrInvalidSettingsPatch)
+		return Settings{}, fmt.Errorf("%w: changes must be a JSON object", ErrInvalidSettingsPatch)
 	}
 	var value map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &value); err != nil || value == nil {
 		if err == nil {
 			err = errors.New("changes must be a JSON object")
 		}
-		return fmt.Errorf("%w: %v", ErrInvalidSettingsPatch, err)
+		return Settings{}, fmt.Errorf("%w: %v", ErrInvalidSettingsPatch, err)
 	}
 	// Decode the patch itself as Settings as well as the merged document.
 	// RFC 7386 drops unknown keys whose value is null, so validating only the
@@ -104,12 +146,12 @@ func validateSettingsPatchObject(changes json.RawMessage) error {
 	decoder := json.NewDecoder(bytes.NewReader(trimmed))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&shape); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidSettingsPatch, err)
+		return Settings{}, fmt.Errorf("%w: %v", ErrInvalidSettingsPatch, err)
 	}
 	if err := ensureSettingsJSONEOF(decoder); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidSettingsPatch, err)
+		return Settings{}, fmt.Errorf("%w: %v", ErrInvalidSettingsPatch, err)
 	}
-	return nil
+	return shape, nil
 }
 
 func ensureSettingsJSONEOF(decoder *json.Decoder) error {

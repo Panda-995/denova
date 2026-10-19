@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentexecution "github.com/alfredxw/denova/agent/engine/execution"
+	agentinteraction "github.com/alfredxw/denova/agent/lifecycle/interaction"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 // CommandID is the caller-owned idempotency identity of one Agent command.
@@ -41,12 +43,14 @@ const (
 	RunPhaseIdle       RunPhase = "idle"
 	RunPhaseRunning    RunPhase = "running"
 	RunPhaseCompacting RunPhase = "compacting"
+	RunPhaseSuspended  RunPhase = "suspended"
 )
 
 const (
 	PhaseIdle       = RunPhaseIdle
 	PhaseRunning    = RunPhaseRunning
 	PhaseCompacting = RunPhaseCompacting
+	PhaseSuspended  = RunPhaseSuspended
 )
 
 // OperationStatus is the terminal state of one accepted Agent operation.
@@ -156,24 +160,23 @@ type RuntimeStatus struct {
 	OpenToolCalls            []OpenToolCall
 	LastOperation            *OperationSummary
 	RecentOperations         []OperationSummary
-	// Cleanup and Compaction are read-only projections of the public Agent
+	// Compaction is a read-only projection of the public Agent
 	// Session capabilities. Product stores may display them, but must never
 	// persist competing maintenance state.
-	Cleanup             *agent.CleanupState
 	Compaction          *AgentCompactionState
-	PendingInteractions []agent.InteractionRequest
+	PendingInteractions []agentinteraction.InteractionRequest
 }
 
 // AgentCompactionState is the bounded public Session checkpoint projection.
 // Product stores may render it but must not persist a competing checkpoint.
 type AgentCompactionState struct {
-	ID              string
-	Revision        uint64
-	Summary         string
-	TokenEstimate   int
-	ReplacementFrom int
-	ReplacementTo   int
-	ContextData     *RestoreData
+	ID                 string
+	Revision           uint64
+	Summary            string
+	TokensBefore       int
+	TokensAfter        int
+	SourceMessageCount int
+	ContextData        *RestoreData
 }
 
 type StatusSnapshot = RuntimeStatus
@@ -188,18 +191,18 @@ type InputMaterializationReceipt struct {
 }
 
 var (
-	ErrInvalidCommand       = agent.ErrInvalidInput
+	ErrInvalidCommand       = agentschema.ErrInvalidInput
 	ErrInvalidBinding       = errors.New("invalid Denova Agent binding")
-	ErrStaleOperation       = agent.ErrRunSettled
+	ErrStaleOperation       = agentschema.ErrRunSettled
 	ErrQueueConflict        = errors.New("Denova Agent queue conflict")
-	ErrBusy                 = agent.ErrSessionBusy
-	ErrDomainCommitRejected = agent.ErrCanonicalCommitRejected
+	ErrBusy                 = agentschema.ErrSessionBusy
+	ErrDomainCommitRejected = agentschema.ErrCanonicalCommitRejected
 )
 
 // ValidateCommandID applies the exact durable command envelope without
 // exposing runtime configuration to app or transport packages.
 func ValidateCommandID(commandID string) error {
-	return agent.ValidateIdempotencyKey(commandID)
+	return agentexecution.ValidateIdempotencyKey(commandID)
 }
 
 // ValidateRecoveryIdentity validates the caller-owned identities required by
@@ -208,5 +211,5 @@ func ValidateRecoveryIdentity(commandID, operationID string) error {
 	if err := ValidateCommandID(commandID); err != nil {
 		return err
 	}
-	return agent.ValidateIdempotencyKey(operationID)
+	return agentexecution.ValidateIdempotencyKey(operationID)
 }

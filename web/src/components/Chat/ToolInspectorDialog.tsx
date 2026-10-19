@@ -19,7 +19,7 @@ import { ToolRawData } from './ToolRawData'
 import { formatToolJSON, inspectToolMessage } from './tool-inspection'
 import { focusDialogContentOnOpen } from './dialog-focus'
 
-export default function ToolInspectorDialog({ message, projectId }: { message: InspectableToolMessage; projectId: string }) {
+export default function ToolInspectorDialog({ message, projectId, onCloseAutoFocus }: { message: InspectableToolMessage; projectId: string; onCloseAutoFocus?: (event: Event) => void }) {
   const { t } = useTranslation()
   const inspected = inspectToolMessage(message)
   const { name, callId, input, output, interaction, truncated } = inspected
@@ -64,6 +64,7 @@ export default function ToolInspectorDialog({ message, projectId }: { message: I
       showCloseButton={false}
       tabIndex={-1}
       onOpenAutoFocus={focusDialogContentOnOpen}
+      onCloseAutoFocus={onCloseAutoFocus}
       className="flex h-[86dvh] max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-6xl flex-col gap-0 overflow-hidden p-0 sm:w-[90vw]"
       data-nova-tool-inspector
     >

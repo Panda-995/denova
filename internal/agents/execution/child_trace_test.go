@@ -12,9 +12,13 @@ import (
 	"denova/internal/agents/session"
 	agenttoolruntime "denova/internal/agents/toolruntime"
 
-	agent "github.com/alfredxw/denova/agent"
-	agentpermission "github.com/alfredxw/denova/agent/permission"
-	"github.com/alfredxw/denova/agent/providers"
+	"github.com/alfredxw/denova/agent"
+	agentmiddleware "github.com/alfredxw/denova/agent/engine/middleware"
+	agentevent "github.com/alfredxw/denova/agent/lifecycle/event"
+	"github.com/alfredxw/denova/agent/model/providers"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
+	agentpermission "github.com/alfredxw/denova/agent/tool/permission"
 )
 
 func TestChildTracesRemainIndependentAfterParentStops(t *testing.T) {
@@ -43,21 +47,21 @@ func testChildTracesAfterParentStops(t *testing.T, kind string) {
 		model := &publicBackendNextTurnModel{started: make(chan struct{}), release: make(chan struct{})}
 		models[name] = model
 		children = append(children, agentdelegation.Child{
-			Name: name, Description: name, Identity: agent.CapabilityIdentity{Kind: "test." + name, Version: 1},
+			Name: name, Description: name, Identity: agentschema.CapabilityIdentity{Kind: "test." + name, Version: 1},
 			Definition: agent.Definition{
 				Name: name, Model: model, AttachmentRoot: stateRoot,
-				ModelIdentity: agent.CapabilityIdentity{Kind: "test.model." + name, Version: 1},
-				Middlewares: []agent.Middleware{agent.IdentifyMiddleware(
+				ModelIdentity: agentschema.CapabilityIdentity{Kind: "test.model." + name, Version: 1},
+				Middlewares: []agentmiddleware.Middleware{agentmiddleware.IdentifyMiddleware(
 					agentrun.NewModelInputLoggingMiddleware(agentrun.AgentKindIDE, providers.ModelConfig{Model: name}, 0, 0, agentprompts.SystemPromptComposition{}),
-					agent.CapabilityIdentity{Kind: "test.trace." + name, Version: 1},
+					agentschema.CapabilityIdentity{Kind: "test.trace." + name, Version: 1},
 				)},
 			},
 		})
 	}
 	catalog, err := agentdelegation.NewCatalog(nil, agentdelegation.Config{
 		Capability: "test.trace-delegation", Parallelism: 2, MaxResultBytes: 64 << 10,
-		ValidationIdentity: agent.CapabilityIdentity{Kind: "test.trace-validation", Version: 1},
-		Validate:           func(context.Context, []agent.ToolDefinition) error { return nil },
+		ValidationIdentity: agentschema.CapabilityIdentity{Kind: "test.trace-validation", Version: 1},
+		Validate:           func(context.Context, []agenttool.ToolDefinition) error { return nil },
 	}, children...)
 	if err != nil {
 		t.Fatal(err)
@@ -73,13 +77,13 @@ func testChildTracesAfterParentStops(t *testing.T, kind string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = runtime.Close(ctx) })
-	model := &publicBackendTestModel{responses: []*agent.Message{
-		agent.AssistantMessage("", []agent.ToolCall{{ID: "start-both", Type: "function", Function: agent.FunctionCall{
-			Name: "task", Arguments: `{"action":"start","starts":[{"agent":"writer","prompt":"Write"},{"agent":"reviewer","prompt":"Review"}]}`,
-		}}}), agent.AssistantMessage("Started both", nil),
+	model := &publicBackendTestModel{responses: []*agentschema.Message{
+		agentschema.AssistantMessage("", []agentschema.ToolCall{{ID: "start-both", Type: "function", Function: agentschema.FunctionCall{
+			Name: "send", Arguments: `{"items":[{"action":"delegate","message":"Write","agent":"writer"},{"action":"delegate","message":"Review","agent":"reviewer"}]}`,
+		}}}), agentschema.AssistantMessage("Started both", nil),
 	}}
 	operation, err := runtime.Start(ctx, StartRequest{Cycle: Cycle{
-		Definition:   agent.Definition{Name: "root", Model: model, ModelIdentity: agent.CapabilityIdentity{Kind: "test.trace-parent", Version: 1}, Tools: catalog, Permission: agentpermission.FullAccess()},
+		Definition:   agent.Definition{Name: "root", Model: model, ModelIdentity: agentschema.CapabilityIdentity{Kind: "test.trace-parent", Version: 1}, Tools: catalog, Permission: agentpermission.FullAccess()},
 		Conversation: agentconversation.NewSessionConversationForAgent(conversation, nil, kind),
 		Request:      agentchatRequest("parallel-parent", "Delegate"),
 		Options:      agentrun.Options{AgentKind: kind, ProjectID: "project-test", SessionID: conversation.ID, StoryID: "story-test", BranchID: "main", Workspace: workspace, StateRoot: stateRoot},
@@ -94,7 +98,7 @@ func testChildTracesAfterParentStops(t *testing.T, kind string) {
 			t.Fatal("child did not start")
 		}
 	}
-	if _, err := operation.publicHandle.run.Abort(ctx, agent.AbortRequest{Reason: "stop parent only"}); err != nil {
+	if _, err := operation.publicHandle.run.Abort(ctx, agentevent.AbortRequest{Reason: "stop parent only"}); err != nil {
 		t.Fatal(err)
 	}
 	if result := operation.Wait(ctx); result.Status != agentrun.OutcomeAborted {
@@ -111,11 +115,11 @@ func testChildTracesAfterParentStops(t *testing.T, kind string) {
 	if len(handles) != 2 {
 		t.Fatalf("child handles = %d", len(handles))
 	}
-	if _, err := handles["writer"].run.Queue(ctx, agent.Text("Continue writing")); err != nil {
+	if _, err := handles["writer"].session.Queue(ctx, agent.Text("Continue writing")); err != nil {
 		t.Fatal(err)
 	}
 	close(models["writer"].release)
-	if _, err := handles["reviewer"].run.Abort(ctx, agent.AbortRequest{Reason: "cancel review"}); err != nil {
+	if _, err := handles["reviewer"].run.Abort(ctx, agentevent.AbortRequest{Reason: "cancel review"}); err != nil {
 		t.Fatal(err)
 	}
 	location := agentrun.TraceLocation{Workspace: workspace, StateRoot: stateRoot}

@@ -9,11 +9,14 @@ test('creates, autosaves, and reloads a Lore item across Writing and Game', asyn
   await page.goto('/')
   const sidebar = page.getByLabel('工作台侧边栏')
   await sidebar.getByRole('button', { name: '资料库', exact: true }).click()
-  await page.getByRole('button', { name: '新建条目', exact: true }).click()
+  await page.getByRole('button', { name: '新建资料', exact: true }).click()
+  await page.getByRole('menuitem', { name: '角色', exact: true }).click()
 
   await page.getByLabel('名称', { exact: true }).fill(name)
   const editor = page.getByRole('textbox', { name: '正文', exact: true })
   await editor.click()
+  await expect(page.getByTestId('lore-create-editor')).toHaveCount(0)
+  await expect(editor).toBeFocused()
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A')
   await page.keyboard.insertText(content)
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+S' : 'Control+S')
@@ -30,5 +33,6 @@ test('creates, autosaves, and reloads a Lore item across Writing and Game', asyn
   await sidebar.getByRole('button', { name: '资料库', exact: true }).click()
 
   await expect(page.getByText(name, { exact: true }).first()).toBeVisible()
+  await page.getByTestId('lore-library').getByRole('button', { name, exact: true }).click()
   await expect(page.getByRole('textbox', { name: '正文', exact: true })).toContainText('这条资料在写作与游戏之间共享。')
 })

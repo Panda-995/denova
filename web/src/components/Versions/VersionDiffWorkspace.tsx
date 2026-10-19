@@ -1,4 +1,5 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import {
   ChevronsDownUp,
   ChevronsUpDown,
@@ -12,11 +13,12 @@ import {
   Undo2,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import type { VersionDiff, VersionEntry, VersionFileDiff } from '@/lib/api'
+import { getVersionDiff, versionQueryKeys, type VersionDiff, type VersionEntry, type VersionFileDiff } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Skeleton } from '@/components/ui/skeleton'
+import { InlineErrorNotice } from '@/components/common/inline-error-notice'
 import { CodeDiffSurface, type CodeDiffSurfaceFile } from '@/features/diff/CodeDiffSurface'
 import { lineDiffStats } from '@/features/changes/diff-stats'
 import type { DiffFileDocument, DiffFileNavigationItem, DiffLayout } from '@/features/diff/types'
@@ -28,9 +30,12 @@ export type VersionDiffMode = DiffLayout
 interface VersionDiffDocument extends DiffFileDocument {
   status: VersionFileDiff['status']
   text: boolean
+  pending?: boolean
 }
 
 interface VersionDiffWorkspaceProps {
+  projectId: string
+  visible: boolean
   currentSelection: boolean
   targetVersion: VersionEntry | null
   summary: VersionDiff | null
@@ -47,6 +52,8 @@ interface VersionDiffWorkspaceProps {
 
 /** Version-specific controls around the same continuous multi-file Diff used by Review. */
 export function VersionDiffWorkspace({
+  projectId,
+  visible,
   currentSelection,
   targetVersion,
   summary,
@@ -61,30 +68,68 @@ export function VersionDiffWorkspace({
   onRestoreFile,
 }: VersionDiffWorkspaceProps) {
   const { t } = useTranslation()
-  const files = useMemo(() => versionDiffDocuments(summary, summaryRevision), [summary, summaryRevision])
+  const partial = summary?.files_complete === false
+  const comparison = summary?.comparison ?? 'parent'
+  const contentKey = [...versionQueryKeys.diff(projectId, targetVersion?.id ?? '', comparison), summaryRevision]
+  // The initial response includes a usable first file. Complete totals and the
+  // remaining documents load after it can render; navigation can independently
+  // request a selected file while that background read is still in progress.
+  const completeQuery = useQuery({
+    queryKey: [...contentKey, 'complete'],
+    queryFn: () => getVersionDiff(projectId, targetVersion!.id, undefined, comparison),
+    enabled: Boolean(visible && targetVersion && partial),
+    staleTime: Infinity,
+  })
+  const effectiveSummary = partial ? completeQuery.data ?? summary : summary
+  const paths = useMemo(() => effectiveSummary?.changes.map(file => file.path) ?? [], [effectiveSummary])
+  const navigation = useMultiFileDiffNavigation({
+    identity: `${targetVersion?.id ?? 'empty'}:${comparison}`,
+    paths,
+  })
+  const activePath = navigation.activePath || paths[0] || ''
+  const missingActiveFile = effectiveSummary?.files_complete === false && !effectiveSummary.files?.some(file => file.path === activePath)
+  const selectedQuery = useQuery({
+    queryKey: [...contentKey, activePath],
+    queryFn: () => getVersionDiff(projectId, targetVersion!.id, activePath, comparison),
+    enabled: Boolean(visible && targetVersion && activePath && missingActiveFile),
+    staleTime: Infinity,
+  })
+  const selectedDetail = missingActiveFile ? selectedQuery.data : undefined
+  useEffect(() => {
+    const error = completeQuery.error || selectedQuery.error
+    if (error) console.error('[versions] loading comparison content failed', { projectId, versionId: targetVersion?.id, error })
+  }, [completeQuery.error, selectedQuery.error, projectId, targetVersion?.id])
+  const files = useMemo(() => {
+    if (!effectiveSummary) return []
+    const loaded = new Map(effectiveSummary.files?.map(file => [file.path, file]))
+    if (selectedDetail?.path) {
+      loaded.set(selectedDetail.path, { ...selectedDetail, path: selectedDetail.path, status: effectiveSummary.changes.find(file => file.path === selectedDetail.path)!.status })
+    }
+    const projected = versionDiffDocuments({ ...effectiveSummary, files: effectiveSummary.changes.map(change => loaded.get(change.path) ?? { ...change, text: false, binary: false }) }, summaryRevision)
+    return projected.map(file => ({ ...file, pending: !loaded.has(file.path) }))
+  }, [effectiveSummary, summaryRevision, selectedDetail])
   const surfaceFiles = useMemo<CodeDiffSurfaceFile[]>(() => files.map((file) => ({
     ...file,
-    unavailableContent: file.binary
+    unavailableContent: file.pending
+      ? t(selectedQuery.isError || completeQuery.isError ? 'versions.diffReadFailed' : 'common.loading')
+      : file.binary
       ? t('versions.fileBinary')
       : !file.text
         ? t('versions.diffReadFailed')
         : undefined,
-  })), [files, t])
-  const paths = useMemo(() => files.map((file) => file.path), [files])
+  })), [files, t, selectedQuery.isError, completeQuery.isError])
+  const statsByPath = useMemo(() => new Map(files.map(file => [file.path, lineDiffStats(file.before_content, file.after_content)])), [files])
   const navigatorFiles = useMemo<DiffFileNavigationItem[]>(() => files.map((file) => ({
     path: file.path,
     kind: file.status === 'added' ? 'added' : file.status === 'deleted' ? 'deleted' : 'modified',
-  })), [files])
-  const navigation = useMultiFileDiffNavigation({
-    identity: `${targetVersion?.id ?? 'empty'}:${summary?.comparison ?? 'none'}`,
-    paths,
-  })
+    ...statsByPath.get(file.path),
+  })), [files, statsByPath])
   const diffTotals = useMemo(() => files.reduce((totals, file) => {
-    const stats = lineDiffStats(file.before_content, file.after_content)
+    const stats = statsByPath.get(file.path)!
     totals.additions += stats.additions
     totals.deletions += stats.deletions
     return totals
-  }, { additions: 0, deletions: 0 }), [files])
+  }, { additions: 0, deletions: 0 }), [files, statsByPath])
   const title = currentSelection
     ? t('versions.currentChanges')
     : targetVersion?.message || t('versions.emptyMessage')
@@ -115,8 +160,8 @@ export function VersionDiffWorkspace({
           <span className="rounded border border-[var(--nova-border)] bg-[var(--nova-surface-2)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--nova-text-muted)]">
             {t('changes.filesChanged', { count: files.length })}
           </span>
-          <span className="font-mono text-[10px] tabular-nums text-[var(--nova-success)]">+{diffTotals.additions}</span>
-          <span className="font-mono text-[10px] tabular-nums text-[var(--nova-danger)]">−{diffTotals.deletions}</span>
+          <span className="font-mono text-[10px] tabular-nums text-[var(--nova-success)]">{effectiveSummary?.files_complete === false ? '…' : `+${diffTotals.additions}`}</span>
+          <span className="font-mono text-[10px] tabular-nums text-[var(--nova-danger)]">{effectiveSummary?.files_complete === false ? '…' : `−${diffTotals.deletions}`}</span>
           <Badge variant="outline" className="hidden text-[10px] lg:inline-flex">{t('versions.diffReadOnly')}</Badge>
 
           <div role="group" aria-label={t('versions.diffLayout')} className="flex h-7 items-center rounded-md border border-[var(--nova-border)] bg-[var(--nova-bg)] p-0.5">
@@ -168,7 +213,12 @@ export function VersionDiffWorkspace({
         </div>
       </header>
 
+      {partial && completeQuery.isError && <div className="flex items-center gap-2 px-3 py-2">
+        <InlineErrorNotice className="flex-1" message={t('versions.diffReadFailed')} />
+        <Button size="sm" variant="outline" onClick={() => void completeQuery.refetch()}>{t('common.retry')}</Button>
+      </div>}
       <CodeDiffSurface
+        singleFile={effectiveSummary?.files_complete === false}
         files={loading ? [] : surfaceFiles}
         navigatorFiles={loading ? [] : navigatorFiles}
         navigation={navigation}

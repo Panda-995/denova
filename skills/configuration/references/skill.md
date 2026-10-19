@@ -6,7 +6,7 @@ Each `config_apply` changes exactly one root `SKILL.md` or one supporting refere
 
 ## Identity, scope, and revision
 
-- Skill names must match `[A-Za-z0-9][A-Za-z0-9_-]{0,63}`.
+- Skill names support Unicode letters and numbers from any language, combining marks, joiners, underscores, and hyphens. Start with a letter or number; use at most 64 Unicode code points and 240 UTF-8 bytes. Spaces and path separators are not allowed.
 - Root document ID is `<skill-name>`.
 - Supporting reference ID is `<skill-name>/references/<file>.md`; nested paths below `references/` are allowed, traversal and backslashes are not.
 - Every `get`, update, and delete must specify exact `user` or `workspace` scope.

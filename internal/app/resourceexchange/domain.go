@@ -1,0 +1,217 @@
+package resourceexchange
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+
+	"denova/internal/app/resourcecatalog"
+	"denova/internal/assetstore"
+	"denova/internal/book"
+	"denova/internal/book/lore"
+	imagepreset "denova/internal/image/preset"
+	"denova/internal/interactive"
+	"denova/internal/interactive/teller"
+	"denova/internal/style"
+)
+
+const openingPath = "setting/interactive-openings.json"
+const coverPath = assetstore.CoverPath
+
+type opening struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Content string `json:"content"`
+}
+type openings struct {
+	Version int       `json:"version"`
+	Presets []opening `json:"presets"`
+}
+
+// stageDefinition delegates validation and normalization to the existing domain
+// libraries. Only their created document is returned; builtin initialization in
+// the scratch directory never becomes part of the installation.
+func stageDefinition(resource PreviewResource, id string, raw []byte, refs map[string]string) (string, []byte, error) {
+	dir, err := os.MkdirTemp("", "denova-definition-")
+	if err != nil {
+		return "", nil, err
+	}
+	defer os.RemoveAll(dir)
+	catalog := resourcecatalog.NewService(dir, nil)
+	var file string
+	switch resource.Kind {
+	case "preset.narrative":
+		var value teller.Definition
+		if err = json.Unmarshal(raw, &value); err != nil {
+			break
+		}
+		value.ID = id
+		rewrite := func(values []string) error {
+			for i, ref := range values {
+				mapped, ok := refs["style.reference:"+ref]
+				if !ok {
+					return fmt.Errorf("unresolved style reference %s", ref)
+				}
+				values[i] = style.StoragePath(mapped)
+			}
+			return nil
+		}
+		if err = rewrite(value.StyleRefs); err != nil {
+			break
+		}
+		for i := range value.StyleRules {
+			if err = rewrite(value.StyleRules[i].StyleRefs); err != nil {
+				break
+			}
+		}
+		if err != nil {
+			break
+		}
+		var created teller.Definition
+		created, err = catalog.CreateTeller(value)
+		file = created.Path
+	case "preset.image":
+		var value imagepreset.Preset
+		if err = json.Unmarshal(raw, &value); err != nil {
+			break
+		}
+		value.ID = id
+		var created imagepreset.Preset
+		created, err = catalog.CreateImagePreset(value)
+		file = created.Path
+	case "preset.game_planning":
+		var value interactive.GamePlanningTemplate
+		if err = json.Unmarshal(raw, &value); err != nil {
+			break
+		}
+		value.ID = id
+		var created interactive.GamePlanningTemplate
+		created, err = catalog.CreateGamePlanningTemplate(value)
+		file = created.Path
+	case "preset.events":
+		var value interactive.EventPackageModule
+		if err = json.Unmarshal(raw, &value); err != nil {
+			break
+		}
+		value.ID = id
+		var created interactive.EventPackageModule
+		created, err = catalog.CreateEventPackage(value)
+		file = created.Path
+	case "preset.rules":
+		var value interactive.RuleSystemModule
+		if err = json.Unmarshal(raw, &value); err != nil {
+			break
+		}
+		value.ID = id
+		var reference struct {
+			ActorStateRef string `json:"actor_state_ref"`
+		}
+		if err = json.Unmarshal(raw, &reference); err != nil {
+			break
+		}
+		if reference.ActorStateRef != "" {
+			value.ActorStateID = reference.ActorStateRef
+		}
+		if value.ActorStateID != "" {
+			mapped, ok := refs["preset.actor_state:"+value.ActorStateID]
+			if !ok {
+				return "", nil, fmt.Errorf("unresolved actor state %s", value.ActorStateID)
+			}
+			value.ActorStateID = mapped
+		}
+		var created interactive.RuleSystemModule
+		created, err = catalog.CreateRuleSystem(value)
+		file = created.Path
+	case "preset.actor_state":
+		var value interactive.ActorStateModule
+		if err = json.Unmarshal(raw, &value); err != nil {
+			break
+		}
+		value.ID = id
+		var created interactive.ActorStateModule
+		created, err = catalog.CreateActorState(value)
+		file = created.Path
+	case "style.reference":
+		var created style.Reference
+		created, err = style.NewLibrary(dir).Create(style.WriteRequest{Name: strings.TrimSuffix(resource.Name, path.Ext(resource.Name)), Filename: id, Content: string(raw)})
+		file = created.Path
+	default:
+		return "", nil, fmt.Errorf("unsupported definition kind %s", resource.Kind)
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	if !filepath.IsAbs(file) {
+		file = filepath.Join(dir, file)
+	}
+	content, err := os.ReadFile(file)
+	if err != nil {
+		return "", nil, err
+	}
+	relative, err := filepath.Rel(dir, file)
+	return filepath.ToSlash(relative), content, err
+}
+
+func (s *Service) stageProject(ctx context.Context, previewDir string, extra *[]FileTarget, resource PreviewResource, binding *Binding, raw []byte, review *updateReview, staged map[FileTarget][]byte, expected map[FileTarget]string, importedAssets map[FileTarget]lore.Asset) (FileTarget, error) {
+	local := binding.Local
+	target := FileTarget{ProjectID: local.ProjectID}
+	switch resource.Kind {
+	case "lore.collection":
+		target.Path = lore.ItemsRelativePath
+	case "game.openings":
+		target.Path = openingPath
+	case "project.creator":
+		target.Path = book.CreatorFileName
+	case "project.cover":
+		target.Path = coverPath
+	default:
+		return target, fmt.Errorf("invalid Project resource")
+	}
+	if _, ok := staged[target]; !ok {
+		snapshot, err := s.snapshot(ctx, target)
+		if err != nil {
+			return target, err
+		}
+		staged[target], expected[target] = snapshot.Content, snapshot.Revision
+	}
+	switch resource.Kind {
+	case "project.creator":
+		if err := s.validateCreatorForProject(local.ProjectID, raw); err != nil {
+			return target, err
+		}
+		staged[target] = raw
+	case "project.cover":
+		var payload portableImage
+		if err := decode(raw, &payload); err != nil {
+			return target, err
+		}
+		raw, err := resourceAsset(previewDir, resource, payload.AssetPath)
+		if err != nil {
+			return target, err
+		}
+		cfg, format, err := image.DecodeConfig(bytes.NewReader(raw))
+		if err != nil || cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > 16384 || cfg.Height > 16384 || format != "png" {
+			return target, fmt.Errorf("Project cover must be a bounded PNG image")
+		}
+		staged[target] = raw
+	case "game.openings":
+		content, err := stageOpeningCollection(binding, raw, staged[target], review)
+		if err != nil {
+			return target, err
+		}
+		staged[target] = content
+	case "lore.collection":
+		if err := s.stageLoreCollection(ctx, previewDir, resource, binding, raw, review, staged, extra, importedAssets); err != nil {
+			return target, err
+		}
+	}
+	return target, nil
+}

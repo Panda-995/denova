@@ -7,8 +7,33 @@ import (
 	"testing"
 
 	"denova/internal/interactive"
-	agent "github.com/alfredxw/denova/agent"
+
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
+
+func TestPresentationErrorsReachTheNonblockingProductReducer(t *testing.T) {
+	var received interactive.TurnSubmissionInput
+	tool, err := newSubmitInteractiveTurnTool("test", func(_ context.Context, input interactive.TurnSubmissionInput) (interactive.TurnSubmissionReceipt, error) {
+		received = input
+		return interactive.TurnSubmissionReceipt{Ready: true}, nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, _ := tool.Info(t.Context())
+	for _, presentation := range []string{`"invalid"`, `{"background":null,"characters":[{"item_id":"hero","asset_id":null}]}`, `{"background":42,"characters":[false,{"item_id":"hero"}]}`} {
+		normalized, err := agenttool.NormalizeToolArguments(info, `{"state_changes":[],"choices":["Continue"],"presentation":`+presentation+`}`)
+		if err != nil {
+			t.Fatalf("presentation must not fail runtime validation: %v", err)
+		}
+		if _, err := tool.Run(t.Context(), normalized); err != nil {
+			t.Fatal(err)
+		}
+		if len(received.Diagnostics) != 0 || len(received.Presentation) == 0 {
+			t.Fatalf("presentation blocked core modules: %#v", received)
+		}
+	}
+}
 
 func TestSubmitInteractiveTurnExposesStateAndPlanFieldsDirectly(t *testing.T) {
 	tool, err := newSubmitInteractiveTurnTool("test", func(context.Context, interactive.TurnSubmissionInput) (interactive.TurnSubmissionReceipt, error) {
@@ -84,7 +109,7 @@ func TestSubmitInteractiveTurnKeepsConditionalValidationAndNativeValues(t *testi
 	}
 	invoke := func(arguments string) {
 		t.Helper()
-		normalized, err := agent.NormalizeToolArguments(info, arguments)
+		normalized, err := agenttool.NormalizeToolArguments(info, arguments)
 		if err != nil {
 			t.Fatal(err)
 		}

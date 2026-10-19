@@ -3,7 +3,7 @@ package session
 import (
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestDisplayContentDoesNotChangeCanonicalModelHistory(t *testing.T) {
@@ -16,7 +16,7 @@ func TestDisplayContentDoesNotChangeCanonicalModelHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.AppendWithMetadata(agent.UserMessage("/configuration\n\nhost context\n\nUpdate the preset."), MessageMetadata{
+	if err := sess.AppendWithMetadata(agentschema.UserMessage("/configuration\n\nhost context\n\nUpdate the preset."), MessageMetadata{
 		DisplayContent: "Update the preset.",
 	}); err != nil {
 		t.Fatal(err)

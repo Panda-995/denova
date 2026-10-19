@@ -3,11 +3,11 @@ package chat
 import (
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	agentconversation "denova/internal/agents/conversation"
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestDisplayEventRecorderKeepsInterleavedSubAgentTextInStableSegments(t *testing.T) {
@@ -68,7 +68,7 @@ func TestDisplayEventRecorderKeepsInterleavedSubAgentTextInStableSegments(t *tes
 
 	for _, sessionID := range []string{"child-a", "child-b"} {
 		data := eventData(sessionID, "")
-		data["status"] = agent.ResultCompleted
+		data["status"] = agentschema.ResultCompleted
 		recorder.Record(agentrun.Event{Type: "subagent_settled", Data: data})
 	}
 	recorder.Record(agentrun.Event{Type: "done", Data: map[string]any{}})

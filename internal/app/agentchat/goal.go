@@ -3,50 +3,62 @@ package agentchat
 import (
 	"context"
 	"errors"
-	"fmt"
 
-	agent "github.com/alfredxw/denova/agent"
-	publicgoal "github.com/alfredxw/denova/agent/goal"
+	agentconversation "denova/internal/agents/conversation"
+	agentruntime "denova/internal/agents/runtime"
+
+	publicgoal "github.com/alfredxw/denova/agent/engine/goal"
 )
 
-func (service *Service) ConversationGoal(ctx context.Context, binding Binding) (agent.GoalState, bool, error) {
+func (service *Service) ConversationGoal(ctx context.Context, binding Binding) (publicgoal.GoalState, bool, error) {
 	service.admission.Lock()
 	defer service.admission.Unlock()
-	resolved, project, _, err := service.conversationRuntime(ctx, binding)
+	resolved, project, runtimeCfg, err := service.conversationRuntime(ctx, binding)
 	if err != nil {
-		return agent.GoalState{}, false, err
+		return publicgoal.GoalState{}, false, err
 	}
 	if !project.store.Exists(resolved.SessionID) {
-		return agent.GoalState{}, false, nil
+		return publicgoal.GoalState{}, false, nil
 	}
-	return project.executionRuntime.Goal(ctx, runtimeOptions(resolved, ""))
+	selection, err := agentconversation.PreviewSession(project.store, resolved.SessionID, &runtimeCfg, resolved.agentKind)
+	if err != nil {
+		return publicgoal.GoalState{}, false, err
+	}
+	sess, err := project.store.Get(resolved.SessionID)
+	if err != nil {
+		return publicgoal.GoalState{}, false, err
+	}
+	bound, err := service.host.AgentEngines().ConversationSession(project.executionRuntime, runtimeOptions(resolved, ""), sess, selection.Engine())
+	if err != nil {
+		return publicgoal.GoalState{}, false, err
+	}
+	return bound.Goal(ctx)
 }
 
-func (service *Service) MutateConversationGoal(ctx context.Context, binding Binding, action string, objective string, expectedRevision uint64) (agent.GoalState, error) {
+func (service *Service) MutateConversationGoal(ctx context.Context, binding Binding, action string, objective string, expectedRevision uint64) (publicgoal.GoalState, error) {
 	service.admission.Lock()
 	defer service.admission.Unlock()
-	resolved, project, _, err := service.conversationRuntime(ctx, binding)
+	resolved, project, runtimeCfg, err := service.conversationRuntime(ctx, binding)
 	if err != nil {
-		return agent.GoalState{}, err
+		return publicgoal.GoalState{}, err
 	}
-	_, _, err = getOrCreateConversation(project, resolved)
+	selection, err := agentconversation.PreviewSession(project.store, resolved.SessionID, &runtimeCfg, resolved.agentKind)
 	if err != nil {
-		return agent.GoalState{}, err
+		return publicgoal.GoalState{}, err
 	}
-	mutation := agent.GoalMutation{ExpectedRevision: expectedRevision}
-	switch action {
-	case "set":
-		mutation.Kind, mutation.Objective = agent.GoalSet, objective
-	case "pause":
-		mutation.Kind = agent.GoalPause
-	case "resume":
-		mutation.Kind = agent.GoalResume
-	case "clear":
-		mutation.Kind = agent.GoalClear
-	default:
-		return agent.GoalState{}, fmt.Errorf("unsupported goal action %q", action)
+	sess, _, err := getOrCreateConversation(project, resolved)
+	if err != nil {
+		return publicgoal.GoalState{}, err
 	}
-	return project.executionRuntime.UpdateGoal(ctx, runtimeOptions(resolved, ""), mutation)
+	mutation, err := agentruntime.GoalMutation(action, objective, expectedRevision)
+	if err != nil {
+		return publicgoal.GoalState{}, err
+	}
+	bound, err := service.host.AgentEngines().ConversationSession(project.executionRuntime, runtimeOptions(resolved, ""), sess, selection.Engine())
+	if err != nil {
+		return publicgoal.GoalState{}, err
+	}
+	return bound.UpdateGoal(ctx, mutation)
 }
 
 func IsGoalRevisionConflict(err error) bool { return errors.Is(err, publicgoal.ErrRevisionConflict) }

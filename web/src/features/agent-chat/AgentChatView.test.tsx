@@ -1,6 +1,6 @@
-import { screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { useEffect } from 'react'
+import { StrictMode, useEffect } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EditorFlushHandler } from '@/components/Editor/useEditorDraftPersistence'
 import {
@@ -14,6 +14,7 @@ import {
   addAgentChatProject,
   archiveAgentChatProject,
   createAgentChatSession,
+  deleteAgentChatSession,
   getAgentChatHistory,
   getAgentChatProjects,
   relinkAgentChatProject,
@@ -103,6 +104,13 @@ describe('AgentChatView project workbenches', () => {
     expect(await screen.findByTestId('conversation:/books/a:session-a')).toHaveTextContent('active')
   })
 
+  it('retains source navigation across Strict Mode effect restarts', async () => {
+    requestAgentChatSessionNavigation({ projectId: 'project-a', sessionId: 'session-a', sourcePath: 'DEVELOPMENT.md' })
+    renderView(<StrictMode><AgentChatView composerSettings={{} as never} tellers={[]} imagePresets={[]} renderPage={() => null} renderReview={() => null} /></StrictMode>)
+    expect(await screen.findByTestId('conversation:/books/a:session-a')).toBeInTheDocument()
+    await waitFor(() => expect(readStoredWorkbenchState().projects['project-a'].tabs).toContainEqual(expect.objectContaining({ kind: 'files', selectedPath: 'DEVELOPMENT.md', group: 'secondary' })))
+  })
+
   it('offers both Project entry paths before adding a selected folder', async () => {
     const user = userEvent.setup()
     const added = project('/projects/story', 'story', '', '')
@@ -124,7 +132,7 @@ describe('AgentChatView project workbenches', () => {
     await waitFor(() => expect(addAgentChatProject).toHaveBeenCalledWith('/projects/story'))
     expect(selectAgentChatProjectDirectory).toHaveBeenCalledWith(undefined)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    expect(await screen.findByRole('button', { name: 'story' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: '收起 story' })).toBeInTheDocument()
   })
 
   it('opens the shared Book form after the creation guard succeeds', async () => {
@@ -240,11 +248,53 @@ describe('AgentChatView project workbenches', () => {
     expect(screen.getByRole('alertdialog')).toBeInTheDocument()
   })
 
-  it('toggles the activity tree into a persistent compact rail', async () => {
+  it('finishes archiving without waiting for a project refresh and ignores the older snapshot', async () => {
+    const user = userEvent.setup()
+    renderView(<AgentChatView composerSettings={{} as never} tellers={[]} imagePresets={[]} renderPage={() => null} renderReview={() => null} />)
+    await user.click(await screen.findByRole('button', { name: 'Project A 的项目操作' }))
+    await user.click(await screen.findByRole('menuitem', { name: '从项目中移除' }))
+
+    let resolveProjects!: (value: Awaited<ReturnType<typeof getAgentChatProjects>>) => void
+    vi.mocked(getAgentChatProjects).mockImplementation(() => new Promise(resolve => { resolveProjects = resolve }))
+    act(() => window.dispatchEvent(new Event('focus')))
+    const dialog = screen.getByRole('alertdialog')
+    await user.click(within(dialog).getByRole('button', { name: '从项目中移除' }))
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'Project A 的项目操作' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Project B 的项目操作' })).toBeInTheDocument()
+    await act(async () => resolveProjects([project('/books/a', 'Project A', 'session-a', 'Chat A'), project('/books/b', 'Project B', 'session-b', 'Chat B')]))
+    expect(screen.queryByRole('button', { name: 'Project A 的项目操作' })).not.toBeInTheDocument()
+  })
+
+  it('shows archive progress and retains projects refreshed during the removal', async () => {
+    const user = userEvent.setup()
+    let finishArchive!: () => void
+    vi.mocked(archiveAgentChatProject).mockImplementation(() => new Promise(resolve => { finishArchive = resolve }))
+    renderView(<AgentChatView composerSettings={{} as never} tellers={[]} imagePresets={[]} renderPage={() => null} renderReview={() => null} />)
+    await user.click(await screen.findByRole('button', { name: 'Project A 的项目操作' }))
+    await user.click(await screen.findByRole('menuitem', { name: '从项目中移除' }))
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: '从项目中移除' }))
+    expect(screen.getByRole('button', { name: '正在移除项目...' })).toHaveAttribute('aria-busy', 'true')
+    vi.mocked(getAgentChatProjects).mockResolvedValue([
+      project('/books/a', 'Project A', 'session-a', 'Chat A'),
+      project('/books/b', 'Project B', 'session-b', 'Chat B'),
+      project('/books/c', 'Project C', 'session-c', 'Chat C'),
+    ])
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    await act(async () => finishArchive())
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'Project A 的项目操作' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Project C 的项目操作' })).toBeInTheDocument()
+  })
+
+  it('toggles the activity tree from one persistent header button', async () => {
     const user = userEvent.setup()
     renderView(<AgentChatView composerSettings={{} as never} tellers={[]} imagePresets={[]} renderPage={() => null} renderReview={() => null} />)
 
-    await user.click(await screen.findByRole('button', { name: '隐藏项目导航' }))
+    const toggle = await screen.findByRole('button', { name: '隐藏项目导航' })
+    await user.click(toggle)
+    expect(screen.getByRole('button', { name: '显示项目导航' })).toBe(toggle)
     expect(screen.getByRole('button', { name: '显示项目导航' })).toBeInTheDocument()
     expect(window.localStorage.getItem('nova.agentchat.sidebarVisible.v1')).toBe('false')
 
@@ -374,6 +424,48 @@ describe('AgentChatView project workbenches', () => {
     expect(screen.getByRole('button', { name: /Chat A.*运行中/ })).toBeInTheDocument()
   })
 
+  it('deletes an idle conversation from its sidebar menu after confirmation', async () => {
+    const user = userEvent.setup()
+    const twoSessions = project('/books/a', 'Project A', 'session-a', 'Chat A')
+    twoSessions.sessions.push({ ...twoSessions.sessions[0], id: 'session-old', title: 'Old chat', running: false })
+    vi.mocked(getAgentChatProjects).mockResolvedValue([twoSessions])
+    vi.mocked(deleteAgentChatSession).mockReset().mockResolvedValue(undefined as never)
+
+    renderView(<AgentChatView composerSettings={{} as never} tellers={[]} imagePresets={[]} renderPage={() => null} renderReview={() => null} />)
+
+    fireEvent.contextMenu(await screen.findByRole('button', { name: /Old chat/ }))
+    await user.click(await screen.findByRole('menuitem', { name: '删除会话' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent('Old chat')
+    expect(deleteAgentChatSession).not.toHaveBeenCalled()
+    await user.click(within(dialog).getByRole('button', { name: '删除' }))
+    await waitFor(() => expect(deleteAgentChatSession).toHaveBeenCalledWith('project-a', 'session-old'))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+  })
+
+  it('keeps a running conversation from being deleted', async () => {
+    const user = userEvent.setup()
+    const runningProject = project('/books/a', 'Project A', 'session-a', 'Chat A')
+    runningProject.sessions[0].running = true
+    runningProject.sessions.push({ ...runningProject.sessions[0], id: 'session-old', title: 'Old chat', running: false })
+    vi.mocked(getAgentChatProjects).mockResolvedValue([runningProject])
+
+    renderView(<AgentChatView composerSettings={{} as never} tellers={[]} imagePresets={[]} renderPage={() => null} renderReview={() => null} />)
+
+    await user.click(await screen.findByRole('button', { name: /Chat A.*运行中/ }))
+    fireEvent.contextMenu(screen.getByRole('button', { name: /Chat A.*运行中/ }))
+    expect(await screen.findByRole('menuitem', { name: '运行中，停止后可删除' })).toHaveAttribute('aria-disabled', 'true')
+  })
+
+  it('keeps the only conversation of a Project from being deleted', async () => {
+    vi.mocked(getAgentChatProjects).mockResolvedValue([project('/books/a', 'Project A', 'session-a', 'Chat A')])
+
+    renderView(<AgentChatView composerSettings={{} as never} tellers={[]} imagePresets={[]} renderPage={() => null} renderReview={() => null} />)
+
+    fireEvent.contextMenu(await screen.findByRole('button', { name: /Chat A/ }))
+    expect(await screen.findByRole('menuitem', { name: '删除会话' })).toHaveAttribute('aria-disabled', 'true')
+  })
+
   it('opens one local draft without creating a backend conversation', async () => {
     const user = userEvent.setup()
     renderView(<AgentChatView composerSettings={{} as never} tellers={[]} imagePresets={[]} renderPage={() => null} renderReview={() => null} />)
@@ -386,52 +478,6 @@ describe('AgentChatView project workbenches', () => {
 
     expect(createAgentChatSession).not.toHaveBeenCalled()
     expect(screen.getAllByTestId('draft-conversation')).toHaveLength(1)
-  })
-
-  it('uses the full split separator as one visible resize target', async () => {
-    const splitProject = project('/books/a', 'Project A', 'session-a', 'Chat A')
-    splitProject.total = 2
-    splitProject.sessions.push({
-      ...splitProject.sessions[0],
-      id: 'session-secondary',
-      title: 'Secondary',
-    })
-    vi.mocked(getAgentChatProjects).mockResolvedValue([splitProject])
-    persistWorkbenchState({
-      activeProjectId: 'project-a',
-      projects: {
-        'project-a': {
-          tabs: [
-            {
-              kind: 'agent',
-              id: 'primary-tab',
-              projectId: 'project-a',
-              workspace: '/books/a',
-              group: 'primary',
-              sessionId: 'session-a',
-            },
-            {
-              kind: 'agent',
-              id: 'secondary-tab',
-              projectId: 'project-a',
-              workspace: '/books/a',
-              group: 'secondary',
-              sessionId: 'session-secondary',
-            },
-          ],
-          activeTabIds: { primary: 'primary-tab', secondary: 'secondary-tab' },
-          focusedGroup: 'secondary',
-          secondaryVisible: true,
-        },
-      },
-    })
-
-    renderView(<AgentChatView composerSettings={{} as never} tellers={[]} imagePresets={[]} renderPage={() => null} renderReview={() => null} />)
-
-    const separator = await screen.findByRole('separator', {
-      name: '调整分栏宽度',
-    })
-    expect(separator).toHaveClass('nova-resize-handle', 'nova-resize-divider', 'nova-resize-divider-vertical', 'w-2')
   })
 
   it('hides and restores the secondary pane without unmounting its conversation', async () => {
@@ -475,22 +521,32 @@ describe('AgentChatView project workbenches', () => {
 
     renderView(<AgentChatView composerSettings={{} as never} tellers={[]} imagePresets={[]} renderPage={() => null} renderReview={() => null} />)
 
+    const expandButton = await screen.findByRole('button', { name: '扩展右侧工作区' })
+    const primaryConversation = screen.getByTestId('conversation:/books/a:session-a')
+    await user.click(expandButton)
+    expect(primaryConversation).toHaveTextContent('hidden')
+    expect(screen.getByTestId('conversation:/books/a:session-secondary')).toHaveTextContent('active')
+    await user.click(screen.getByRole('button', { name: '还原左右分栏' }))
+    expect(screen.getByTestId('conversation:/books/a:session-a')).toBe(primaryConversation)
+    expect(primaryConversation).toHaveTextContent('active')
+    expect(screen.getByRole('separator', { name: '调整分栏宽度' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '扩展右侧工作区' }))
+
     const hideButton = await screen.findByRole('button', { name: '隐藏右侧工作区' })
-    const fixedControlHost = hideButton.closest('[data-slot="agent-chat-secondary-pane-control-host"]')
-    expect(fixedControlHost).toBeInTheDocument()
-    expect(hideButton.closest('[data-agent-chat-group]')).toBeNull()
+    expect(hideButton.closest('[data-agent-chat-group]')).toHaveAttribute('data-agent-chat-group', 'secondary')
     await user.click(hideButton)
     expect(screen.queryByRole('separator', { name: '调整分栏宽度' })).not.toBeInTheDocument()
     expect(screen.getByTestId('conversation:/books/a:session-secondary')).toHaveTextContent('hidden')
     await waitFor(() => expect(readStoredWorkbenchState().projects['project-a'].secondaryVisible).toBe(false))
 
     const showButton = screen.getByRole('button', { name: '显示右侧工作区' })
-    expect(showButton).toBe(hideButton)
-    expect(showButton.closest('[data-slot="agent-chat-secondary-pane-control-host"]')).toBe(fixedControlHost)
+    expect(showButton.closest('[data-agent-chat-group]')).toHaveAttribute('data-agent-chat-group', 'primary')
     await user.click(showButton)
     expect(await screen.findByRole('separator', { name: '调整分栏宽度' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '扩展右侧工作区' })).toBeInTheDocument()
+    expect(primaryConversation).toHaveTextContent('active')
     expect(screen.getByTestId('conversation:/books/a:session-secondary')).toHaveTextContent('active')
-    expect(screen.getByRole('button', { name: '隐藏右侧工作区' })).toBe(hideButton)
+    expect(screen.getByRole('button', { name: '隐藏右侧工作区' }).closest('[data-agent-chat-group]')).toHaveAttribute('data-agent-chat-group', 'secondary')
   })
 
   it('lets the first secondary-pane click choose what to open there', async () => {
@@ -602,6 +658,32 @@ describe('AgentChatView project workbenches', () => {
     expect(screen.queryByRole('button', { name: '关闭 SubAgent 详情' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '关闭 Researcher' }))
     expect(await screen.findByTestId('project-files-tab')).toHaveTextContent('no-selection')
+  })
+
+  it('returns focus to the primary pane after closing its last child-Agent tab', async () => {
+    const user = userEvent.setup()
+    persistWorkbenchState({
+      activeProjectId: 'project-a',
+      projects: {
+        'project-a': {
+          tabs: [agentTabForProject('agent-tab', 'project-a', '/books/a', 'session-a')],
+          activeTabIds: { primary: 'agent-tab', secondary: null },
+          focusedGroup: 'primary',
+          secondaryVisible: false,
+        },
+      },
+    })
+
+    renderView(<AgentChatView composerSettings={{} as never} tellers={[]} imagePresets={[]} renderPage={() => null} renderReview={() => null} />)
+
+    await user.click(await screen.findByRole('button', { name: 'open child Agent' }))
+    await user.click(await screen.findByRole('button', { name: '关闭 Researcher' }))
+    await waitFor(() => expect(readStoredWorkbenchState().projects['project-a']).toMatchObject({
+      tabs: [{ id: 'agent-tab' }],
+      activeTabIds: { primary: 'agent-tab', secondary: null },
+      focusedGroup: 'primary',
+      secondaryVisible: false,
+    }))
   })
 
   it('opens a tool path in the Files tab owned by that Agent Chat project', async () => {

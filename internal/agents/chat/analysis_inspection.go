@@ -4,13 +4,15 @@ import (
 	"fmt"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-	agentcleanup "github.com/alfredxw/denova/agent/cleanup"
-
 	"denova/config"
 	agentcontext "denova/internal/agents/context"
 	agentcompaction "denova/internal/agents/context/compaction"
 	"denova/internal/agents/prompts"
+
+	"github.com/alfredxw/denova/agent"
+	sdkcompaction "github.com/alfredxw/denova/agent/context/compaction"
+	agentmodel "github.com/alfredxw/denova/agent/model"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 // BuildInspectedContextAnalysis projects the public Agent Session's exact,
@@ -21,16 +23,16 @@ func BuildInspectedContextAnalysis(
 	agentKind, mode string,
 	composition prompts.SystemPromptComposition,
 	inspection agent.Inspection,
-) ContextAnalysis {
+) (ContextAnalysis, error) {
 	messages := inspection.ModelRequest.Messages
 	stablePrefix := min(max(0, inspection.ModelRequest.StablePrefixMessages), len(messages))
-	systemMessages := make([]*agent.Message, 0, 1)
+	systemMessages := make([]*agentschema.Message, 0, 1)
 	contextMessages := make([]ContextAnalysisPart, 0, len(messages))
 	for index, message := range messages {
 		if message == nil {
 			continue
 		}
-		if message.Role == agent.System {
+		if message.Role == agentschema.System {
 			systemMessages = append(systemMessages, message)
 			continue
 		}
@@ -53,20 +55,24 @@ func BuildInspectedContextAnalysis(
 	}
 
 	systemPrompt, systemParts := inspectedSystemPrompt(composition, systemMessages)
-	tokens := agentcleanup.EstimateInspectedTokens(messages, inspection.ModelRequest)
+	size, err := inspection.ModelRequest.EstimateInput()
+	if err != nil {
+		return ContextAnalysis{}, err
+	}
+	tokens := size.Tokens
 	completionReserve, toolResultReserve := agentcompaction.EstimateProjectionReserves(cfg, agentKind, 0)
 	window := config.ResolveAgentModel(cfg, agentKind).ContextWindowTokens
 	threshold := config.ResolveAgentContext(cfg, agentKind).CompactionThreshold
 	if inspection.Compaction != nil {
-		if inspection.Compaction.Metrics.ContextWindowTokens > 0 {
-			window = inspection.Compaction.Metrics.ContextWindowTokens
+		if inspection.CompactionMetrics.ContextWindowTokens > 0 {
+			window = inspection.CompactionMetrics.ContextWindowTokens
 		}
-		if inspection.Compaction.Metrics.Threshold > 0 {
-			threshold = inspection.Compaction.Metrics.Threshold
+		if inspection.CompactionMetrics.Threshold > 0 {
+			threshold = inspection.CompactionMetrics.Threshold
 		}
 	}
 	if maxTokens := inspection.ModelRequest.Options.MaxTokens; maxTokens != nil {
-		totalReserve := agent.CapacityAwareTokenReserve(
+		totalReserve := agentmodel.CapacityAwareTokenReserve(
 			completionReserve+toolResultReserve, *maxTokens, window, threshold,
 		)
 		completionReserve = max(0, totalReserve-toolResultReserve)
@@ -88,11 +94,11 @@ func BuildInspectedContextAnalysis(
 		TokenEstimate: tokens, ProjectedTokenEstimate: projected,
 		ReservedCompletionTokens: completionReserve, ReservedToolResultTokens: toolResultReserve,
 		ContextWindowTokens: window, ContextUsageRatio: ratio,
-		CompactionEpoch:  inspectionCompactionEpoch(inspection.Compaction),
-		CompactionActive: inspection.Compaction != nil,
-		WouldCompact:     window > 0 && threshold > 0 && ratio >= threshold,
-		Compaction:       compaction,
-	}
+		CompactionRevision: inspectionCompactionRevision(inspection.Compaction),
+		CompactionActive:   inspection.Compaction != nil,
+		WouldCompact:       window > 0 && threshold > 0 && ratio >= threshold,
+		Compaction:         compaction,
+	}, nil
 }
 
 // inspectedContextProvenanceParts explains the exact model request without
@@ -119,7 +125,7 @@ func inspectedContextProvenanceParts(inspection agent.Inspection) []ContextAnaly
 	return parts
 }
 
-func inspectionContainsContextContent(messages []*agent.Message, content string) bool {
+func inspectionContainsContextContent(messages []*agentschema.Message, content string) bool {
 	for _, message := range messages {
 		if message != nil && strings.Contains(message.Content, content) {
 			return true
@@ -136,12 +142,15 @@ func BuildInteractiveInspectedContextAnalysis(
 	cfg *config.Config,
 	composition prompts.SystemPromptComposition,
 	inspection agent.Inspection,
-) ContextAnalysis {
-	analysis := BuildInspectedContextAnalysis(
+) (ContextAnalysis, error) {
+	analysis, err := BuildInspectedContextAnalysis(
 		cfg, config.AgentKindInteractiveStory, "interactive", composition, inspection,
 	)
+	if err != nil {
+		return ContextAnalysis{}, err
+	}
 	if len(analysis.ContextMessages) == 0 {
-		return analysis
+		return analysis, nil
 	}
 	last := len(analysis.ContextMessages) - 1
 	analysis.ContextMessages[last].Source = "Current interactive turn / 本轮互动"
@@ -150,12 +159,12 @@ func BuildInteractiveInspectedContextAnalysis(
 		analysis.ContextMessages[last].Content,
 	)
 	analysis.ContextParts = append([]ContextAnalysisPart(nil), analysis.ContextMessages...)
-	return analysis
+	return analysis, nil
 }
 
 func inspectedSystemPrompt(
 	composition prompts.SystemPromptComposition,
-	messages []*agent.Message,
+	messages []*agentschema.Message,
 ) (string, []ContextAnalysisPart) {
 	contents := make([]string, 0, len(messages))
 	for _, message := range messages {
@@ -179,30 +188,21 @@ func inspectedSystemPrompt(
 	return prompt, parts
 }
 
-func inspectionCompactionEpoch(compaction *agent.CompactionState) int {
+func inspectionCompactionRevision(compaction *sdkcompaction.CompactionState) uint64 {
 	if compaction == nil {
 		return 0
 	}
-	return int(compaction.Revision)
+	return compaction.Revision
 }
 
-func contextAnalysisCompactionFromInspection(compaction *agent.CompactionState) *ContextAnalysisCompaction {
+func contextAnalysisCompactionFromInspection(compaction *sdkcompaction.CompactionState) *ContextAnalysisCompaction {
 	if compaction == nil {
 		return nil
 	}
-	metrics := compaction.Metrics
-	tokensAfter := metrics.ProjectedTokensAfter
-	if tokensAfter <= 0 {
-		tokensAfter = compaction.TokenEstimate
-	}
-	sourceCount := metrics.SourceMessageCount
-	if sourceCount <= 0 {
-		sourceCount = max(0, compaction.ReplacementTo-compaction.ReplacementFrom)
-	}
 	return &ContextAnalysisCompaction{
-		ID: compaction.ID, Epoch: int(compaction.Revision), Summary: compaction.Summary,
-		TokensBefore: metrics.ProjectedTokensBefore, TokensAfter: tokensAfter,
-		TargetRatio: metrics.RecoveryBand, SourceMessageCount: sourceCount,
-		Removable: true,
+		ID: compaction.ID, Revision: compaction.Revision, Summary: compaction.Summary,
+		TokensBefore: compaction.TokensBefore, TokensAfter: compaction.TokensAfter,
+		SourceMessageCount: compaction.SourceMessageCount,
+		Removable:          true,
 	}
 }

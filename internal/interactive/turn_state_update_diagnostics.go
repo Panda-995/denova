@@ -17,6 +17,7 @@ import (
 // while overlap checks are retained across successfully compiled operations.
 func collectTurnStateUpdateValidationErrors(system StoryDirectorActorStateSystem, currentState map[string]any, updates []interactivestate.Update, options TurnStateUpdateCompileOptions) []*StateUpdateValidationError {
 	workingState := cloneActorStateRoot(currentState)
+	options.deferResourceBounds = true
 	if intents, err := planActorLifecycleUpdates(normalizeActorStateSystem(system), currentState, interactivestate.NormalizeUpdates(updates)); err == nil {
 		options.actorLifecycleIntents = intents
 	}
@@ -127,6 +128,9 @@ func diagnosticForStateUpdateValidationError(validationError *StateUpdateValidat
 func stateUpdateDiagnosticEnglishForError(validationError *StateUpdateValidationError) string {
 	if validationError == nil {
 		return "The state change failed frozen-schema validation."
+	}
+	if validationError.Code == "resource_bounds_invalid" {
+		return validationError.Actual
 	}
 	typeMismatch := validationError.Expected == "number" || validationError.Expected == "bool" || validationError.Expected == "object" || validationError.Expected == "list"
 	if typeMismatch {

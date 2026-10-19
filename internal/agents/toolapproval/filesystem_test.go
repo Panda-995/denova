@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
+
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 func TestFilesystemReadPermissionSeparatesProjectExternalAndFullAccess(t *testing.T) {
@@ -29,8 +29,8 @@ func TestFilesystemReadPermissionSeparatesProjectExternalAndFullAccess(t *testin
 			t.Fatal(err)
 		}
 	}
-	descriptor := agent.ToolDescriptor{
-		Source: agent.ToolSourceRead, MutationScope: agent.ToolMutationNone,
+	descriptor := agenttool.ToolDescriptor{
+		Source: agenttool.ToolSourceRead, MutationScope: agenttool.ToolMutationNone,
 		Capability: config.AgentToolFilesystemRead,
 	}
 	request := func(mode config.AgentApprovalMode, toolName, arguments string, rules []config.AgentApprovalRule) Decision {
@@ -78,8 +78,8 @@ func TestFilesystemReadRuleIsSharedByReadGlobAndGrepWithinExactRoot(t *testing.T
 			t.Fatal(err)
 		}
 	}
-	descriptor := agent.ToolDescriptor{
-		Source: agent.ToolSourceRead, MutationScope: agent.ToolMutationNone,
+	descriptor := agenttool.ToolDescriptor{
+		Source: agenttool.ToolSourceRead, MutationScope: agenttool.ToolMutationNone,
 		Capability: config.AgentToolFilesystemRead,
 	}
 	request := func(toolName, arguments string, rules []config.AgentApprovalRule) Decision {

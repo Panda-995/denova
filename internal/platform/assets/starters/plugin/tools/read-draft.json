@@ -1,0 +1,21 @@
+{
+  "description": "Read the plugin draft saved in the bound Project. Shared with this plugin panel regardless of Agent scope.",
+  "effect": "read",
+  "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "additionalProperties": false
+  }
+}

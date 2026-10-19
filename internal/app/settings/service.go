@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 
 	"denova/config"
@@ -71,8 +72,14 @@ func (service *Service) Snapshot(target Target) (config.LayeredSettings, error) 
 		return config.LayeredSettings{}, err
 	}
 	if runtime.Config.RuntimeWebPort > 0 {
+		lanURL, err := url.Parse(layered.Access.LANURL)
+		if err != nil {
+			return config.LayeredSettings{}, err
+		}
 		layered.Access.LocalURL = config.LocalHTTPURL(runtime.Config.RuntimeWebPort)
-		layered.Access.LANURL = config.LANHTTPURL(runtime.Config.RuntimeWebPort)
+		// The settings loader already resolved the live LAN address. Changing
+		// its port must not enumerate every network interface a second time.
+		layered.Access.LANURL = config.HTTPURL(lanURL.Hostname(), runtime.Config.RuntimeWebPort)
 	}
 	layered.Runtime.DevMode = runtime.Config.DevMode
 

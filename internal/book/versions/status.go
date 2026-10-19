@@ -1,31 +1,33 @@
 package versions
 
-func (s *Service) Status(settings VersionAutoSettings) (VersionStatus, error) {
+import "context"
+
+// Status compares file identities with the current version. Added files need
+// metadata only; tracked contents are streamed and respect Project cancellation.
+func (s *Service) Status(ctx context.Context, settings VersionAutoSettings) (VersionStatus, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.statusLocked(settings)
+	return s.statusLocked(ctx, settings)
 }
 
-func (s *Service) statusLocked(settings VersionAutoSettings) (VersionStatus, error) {
-	snapshot, err := s.collectWorkspaceSnapshot(nil)
-	if err != nil {
+func (s *Service) statusLocked(ctx context.Context, settings VersionAutoSettings) (VersionStatus, error) {
+	if err := ctx.Err(); err != nil {
 		return VersionStatus{}, err
 	}
 	current, err := s.headVersion()
 	if err != nil {
 		return VersionStatus{}, err
 	}
-	changes := []VersionChange{}
+	baseline := map[string]versionFileData{}
 	if current != nil {
-		changes, err = s.diffChangesFromSnapshot(snapshot, current.ID)
+		baseline, err = s.commitFileIndex(current.ID)
 		if err != nil {
 			return VersionStatus{}, err
 		}
-	} else {
-		changes = make([]VersionChange, 0, len(snapshot.files))
-		for _, file := range snapshot.files {
-			changes = append(changes, VersionChange{Path: file.Path, Status: "added"})
-		}
+	}
+	changes, err := s.statusChanges(ctx, baseline)
+	if err != nil {
+		return VersionStatus{}, err
 	}
 	lastAutoAt, _, err := s.latestVersionTimes()
 	if err != nil {

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { RefreshCw } from 'lucide-react'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import {
   createVersion,
   getVersionDiff,
@@ -68,8 +68,8 @@ export function VersionPanel({ embedded = false, projectId, workspace, refreshSi
   const comparison: VersionDiffComparison = currentSelection ? 'workspace' : 'parent'
 
   const summaryQuery = useQuery({
-    queryKey: versionQueryKeys.diff(projectId, targetVersion?.id ?? '', comparison),
-    queryFn: () => getVersionDiff(projectId, targetVersion!.id, undefined, comparison),
+    queryKey: [...versionQueryKeys.diff(projectId, targetVersion?.id ?? '', comparison), 'initial'],
+    queryFn: () => getVersionDiff(projectId, targetVersion!.id, undefined, comparison, 'initial'),
     enabled: Boolean(projectId && visible && targetVersion),
   })
   const summary = targetVersion ? summaryQuery.data ?? null : null
@@ -220,6 +220,8 @@ export function VersionPanel({ embedded = false, projectId, workspace, refreshSi
           closeAdaptivePaneRef.current = controls.closePane
           return (
             <VersionDiffWorkspace
+              projectId={projectId}
+              visible={visible}
               currentSelection={currentSelection}
               targetVersion={targetVersion}
               summary={summary}

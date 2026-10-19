@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils'
 import { classifyStateChange, type ClassifiedStateChange } from './changes'
 import { changeFieldLabel, type ActorStateEntry, type StoryStateChange } from './model'
 import type { ActorStateSchemaSnapshot } from '../../types'
+import { useActorReferenceNames } from './actor-reference'
 
 const MAX_SUMMARY_ITEMS = 4
 
@@ -56,6 +57,7 @@ export function ChangesSummary({ changes, actors, schema, standalone = false }: 
 
 function SummaryItemValue({ change }: { change: ClassifiedStateChange }) {
   const { t } = useTranslation()
+  const actorNames = useActorReferenceNames()
   if (change.kind === 'delta' && change.delta !== null) {
     return (
       <span className={cn('font-mono tabular-nums', change.tone === 'positive' ? 'text-[var(--story-state-positive)]' : 'text-[var(--story-state-negative)]')}>
@@ -64,10 +66,10 @@ function SummaryItemValue({ change }: { change: ClassifiedStateChange }) {
     )
   }
   if (change.kind === 'added') {
-    return <span className="text-[var(--story-state-positive)]">{change.text ? `+${truncateEnd(change.text, 10)}` : t('storyStage.state.change.added')}</span>
+    return <span className="text-[var(--story-state-positive)]">{change.text ? `+${truncateEnd(actorNames.get(change.text) ?? change.text, 10)}` : t('storyStage.state.change.added')}</span>
   }
   if (change.kind === 'removed') {
-    return <span className="text-[var(--story-state-negative)]">{change.text ? `−${truncateEnd(change.text, 10)}` : t('storyStage.state.change.removed')}</span>
+    return <span className="text-[var(--story-state-negative)]">{change.text ? `−${truncateEnd(actorNames.get(change.text) ?? change.text, 10)}` : t('storyStage.state.change.removed')}</span>
   }
   if (change.kind === 'archived') {
     return <span className="text-[var(--story-state-negative)]">{t('storyStage.state.change.archived')}</span>

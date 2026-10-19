@@ -39,7 +39,7 @@ export function WorkbenchNoticePill({
           className="min-w-0 flex-1 truncate px-2 py-1.5 text-left"
           onClick={onOpenSettings}
         >
-          {t('workbench.updateNotice.available', { version: notice.latestVersion })}
+          {t(notice.ready ? 'workbench.updateNotice.ready' : 'workbench.updateNotice.available', { version: notice.latestVersion })}
         </button>
       ) : (
         <a

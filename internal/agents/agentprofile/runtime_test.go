@@ -6,9 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
+
+	agentcontext "github.com/alfredxw/denova/agent/context"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 func TestContextSourceMapsStableSessionAndTurnBindings(t *testing.T) {
@@ -26,34 +28,34 @@ func TestContextSourceMapsStableSessionAndTurnBindings(t *testing.T) {
 	if source == nil {
 		t.Fatal("custom Agent context source is nil")
 	}
-	fragments, err := source.Materialize(context.Background(), agent.ContextRequest{})
+	fragments, err := source.Materialize(context.Background(), agentcontext.ContextRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(fragments) != 3 {
 		t.Fatalf("context fragments = %#v", fragments)
 	}
-	assertContextSlot(t, fragments[0], agent.ContextStablePrefix, agent.ContextLeadingMessage, "")
-	assertContextSlot(t, fragments[1], agent.ContextSessionState, agent.ContextStateMessage, "custom-agent:writer:state")
-	assertContextSlot(t, fragments[2], agent.ContextTurn, agent.ContextFinalUserPrefix, "")
+	assertContextSlot(t, fragments[0], agentschema.ContextStablePrefix, agentschema.ContextLeadingMessage, "")
+	assertContextSlot(t, fragments[1], agentschema.ContextSessionState, agentschema.ContextStateMessage, "custom-agent:writer:state")
+	assertContextSlot(t, fragments[2], agentschema.ContextTurn, agentschema.ContextFinalUserPrefix, "")
 }
 
 func TestApplyToolGuidanceChangesOnlyDescription(t *testing.T) {
-	original := &profileTestTool{info: &agent.ToolInfo{
+	original := &profileTestTool{info: &agentschema.ToolInfo{
 		Name: "read", Desc: "Read canonical content.",
-		ParamsOneOf: agent.NewParamsOneOfByParams(map[string]*agent.ParameterInfo{"path": {Type: "string"}}),
+		ParamsOneOf: agentschema.NewParamsOneOfByParams(map[string]*agentschema.ParameterInfo{"path": {Type: "string"}}),
 	}}
-	definition := agent.ToolDefinition{
+	definition := agenttool.ToolDefinition{
 		Tool:                   original,
-		Descriptor:             agent.ToolDescriptor{Source: agent.ToolSourceRead, Capability: config.AgentToolFilesystemRead},
-		ImplementationIdentity: agent.CapabilityIdentity{Kind: "test.read", Version: 1, ConfigHash: "stable"},
+		Descriptor:             agenttool.ToolDescriptor{Source: agenttool.ToolSourceRead, Capability: config.AgentToolFilesystemRead},
+		ImplementationIdentity: agentschema.CapabilityIdentity{Kind: "test.read", Version: 1, ConfigHash: "stable"},
 	}
 	cfg := activeWritingConfig(config.CustomAgentConfig{
 		ID: "writer", Name: "Writer", Contract: config.AgentContractWritingPrimary,
 		ToolGuidance: map[string]string{"read": "Read the outline before prose files."},
 	})
 
-	resolved, err := ApplyToolGuidance(context.Background(), cfg, config.AgentKindIDE, []agent.ToolDefinition{definition})
+	resolved, err := ApplyToolGuidance(context.Background(), cfg, config.AgentKindIDE, []agenttool.ToolDefinition{definition})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,17 +96,19 @@ func activeWritingConfig(definition config.CustomAgentConfig) *config.Config {
 	return &config.Config{CustomAgents: []config.CustomAgentConfig{definition}, ActiveCustomAgentID: definition.ID}
 }
 
-func assertContextSlot(t *testing.T, fragment agent.ContextFragment, stability agent.ContextStability, placement agent.ContextPlacement, stateID string) {
+func assertContextSlot(t *testing.T, fragment agentschema.ContextFragment, stability agentschema.ContextStability, placement agentschema.ContextPlacement, stateID string) {
 	t.Helper()
 	if fragment.Stability != stability || fragment.Placement != placement || fragment.StateID != stateID {
 		t.Fatalf("context slot = %#v, want stability=%q placement=%q state_id=%q", fragment, stability, placement, stateID)
 	}
 }
 
-type profileTestTool struct{ info *agent.ToolInfo }
+type profileTestTool struct{ info *agentschema.ToolInfo }
 
-func (tool *profileTestTool) Info(context.Context) (*agent.ToolInfo, error) { return tool.info, nil }
+func (tool *profileTestTool) Info(context.Context) (*agentschema.ToolInfo, error) {
+	return tool.info, nil
+}
 
-func (tool *profileTestTool) Run(context.Context, string, ...agent.ToolOption) (agent.ToolResult, error) {
-	return agent.TextToolResult("ok"), nil
+func (tool *profileTestTool) Run(context.Context, string, ...agenttool.ToolOption) (agentschema.ToolResult, error) {
+	return agentschema.TextToolResult("ok"), nil
 }

@@ -78,7 +78,7 @@ func TestReviewInputEffectConvergesAfterOneLedgerCommittedBeforeCrash(t *testing
 	}
 	runtime := Runtime{
 		Workspace: workspace, StateRoot: stateRoot, SessionID: "session-effect",
-		DocumentsEnabled: true, BookService: book.NewService(workspace),
+		BookService: book.NewService(workspace),
 	}
 	effect := agentrun.InputCommitEffectRequest{CommandID: "command", OperationID: "operation", Cycle: 1, Hash: "canonical-hash"}
 	effectID, err := effect.ID()

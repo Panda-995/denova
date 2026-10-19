@@ -12,8 +12,10 @@ import (
 	"fmt"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-	publictools "github.com/alfredxw/denova/agent/tools"
+	"github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
+	publictools "github.com/alfredxw/denova/agent/tool/builtin"
 )
 
 // Child is one fully composed delegated Agent. Identity describes the exact
@@ -22,40 +24,38 @@ type Child struct {
 	Name        string
 	Description string
 	Definition  agent.Definition
-	Identity    agent.CapabilityIdentity
+	Identity    agentschema.CapabilityIdentity
 }
 
 // Config contains the Denova policy projection for the common delegation tools.
 // These values affect the model-visible tool contract and are fingerprinted.
 type Config struct {
 	Capability         string
-	Description        string
 	MaxResultBytes     int
 	Parallelism        int
-	ValidationIdentity agent.CapabilityIdentity
-	Validate           func(context.Context, []agent.ToolDefinition) error `json:"-"`
+	ValidationIdentity agentschema.CapabilityIdentity
+	Validate           func(context.Context, []agenttool.ToolDefinition) error `json:"-"`
 }
 
 // Catalog is deliberately unusable until an execution owner binds a durable
 // TaskExecutor. This prevents a Definition from silently advertising
 // delegation without a public Session/Run owner.
 type Catalog struct {
-	base     agent.Toolset
+	base     agenttool.Toolset
 	children []Child
 	config   Config
-	identity agent.CapabilityIdentity
+	identity agentschema.CapabilityIdentity
 }
 
-func NewCatalog(base agent.Toolset, config Config, children ...Child) (*Catalog, error) {
+func NewCatalog(base agenttool.Toolset, config Config, children ...Child) (*Catalog, error) {
 	if base == nil {
 		var err error
-		base, err = agent.StaticTools()
+		base, err = agenttool.StaticTools()
 		if err != nil {
 			return nil, fmt.Errorf("construct empty delegation base Toolset: %w", err)
 		}
 	}
 	config.Capability = strings.TrimSpace(config.Capability)
-	config.Description = strings.TrimSpace(config.Description)
 	if config.Capability == "" || config.MaxResultBytes <= 0 || config.Parallelism <= 0 || config.Validate == nil ||
 		config.ValidationIdentity.Kind == "" || config.ValidationIdentity.Version == 0 {
 		return nil, errors.New("delegation Catalog requires capability, positive result limit, positive parallelism, and identified manifest validation")
@@ -75,25 +75,24 @@ func NewCatalog(base agent.Toolset, config Config, children ...Child) (*Catalog,
 		resolved[index] = child
 	}
 	encoded, _ := json.Marshal(struct {
-		Base               agent.CapabilityIdentity
+		Base               agentschema.CapabilityIdentity
 		Capability         string
-		Description        string
 		MaxResultBytes     int
 		Parallelism        int
-		ValidationIdentity agent.CapabilityIdentity
+		ValidationIdentity agentschema.CapabilityIdentity
 		Children           []struct {
 			Name, Description string
-			Identity          agent.CapabilityIdentity
+			Identity          agentschema.CapabilityIdentity
 		}
 	}{
-		Base: base.Identity(), Capability: config.Capability, Description: config.Description,
+		Base: base.Identity(), Capability: config.Capability,
 		MaxResultBytes: config.MaxResultBytes, Parallelism: config.Parallelism, ValidationIdentity: config.ValidationIdentity,
 		Children: childIdentities(resolved),
 	})
 	digest := sha256.Sum256(encoded)
 	return &Catalog{
 		base: base, children: resolved, config: config,
-		identity: agent.CapabilityIdentity{
+		identity: agentschema.CapabilityIdentity{
 			Kind: "denova.tools.tasks", Version: 1, ConfigHash: hex.EncodeToString(digest[:]),
 		},
 	}, nil
@@ -101,29 +100,29 @@ func NewCatalog(base agent.Toolset, config Config, children ...Child) (*Catalog,
 
 func childIdentities(children []Child) []struct {
 	Name, Description string
-	Identity          agent.CapabilityIdentity
+	Identity          agentschema.CapabilityIdentity
 } {
 	result := make([]struct {
 		Name, Description string
-		Identity          agent.CapabilityIdentity
+		Identity          agentschema.CapabilityIdentity
 	}, len(children))
 	for index, child := range children {
 		result[index] = struct {
 			Name, Description string
-			Identity          agent.CapabilityIdentity
+			Identity          agentschema.CapabilityIdentity
 		}{child.Name, child.Description, child.Identity}
 	}
 	return result
 }
 
-func (catalog *Catalog) Identity() agent.CapabilityIdentity {
+func (catalog *Catalog) Identity() agentschema.CapabilityIdentity {
 	if catalog == nil {
-		return agent.CapabilityIdentity{}
+		return agentschema.CapabilityIdentity{}
 	}
 	return catalog.identity
 }
 
-func (catalog *Catalog) PrepareTools(context.Context, agent.ToolRequest) ([]agent.ToolDefinition, error) {
+func (catalog *Catalog) PrepareTools(context.Context, agenttool.ToolRequest) ([]agenttool.ToolDefinition, error) {
 	return nil, errors.New("Denova delegation Catalog is not bound to a durable Agent owner")
 }
 
@@ -151,7 +150,7 @@ func (catalog *Catalog) MaxResultBytes() int {
 	return catalog.config.MaxResultBytes
 }
 
-func (catalog *Catalog) Bind(executor publictools.TaskExecutor) (agent.Toolset, error) {
+func (catalog *Catalog) Bind(executor publictools.TaskExecutor) (agenttool.Toolset, error) {
 	if catalog == nil || executor == nil {
 		return nil, errors.New("bind Denova delegation: Catalog and TaskExecutor are required")
 	}
@@ -161,7 +160,7 @@ func (catalog *Catalog) Bind(executor publictools.TaskExecutor) (agent.Toolset, 
 
 type boundCatalog struct {
 	catalog *Catalog
-	tasks   agent.Toolset
+	tasks   agenttool.Toolset
 }
 
 func (bound *boundCatalog) InitializeDefinition(ctx context.Context) error {
@@ -174,14 +173,14 @@ func (bound *boundCatalog) InitializeDefinition(ctx context.Context) error {
 	return nil
 }
 
-func (bound *boundCatalog) Identity() agent.CapabilityIdentity {
+func (bound *boundCatalog) Identity() agentschema.CapabilityIdentity {
 	if bound == nil || bound.catalog == nil {
-		return agent.CapabilityIdentity{}
+		return agentschema.CapabilityIdentity{}
 	}
 	return bound.catalog.Identity()
 }
 
-func (bound *boundCatalog) PrepareTools(ctx context.Context, request agent.ToolRequest) ([]agent.ToolDefinition, error) {
+func (bound *boundCatalog) PrepareTools(ctx context.Context, request agenttool.ToolRequest) ([]agenttool.ToolDefinition, error) {
 	if bound == nil || bound.catalog == nil || bound.tasks == nil {
 		return nil, errors.New("Denova delegation Catalog binding is incomplete")
 	}
@@ -199,13 +198,6 @@ func (bound *boundCatalog) PrepareTools(ctx context.Context, request agent.ToolR
 		}
 		tasks[index].Descriptor.Capability = bound.catalog.config.Capability
 		tasks[index].Descriptor.MaxResultBytes = bound.catalog.config.MaxResultBytes
-		info, infoErr := tasks[index].Tool.Info(ctx)
-		if infoErr != nil {
-			return nil, fmt.Errorf("inspect delegated Agent tool %d: %w", index, infoErr)
-		}
-		if bound.catalog.config.Description != "" && info != nil && info.Name == "task" {
-			tasks[index].Tool = describedTaskTool{Tool: tasks[index].Tool, description: bound.catalog.config.Description}
-		}
 	}
 	definitions := append(base, tasks...)
 	if err := bound.catalog.config.Validate(ctx, definitions); err != nil {
@@ -214,22 +206,7 @@ func (bound *boundCatalog) PrepareTools(ctx context.Context, request agent.ToolR
 	return definitions, nil
 }
 
-type describedTaskTool struct {
-	agent.Tool
-	description string
-}
-
-func (tool describedTaskTool) Info(ctx context.Context) (*agent.ToolInfo, error) {
-	info, err := tool.Tool.Info(ctx)
-	if err != nil || info == nil {
-		return info, err
-	}
-	cloned := *info
-	cloned.Desc = tool.description
-	return &cloned, nil
-}
-
-func AsCatalog(toolset agent.Toolset) (*Catalog, bool) {
+func AsCatalog(toolset agenttool.Toolset) (*Catalog, bool) {
 	catalog, ok := toolset.(*Catalog)
 	return catalog, ok && catalog != nil
 }

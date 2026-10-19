@@ -70,6 +70,7 @@ function TemplateFieldRow({
           options={field.options}
           min={field.min}
           max={field.max}
+          maxLabel={field.max_field}
           compact
         />
       </div>

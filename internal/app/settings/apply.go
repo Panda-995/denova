@@ -62,6 +62,7 @@ func ApplyLayered(cfg *config.Config, layered config.LayeredSettings) {
 	config.ApplyModelEnvironment(cfg)
 	config.ApplyImageAPIEnvironment(cfg)
 	cfg.AgentModels = effective.AgentModels
+	cfg.AgentRuntimes = effective.AgentRuntimes
 	cfg.AgentTools = effective.AgentTools
 	cfg.AgentPrompts = effective.AgentPrompts
 	cfg.AgentSkills = effective.AgentSkills
@@ -81,10 +82,10 @@ func ApplyLayered(cfg *config.Config, layered config.LayeredSettings) {
 		cfg.SetDataDir(layered.Paths.DenovaDir)
 	}
 	if effective.BackendPort != nil {
-		cfg.BackendPort = positiveInt(effective.BackendPort, 8080)
+		cfg.BackendPort = positiveInt(effective.BackendPort, 7789)
 	}
 	if effective.FrontendPort != nil {
-		cfg.FrontendPort = positiveInt(effective.FrontendPort, 5173)
+		cfg.FrontendPort = positiveInt(effective.FrontendPort, 7788)
 	}
 	if effective.AllowLANAccess != nil {
 		cfg.AllowLANAccess = *effective.AllowLANAccess
@@ -96,9 +97,6 @@ func ApplyLayered(cfg *config.Config, layered config.LayeredSettings) {
 	}
 	if cfg.IDEStoryTellerID == "" && effective.IDEStoryTellerID != "" {
 		cfg.IDEStoryTellerID = effective.IDEStoryTellerID
-	}
-	if cfg.InteractiveStoryTellerID == "" && effective.InteractiveStoryTellerID != "" {
-		cfg.InteractiveStoryTellerID = effective.InteractiveStoryTellerID
 	}
 	if effective.IDEImagePresetID != "" {
 		cfg.IDEImagePresetID = effective.IDEImagePresetID
@@ -205,6 +203,7 @@ func ApplyLayer(cfg *config.Config, settings config.Settings) {
 	}
 	config.ApplyImageAPIEnvironment(cfg)
 	cfg.AgentModels = config.MergeAgentModelSettings(cfg.AgentModels, settings.AgentModels)
+	cfg.AgentRuntimes = config.MergeAgentRuntimeSettings(cfg.AgentRuntimes, settings.AgentRuntimes)
 	cfg.AgentTools = config.MergeAgentToolSettings(cfg.AgentTools, settings.AgentTools)
 	cfg.AgentPrompts = config.MergeAgentPromptSettings(cfg.AgentPrompts, settings.AgentPrompts)
 	cfg.AgentSkills = config.MergeAgentSkillSettings(cfg.AgentSkills, settings.AgentSkills)
@@ -232,9 +231,6 @@ func ApplyLayer(cfg *config.Config, settings config.Settings) {
 	}
 	if settings.IDEStoryTellerID != "" {
 		cfg.IDEStoryTellerID = settings.IDEStoryTellerID
-	}
-	if settings.InteractiveStoryTellerID != "" {
-		cfg.InteractiveStoryTellerID = settings.InteractiveStoryTellerID
 	}
 	if settings.IDEImagePresetID != "" {
 		cfg.IDEImagePresetID = settings.IDEImagePresetID

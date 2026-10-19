@@ -50,7 +50,7 @@ func TestWorkspaceContextIndexesFilesWithoutInjectingTheirBodies(t *testing.T) {
 		"## Workspace Source Index",
 		`"ideas.md"`,
 		`"setting/outline.md"`,
-		"## Resident Lore",
+		"## Resident",
 		"RESIDENT_LORE_BODY_STAYS_INLINE",
 		"Hidden Archive",
 	} {

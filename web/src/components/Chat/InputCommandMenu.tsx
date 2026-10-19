@@ -8,7 +8,7 @@ import { INPUT_SUGGESTION_GROUP_CLASS_NAME, InputSuggestionMenu, inputSuggestion
 interface InputCommandPresentation {
   cmd: string
   description: string
-  hint: string
+  hint?: string
   icon: LucideIcon
 }
 
@@ -106,7 +106,7 @@ export function InputCommandMenu({
         data-command-source={source}
         onMouseEnter={() => onActiveIndexChange(index)}
         onSelect={() => onSelect(command)}
-        aria-label={[cmd, description, hint].join(' · ')}
+        aria-label={[cmd, description, hint].filter(Boolean).join(' · ')}
         title={[cmd, description, hint].filter(Boolean).join(' · ')}
         className={inputSuggestionItemClassName(active)}
       >
@@ -121,9 +121,9 @@ export function InputCommandMenu({
         {description ? <span className="min-w-0 flex-1 truncate text-xs text-[var(--nova-text-muted)]">
           {description}
         </span> : null}
-        <span className="ml-1 shrink-0 text-[11px] text-[var(--nova-text-faint)]">
+        {hint ? <span className="ml-1 shrink-0 text-[11px] text-[var(--nova-text-faint)]">
           {hint}
-        </span>
+        </span> : null}
       </CommandItem>
     )
   }

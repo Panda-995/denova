@@ -6,14 +6,14 @@ import (
 	"runtime"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-	agenttools "github.com/alfredxw/denova/agent/tools"
-
 	"denova/config"
 	"denova/internal/agents/configresource"
 	novaskills "denova/internal/agents/skills"
 	"denova/internal/webaccess"
 	workspacechange "denova/internal/workspace/change"
+
+	agenttool "github.com/alfredxw/denova/agent/tool"
+	agenttools "github.com/alfredxw/denova/agent/tool/builtin"
 )
 
 // Catalog is the only construction boundary for Denova's concrete tools. It
@@ -47,7 +47,7 @@ func NewCatalog(cfg *config.Config, workspaceMetadata WorkspaceMetadataProvider,
 	return &Catalog{cfg: cfg, workspaceMetadata: workspaceMetadata, runtimeExecutables: runtimeExecutables}
 }
 
-type Factory func(config.ResolvedAgentToolSettings) ([]agent.ToolDefinition, error)
+type Factory func(config.ResolvedAgentToolSettings) ([]agenttool.ToolDefinition, error)
 
 func catalogToolResultMaxBytes(cfg *config.Config) int {
 	if cfg == nil || cfg.AgentToolResultLimitKB <= 0 {
@@ -70,7 +70,7 @@ func (catalog *Catalog) InteractiveStory(toolContext InteractiveContext) Factory
 
 func (catalog *Catalog) Configuration() Factory { return configurationToolsFactory(catalog.cfg) }
 
-func (catalog *Catalog) Workspace(settings config.ResolvedAgentToolSettings, readAdapters ...ReadAdapterBinding) ([]agent.ToolDefinition, error) {
+func (catalog *Catalog) Workspace(settings config.ResolvedAgentToolSettings, readAdapters ...ReadAdapterBinding) ([]agenttool.ToolDefinition, error) {
 	workspace := ""
 	var cfg *config.Config
 	var metadata WorkspaceMetadataProvider
@@ -98,7 +98,7 @@ func (catalog *Catalog) Workspace(settings config.ResolvedAgentToolSettings, rea
 	)(settings)
 }
 
-func (catalog *Catalog) WebAccess(settings config.ResolvedAgentToolSettings) ([]agent.ToolDefinition, error) {
+func (catalog *Catalog) WebAccess(settings config.ResolvedAgentToolSettings) ([]agenttool.ToolDefinition, error) {
 	searchEnabled := settings.Allows(config.AgentToolWebSearch)
 	fetchEnabled := settings.Allows(config.AgentToolWebFetch)
 	if !searchEnabled && !fetchEnabled {
@@ -118,7 +118,7 @@ func (catalog *Catalog) WebAccess(settings config.ResolvedAgentToolSettings) ([]
 	if err != nil {
 		return nil, err
 	}
-	definitions := make([]agent.ToolDefinition, 0, 2)
+	definitions := make([]agenttool.ToolDefinition, 0, 2)
 	if searchEnabled {
 		definition, err := newWebSearchTool(client, config.AgentToolWebSearch)
 		if err != nil {
@@ -139,7 +139,7 @@ func (catalog *Catalog) WebAccess(settings config.ResolvedAgentToolSettings) ([]
 // Browser registers the isolated named-tab tool only when both policy and an
 // installed local browser runtime are available. Unavailable hosts expose no
 // dead model endpoint.
-func (catalog *Catalog) Browser(ctx context.Context, settings config.ResolvedAgentToolSettings) ([]agent.ToolDefinition, error) {
+func (catalog *Catalog) Browser(ctx context.Context, settings config.ResolvedAgentToolSettings) ([]agenttool.ToolDefinition, error) {
 	if !settings.Allows(config.AgentToolBrowser) {
 		return nil, nil
 	}
@@ -158,10 +158,10 @@ func (catalog *Catalog) Browser(ctx context.Context, settings config.ResolvedAge
 	if err := definition.Validate(ctx); err != nil {
 		return nil, fmt.Errorf("validate browser definition: %w", err)
 	}
-	return []agent.ToolDefinition{definition}, nil
+	return []agenttool.ToolDefinition{definition}, nil
 }
 
-func (catalog *Catalog) Skill(ctx context.Context, backend *novaskills.Backend, maxBytes int) (agent.ToolDefinition, error) {
+func (catalog *Catalog) Skill(ctx context.Context, backend *novaskills.Backend, maxBytes int) (agenttool.ToolDefinition, error) {
 	return newSkillTool(ctx, backend, maxBytes)
 }
 
@@ -174,7 +174,7 @@ func (catalog *Catalog) SkillReference(backend *novaskills.Backend) (ReadAdapter
 }
 
 func loreToolsFactory(cfg *config.Config, forceReadOnly bool) Factory {
-	return func(settings config.ResolvedAgentToolSettings) ([]agent.ToolDefinition, error) {
+	return func(settings config.ResolvedAgentToolSettings) ([]agenttool.ToolDefinition, error) {
 		readEnabled := settings.Allows(config.AgentToolLoreRead)
 		writeEnabled := settings.Allows(config.AgentToolLoreWrite)
 		if cfg == nil || (!readEnabled && !writeEnabled) {
@@ -189,11 +189,11 @@ func loreToolsFactory(cfg *config.Config, forceReadOnly bool) Factory {
 }
 
 func ideToolsFactory(cfg *config.Config) Factory {
-	return func(settings config.ResolvedAgentToolSettings) ([]agent.ToolDefinition, error) {
+	return func(settings config.ResolvedAgentToolSettings) ([]agenttool.ToolDefinition, error) {
 		if cfg == nil {
 			return nil, nil
 		}
-		var definitions []agent.ToolDefinition
+		var definitions []agenttool.ToolDefinition
 		if settings.Allows(config.AgentToolLoreRead) || settings.Allows(config.AgentToolLoreWrite) {
 			lore, err := newLoreTools(cfg.Workspace, settings.Allows(config.AgentToolLoreWrite))
 			if err != nil {
@@ -218,7 +218,7 @@ func ideToolsFactory(cfg *config.Config) Factory {
 }
 
 func imageToolsFactory(cfg *config.Config) Factory {
-	return func(settings config.ResolvedAgentToolSettings) ([]agent.ToolDefinition, error) {
+	return func(settings config.ResolvedAgentToolSettings) ([]agenttool.ToolDefinition, error) {
 		if cfg == nil || !settings.Allows(config.AgentToolImageGeneration) {
 			return nil, nil
 		}
@@ -231,8 +231,8 @@ func imageToolsFactory(cfg *config.Config) Factory {
 }
 
 func interactiveStoryToolsFactory(cfg *config.Config, toolContexts ...InteractiveContext) Factory {
-	return func(settings config.ResolvedAgentToolSettings) ([]agent.ToolDefinition, error) {
-		var definitions []agent.ToolDefinition
+	return func(settings config.ResolvedAgentToolSettings) ([]agenttool.ToolDefinition, error) {
+		var definitions []agenttool.ToolDefinition
 		if cfg != nil && settings.Allows(config.AgentToolLoreRead) {
 			lore, err := newLoreTools(cfg.Workspace, false)
 			if err != nil {
@@ -272,7 +272,7 @@ func interactiveStoryToolsFactory(cfg *config.Config, toolContexts ...Interactiv
 }
 
 func configurationToolsFactory(cfg *config.Config) Factory {
-	return func(settings config.ResolvedAgentToolSettings) ([]agent.ToolDefinition, error) {
+	return func(settings config.ResolvedAgentToolSettings) ([]agenttool.ToolDefinition, error) {
 		if cfg == nil || (!settings.Allows(config.AgentToolConfigRead) && !settings.Allows(config.AgentToolConfigApply)) {
 			return nil, nil
 		}
@@ -291,7 +291,7 @@ func workspaceToolsFactory(workspace, projectStoreRoot string, metadata Workspac
 	if maxResultBytes <= 0 {
 		maxResultBytes = defaultToolResultMaxBytes
 	}
-	return func(settings config.ResolvedAgentToolSettings) ([]agent.ToolDefinition, error) {
+	return func(settings config.ResolvedAgentToolSettings) ([]agenttool.ToolDefinition, error) {
 		readEnabled := settings.Allows(config.AgentToolFilesystemRead)
 		writeEnabled := settings.Allows(config.AgentToolWorkspaceWrite)
 		shellEnabled := settings.Allows(config.AgentToolShell)
@@ -312,14 +312,14 @@ func workspaceToolsFactory(workspace, projectStoreRoot string, metadata Workspac
 				return nil, fmt.Errorf("create workspace backend: %w", err)
 			}
 		}
-		definitions := make([]agent.ToolDefinition, 0, 7)
+		definitions := make([]agenttool.ToolDefinition, 0, 7)
 		readAdapters := make([]agenttools.ReadAdapter, 0, len(enabledReadAdapters)+2)
 		// ToolDescriptor has one capability field. Bindings have already removed
 		// unauthorized adapters, so keep filesystem_read as the combined endpoint's
 		// primary receipt and otherwise use the first enabled URI capability.
 		readCapability := ""
 		if readEnabled {
-			textAdapter, err := agenttools.LocalTextAdapter(backend)
+			textAdapter, err := agenttools.LocalFileAdapter(backend)
 			if err != nil {
 				return nil, fmt.Errorf("create local text read adapter: %w", err)
 			}
@@ -355,13 +355,13 @@ func workspaceToolsFactory(workspace, projectStoreRoot string, metadata Workspac
 				agenttools.WithMaxResultBytes(maxResultBytes),
 			}
 			if readCapability == config.AgentToolTrajectory {
-				options = append(options, agenttools.WithPresentation(agent.ToolPresentationFile))
+				options = append(options, agenttools.WithPresentation(agenttool.ToolPresentationFile))
 			}
 			readDefinition, err := agenttools.Read(readAdapters, options...)
 			if err != nil {
 				return nil, fmt.Errorf("create read tool: %w", err)
 			}
-			definitions = append([]agent.ToolDefinition{readDefinition}, definitions...)
+			definitions = append([]agenttool.ToolDefinition{readDefinition}, definitions...)
 		}
 		if writeEnabled {
 			var changes *workspacechange.Service
@@ -427,8 +427,8 @@ func workspaceToolsFactory(workspace, projectStoreRoot string, metadata Workspac
 	}
 }
 
-func enabledDefinitions(settings config.ResolvedAgentToolSettings, definitions []agent.ToolDefinition) []agent.ToolDefinition {
-	result := make([]agent.ToolDefinition, 0, len(definitions))
+func enabledDefinitions(settings config.ResolvedAgentToolSettings, definitions []agenttool.ToolDefinition) []agenttool.ToolDefinition {
+	result := make([]agenttool.ToolDefinition, 0, len(definitions))
 	for _, definition := range definitions {
 		capability := strings.TrimSpace(definition.Descriptor.Capability)
 		if capability == "" || settings.Allows(capability) {

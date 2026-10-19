@@ -1,19 +1,25 @@
 import { FileCode2, Type } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
-  MarkdownContentEditor,
   type MarkdownContentEditorReview,
 } from '@/components/Editor/MarkdownContentEditor'
 import { cn } from '@/lib/utils'
+import type { LoreItem } from '@/lib/api'
+import { LoreMarkdownEditor } from './LoreMarkdownEditor'
+import { LoreReferences } from './LoreReferences'
+import { LoreReferencePreview } from './LoreReferencePreview'
 
 interface LoreContentEditorProps {
   projectId: string
   resourceKey: string
+  items: LoreItem[]
   value: string
   onChange: (value: string) => void
+  onSelectItem: (id: string) => void
   onSaveShortcut?: () => void
+  autoFocus?: boolean
   highlightQuery?: string
   review?: MarkdownContentEditorReview
   richAriaLabel: string
@@ -26,9 +32,12 @@ interface LoreContentEditorProps {
 export function LoreContentEditor({
   projectId,
   resourceKey,
+  items,
   value,
   onChange,
+  onSelectItem,
   onSaveShortcut,
+  autoFocus,
   highlightQuery,
   review,
   richAriaLabel,
@@ -38,11 +47,17 @@ export function LoreContentEditor({
 }: LoreContentEditorProps) {
   const { t } = useTranslation()
   const [mode, setMode] = useState<'rich' | 'raw'>('rich')
+  const [history, setHistory] = useState<string[]>([])
+  useEffect(() => { setHistory([]) }, [projectId, resourceKey])
+  const openReference = (name: string) => {
+    console.info('[lore-reference] opened preview', { projectId, sourceId: resourceKey, name })
+    setHistory([name])
+  }
 
   return (
     <div className={cn('flex min-h-0 min-w-0 flex-1 bg-[var(--nova-bg)] p-2 sm:p-3', className)}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[var(--nova-radius)] border border-[var(--nova-border)] bg-[var(--nova-bg)]">
-        <div className="flex h-9 shrink-0 items-center border-b border-[var(--nova-border)] bg-[var(--nova-surface-2)] px-3">
+        <div className="flex min-h-9 shrink-0 flex-wrap items-center gap-2 border-b border-[var(--nova-border)] bg-[var(--nova-surface-2)] px-3 py-1">
           <div
             role="group"
             aria-label={t('settingPanel.field.content')}
@@ -73,20 +88,26 @@ export function LoreContentEditor({
               {t('common.raw')}
             </button>
           </div>
+          <span className="text-xs text-muted-foreground">{t('lore.references.hint')}</span>
         </div>
-        <MarkdownContentEditor
+        <LoreMarkdownEditor
           projectId={projectId}
+          items={items}
+          onOpenReference={openReference}
           key={resourceKey}
           mode={mode === 'raw' ? 'source' : 'rich'}
           value={value}
           onChange={onChange}
           onSaveShortcut={onSaveShortcut}
+          autoFocus={autoFocus}
           highlightQuery={highlightQuery}
           review={review}
           aria-label={mode === 'raw' ? sourceAriaLabel : richAriaLabel}
           className={cn('flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto', editorClassName)}
         />
+        <LoreReferences items={items} id={resourceKey} content={value} onOpen={openReference} />
       </div>
+      <LoreReferencePreview projectId={projectId} items={items} history={history} onHistoryChange={setHistory} onSelectItem={onSelectItem} />
     </div>
   )
 }

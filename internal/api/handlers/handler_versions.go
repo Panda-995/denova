@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"denova/internal/analytics"
 	"errors"
 	"strconv"
 
@@ -91,7 +92,9 @@ func (h *Handlers) HandleVersionDiff(ctx context.Context, c *app.RequestContext)
 		writeErrorKey(c, consts.StatusBadRequest, "api.versions.invalidDiffComparison")
 		return
 	}
-	diff, err := h.app.ProjectVersionDiff(ctx, scope.ProjectID, id, c.Query("path"), comparison)
+	diff, err := h.app.ProjectVersionDiff(ctx, scope.ProjectID, id, book.VersionDiffOptions{
+		Path: c.Query("path"), Comparison: comparison, Initial: c.Query("view") == "initial",
+	})
 	if err != nil {
 		writeVersionError(c, err)
 		return
@@ -142,6 +145,7 @@ func (h *Handlers) HandleVersionRestore(ctx context.Context, c *app.RequestConte
 		writeVersionError(c, err)
 		return
 	}
+	h.app.Analytics().ActionCompleted(analytics.VersionRestored)
 	writeJSON(c, consts.StatusOK, result)
 }
 
@@ -162,7 +166,7 @@ func writeVersionError(c *app.RequestContext, err error) {
 	case errors.Is(err, book.ErrVersionNotFound):
 		writeError(c, consts.StatusNotFound, err.Error())
 	case errors.Is(err, book.ErrVersionClean):
-		writeError(c, consts.StatusBadRequest, err.Error())
+		writeErrorKey(c, consts.StatusBadRequest, "api.versions.noChanges")
 	default:
 		writeError(c, consts.StatusBadRequest, err.Error())
 	}

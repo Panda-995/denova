@@ -4,10 +4,10 @@ import (
 	"math"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
-func toolNamesFromCalls(calls []agent.ToolCall) []string {
+func toolNamesFromCalls(calls []agentschema.ToolCall) []string {
 	if len(calls) == 0 {
 		return nil
 	}

@@ -1,5 +1,5 @@
 import { imageAPIProfileID, imageAPIProfileLabel, imageAPIProfilesWithDefault } from '@/features/settings/image-profiles'
-import { modelProfileID, modelProfileLabel, modelProfilesWithDefault } from '@/features/settings/model-profiles'
+import { modelEndpointID, modelProfileID, modelProfileLabel, modelProfilesWithDefault, selectableModelProfiles } from '@/features/settings/model-profiles'
 import type {
   AgentSkillOverride,
   AgentSkillPolicy,
@@ -32,9 +32,19 @@ export function buildProfileOptions(draft: Settings, effective: Settings, t: Tra
     const id = modelProfileID(profile)
     if (id) profiles.set(id, modelProfileLabel(profile))
   }
-  modelProfilesWithDefault(effective).forEach(add)
-  ;(draft.model_profiles ?? []).forEach(add)
-  if (!profiles.has('default')) profiles.set('default', t('agents.option.defaultModel'))
+  const endpoints = new Map((effective.model_endpoints ?? []).map(endpoint => [modelEndpointID(endpoint), endpoint]))
+  const models = new Map(modelProfilesWithDefault(effective).map(profile => [modelProfileID(profile), profile]))
+  for (const endpoint of draft.model_endpoints ?? []) {
+    const id = modelEndpointID(endpoint)
+    endpoints.set(id, { ...endpoints.get(id), ...endpoint })
+  }
+  for (const profile of draft.model_profiles ?? []) {
+    const id = modelProfileID(profile)
+    models.set(id, { ...models.get(id), ...profile })
+  }
+  const settings = { ...effective, model_endpoints: [...endpoints.values()], model_profiles: [...models.values()] }
+  selectableModelProfiles(settings).forEach(add)
+  if (modelProfilesWithDefault(settings).length === 0) profiles.set('default', t('agents.option.defaultModel'))
   return formatProfileOptions(profiles, t)
 }
 
@@ -83,6 +93,9 @@ export function cloneBuiltInAgent(
 
   return {
     ...seed,
+    runtime: runtimeKind === 'ide' || runtimeKind === 'general' || runtimeKind === 'interactive_story'
+      ? structuredClone(effective.agent_runtimes?.[runtimeKind] ?? { selected: 'native' })
+      : undefined,
     instructions,
     model: { ...model, profile_id: model.profile_id || 'default' },
     tools,

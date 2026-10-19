@@ -83,14 +83,17 @@ type ActorStateField struct {
 	// ID, Path, and LegacyPath are runtime-only aliases. Presets use Path to map
 	// released pre-schema story state into the frozen field identity; reusable
 	// modules persist Name only.
-	ID                string   `json:"-"`
-	Path              string   `json:"-"`
-	LegacyPath        string   `json:"-"`
-	Name              string   `json:"name" jsonschema_description:"Stable Field ID and user-visible name, unique within its template."`
-	Type              string   `json:"type" jsonschema:"enum=number,enum=string,enum=bool,enum=enum,enum=object,enum=list" jsonschema_description:"Field value type; use exactly one of the six listed types."`
-	Default           any      `json:"default,omitempty"`
-	Min               *float64 `json:"min,omitempty"`
-	Max               *float64 `json:"max,omitempty"`
+	ID         string   `json:"-"`
+	Path       string   `json:"-"`
+	LegacyPath string   `json:"-"`
+	Name       string   `json:"name" jsonschema_description:"Stable Field ID and user-visible name, unique within its template."`
+	Type       string   `json:"type" jsonschema:"enum=number,enum=string,enum=bool,enum=enum,enum=object,enum=list" jsonschema_description:"Field value type; use exactly one of the six listed types."`
+	Default    any      `json:"default,omitempty"`
+	Min        *float64 `json:"min,omitempty"`
+	Max        *float64 `json:"max,omitempty"`
+	// MaxField references a separate numeric capacity in the same Actor/template.
+	// Unlike Max, it is per-Actor state and can change without changing the schema.
+	MaxField          string   `json:"max_field,omitempty" jsonschema_description:"For a numeric resource, the exact Field ID of its numeric capacity in the same template. Mutually exclusive with max; initialize both values together."`
 	Options           []string `json:"options,omitempty" jsonschema_description:"Finite allowed values when type=enum."`
 	Description       string   `json:"description,omitempty" jsonschema_description:"Information represented by the field and its semantics."`
 	UpdateInstruction string   `json:"update_instruction,omitempty" jsonschema_description:"When to update the field and whether to write a complete value or a delta."`
@@ -234,6 +237,9 @@ func ValidateActorStatePatchesAgainstState(system StoryDirectorActorStateSystem,
 			applyActorStateOp(workingState, op)
 		}
 	}
+	if err := validateActorResources(system, workingState); err != nil {
+		return ActorStatePatchResult{}, err
+	}
 	result.Ops = normalizeStateOps(result.Ops)
 	result.ActorOps = normalizeActorStateOps(result.ActorOps)
 	if len(result.AssignedTraits) == 0 {
@@ -285,6 +291,7 @@ func normalizeActorStateFields(fields []ActorStateField) []ActorStateField {
 		}
 		field.ID = field.Name
 		field.Type = normalizeActorStateFieldType(field.Type)
+		field.MaxField = normalizeActorStateFieldName(field.MaxField)
 		field.Description = strings.TrimSpace(field.Description)
 		field.UpdateInstruction = strings.TrimSpace(field.UpdateInstruction)
 		field.Options = normalizeStringList(field.Options)
@@ -682,6 +689,9 @@ func validateActorStateSystem(system StoryDirectorActorStateSystem) error {
 				return fmt.Errorf("Actor 状态模板 %s 状态名称重复: %s / %s", template.ID, previous, fieldID)
 			}
 			seen[key] = fieldID
+		}
+		if err := validateActorResourceFields(template); err != nil {
+			return err
 		}
 	}
 	return nil

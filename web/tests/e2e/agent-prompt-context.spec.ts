@@ -1,7 +1,7 @@
 import type { ContextAnalysis } from '../../src/lib/api'
 import { expect, test, type APIRequestContext, type Page } from '../support/fixtures'
 import { createAndOpenBook, createStartedStory } from '../support/api'
-import { openWritingAgent } from '../support/agent-chat'
+import { openWritingAgent, submitAgentChatMessage } from '../support/agent-chat'
 import { getCapturedModelRequest, type E2EModelRequest } from '../support/model'
 
 const contextAnalysisProbe = '[Denova context analysis probe]'
@@ -12,6 +12,23 @@ const gameContextMarker = 'E2E_GAME_PROMPT_CONTEXT_PARITY'
 
 test('keeps Agents prompts, context analysis, and real model input aligned for Writing and Game', async ({ page, request }) => {
   const book = await createAndOpenBook(request, 'Agent Prompt Context E2E Book')
+  const loreBase = `/api/projects/${book.projectId}/book/lore`
+  const index = await (await request.get(`${loreBase}/index`)).json()
+  const guide = { intro_markdown: 'E2E_LORE_INTRO', groups: [
+    { id: 'core', name: 'Core', purpose: 'Global rules', body_markdown: 'E2E_LORE_ALWAYS_NOTES', default_detail: 'full' },
+    { id: 'lazy', name: 'Harbor', purpose: 'Explore harbor material', body_markdown: 'E2E_LORE_DEFERRED_NOTES', default_detail: 'brief' },
+  ], group_order: ['automatic:auto:character', 'custom:lazy', 'custom:core'] }
+  expect((await request.put(`${loreBase}/index`, { data: { guide, base_revision: index.revision } })).ok()).toBe(true)
+  for (const [name, group, content] of [['Core canon', 'core', 'E2E_LORE_ALWAYS_BODY'], ['Harbor lore', 'lazy', 'E2E_LORE_DEFERRED_BODY']]) {
+    expect((await request.post(`${loreBase}/items`, { data: { id: `internal-lore-identity-${group}`, name, content, load_mode: 'auto', brief_description: 'A setting entry', index_memberships: [{ group_id: group, detail: 'inherit' }] } })).ok()).toBe(true)
+  }
+  expect((await request.post(`${loreBase}/items`, { data: { id: 'unassigned-lore-internal', name: 'Unassigned scout', type: 'character', importance: 'major', tags: ['E2E_HIDDEN_INDEX_TAG'], load_mode: 'auto', content: 'UNASSIGNED_BODY' } })).ok()).toBe(true)
+  for (const data of [
+    { id: 'shared-lore-internal', name: 'Shared navigator', type: 'character', importance: 'minor', content: 'E2E_SHARED_BODY', brief_description: 'E2E_SHARED_BRIEF', index_memberships: [{ group_id: 'lazy', detail: 'inherit' }, { group_id: 'core', detail: 'inherit' }] },
+    { id: 'empty-lore-internal', name: 'Empty canon', type: 'world', content: '', brief_description: 'E2E_EMPTY_CANON_BRIEF', index_memberships: [{ group_id: 'core', detail: 'inherit' }] },
+  ]) expect((await request.post(`${loreBase}/items`, { data: { load_mode: 'auto', ...data } })).ok()).toBe(true)
+  const preview = await (await request.post(`${loreBase}/index/preview`, { data: guide })).json()
+  expect(preview.markdown).toContain('- **Empty canon** (Worldbuilding / important / brief): E2E_EMPTY_CANON_BRIEF')
   await createStartedStory(request, 'Agent Prompt Context E2E Story')
 
   await page.goto('/')
@@ -32,22 +49,22 @@ test('keeps Agents prompts, context analysis, and real model input aligned for W
   const writingComposer = await openWritingAgent(page)
   const writingAnalysis = await openContextAnalysis(page, '/agent-chat/chat/context-analysis')
   await page.keyboard.press('Escape')
-  await writingComposer.fill(contextAnalysisProbe)
-  await writingComposer.press('Enter')
+  await submitAgentChatMessage(page, writingComposer, contextAnalysisProbe)
   await expect(page.getByText('Deterministic E2E response completed.', { exact: true }).filter({ visible: true })).toBeVisible()
   const writingRequest = await waitForCapturedRequest(request, writingContextMarker)
   expectPromptContextParity(writingAnalysis, writingRequest, writingPrompt)
+  expectLoreGuide(writingRequest)
 
   await sidebar.getByRole('button', { name: '游戏', exact: true }).click()
   const gameComposer = page.getByPlaceholder(/你要做什么/)
   await expect(gameComposer).toBeVisible()
   const gameAnalysis = await openContextAnalysis(page, '/api/interactive/chat/context-analysis')
   await page.keyboard.press('Escape')
-  await gameComposer.fill(contextAnalysisProbe)
-  await gameComposer.press('Enter')
+  await submitAgentChatMessage(page, gameComposer, contextAnalysisProbe)
   await expect(page.getByText('石门缓缓开启，暖色灯光照亮了前方的旧车站。', { exact: true })).toBeVisible()
   const gameRequest = await waitForCapturedRequest(request, gameContextMarker)
   expectPromptContextParity(gameAnalysis, gameRequest, gamePrompt)
+  expectLoreGuide(gameRequest)
 })
 
 interface PromptConfiguration {
@@ -178,4 +195,24 @@ function normalizeRuntimeCapture(messages: ComparableModelMessage[]): Comparable
       '- Captured at: <turn timestamp>',
     ),
   }))
+}
+
+function expectLoreGuide(request: E2EModelRequest) {
+  const content = request.messages.map(message => typeof message.content === 'string' ? message.content : '').join('\n')
+  for (const marker of ['# Lore Index', 'E2E_LORE_INTRO', 'E2E_LORE_ALWAYS_NOTES', 'E2E_LORE_ALWAYS_BODY', 'E2E_LORE_DEFERRED_NOTES', 'Harbor lore', 'Explore harbor material', 'group_names', 'Unassigned scout', 'Character · On demand']) expect(content).toContain(marker)
+  for (const marker of [
+    '- Unassigned scout (Character / major / name)',
+    '- **Harbor lore** (Worldbuilding / important / brief): A setting entry',
+    '### Core canon (Worldbuilding / important / full)',
+    '### Shared navigator (Character / minor / full)',
+    '- Shared navigator (included above)',
+    '- **Empty canon** (Worldbuilding / important / brief): E2E_EMPTY_CANON_BRIEF',
+    'Entry metadata is category / importance / detail.',
+  ]) expect(content).toContain(marker)
+  for (const marker of ['E2E_LORE_DEFERRED_BODY', 'internal-lore-identity-core', 'internal-lore-identity-lazy', 'unassigned-lore-internal', 'shared-lore-internal', 'empty-lore-internal', 'UNASSIGNED_BODY', 'E2E_SHARED_BRIEF', 'E2E_HIDDEN_INDEX_TAG', '"index_memberships"']) expect(content).not.toContain(marker)
+  expect(content.split('E2E_LORE_ALWAYS_BODY')).toHaveLength(2)
+  expect(content.split('E2E_SHARED_BODY')).toHaveLength(2)
+  expect(content.indexOf('### Shared navigator')).toBeLessThan(content.indexOf('## Core'))
+  expect(content.indexOf('## Character · On demand')).toBeLessThan(content.indexOf('## Harbor'))
+  expect(content.indexOf('## Harbor')).toBeLessThan(content.indexOf('## Core'))
 }

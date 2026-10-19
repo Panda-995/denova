@@ -9,12 +9,12 @@ import (
 	"log/slog"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	apptask "denova/internal/app/task"
 	imageasset "denova/internal/image/asset"
 	imagepreset "denova/internal/image/preset"
 	"denova/internal/interactive"
+
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 const (
@@ -270,8 +270,8 @@ func appendInteractiveImageSuccess(
 	})
 }
 
-func interactiveImageToolPresentation() *agent.ToolPresentation {
-	presentation := agent.UniformToolPresentation(agent.ToolPresentationInteractiveMedia)
+func interactiveImageToolPresentation() *agenttool.ToolPresentation {
+	presentation := agenttool.UniformToolPresentation(agenttool.ToolPresentationInteractiveMedia)
 	return &presentation
 }
 

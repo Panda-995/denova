@@ -208,9 +208,6 @@ func withRuntimeReviewFeedbackServices(
 		}
 	}
 	if scope.documents {
-		if !runtime.DocumentsEnabled || runtime.BookService == nil {
-			return invalidReviewFeedbackError("document review is available only in Book projects", nil)
-		}
 		if strings.TrimSpace(runtime.StateRoot) == "" {
 			return errors.New("review runtime Project Store is unavailable")
 		}

@@ -5,15 +5,15 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	agentcontext "denova/internal/agents/context"
 	agentrun "denova/internal/agents/run"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 var modelContextTestCycle atomic.Uint64
 
-func assembleAndCommitModelContextForTest(conversation any, originalMessage, userMessage string, references ...agentcontext.UserReference) ([]*agent.Message, error) {
+func assembleAndCommitModelContextForTest(conversation any, originalMessage, userMessage string, references ...agentcontext.UserReference) ([]*agentschema.Message, error) {
 	if sessionConversation, ok := conversation.(*SessionConversation); ok {
 		identity := sessionConversation.agentCycleIdentitySnapshot()
 		_, alreadyCommitted := sessionConversation.LastAgentCycleCommitReceipt(agentrun.DomainCommitInput)

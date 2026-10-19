@@ -63,6 +63,7 @@ export function EditorSurface({
         ['--nova-editor-color' as string]: themeStyle.color,
         ['--nova-editor-accent' as string]: themeStyle.accent,
         ['--nova-editor-line-height' as string]: String(settings.lineHeight),
+        ['--nova-editor-first-line-indent' as string]: settings.firstLineIndent && !nativeIndent ? '2em' : '0',
         ['--nova-editor-dialogue-highlight' as string]: settings.dialogueHighlightColor || themeStyle.dialogueHighlight,
       }}
     >
@@ -87,7 +88,7 @@ export function EditorSurface({
       )}
       <EditorContent
         editor={editor}
-        className={`editor-content editor-theme-${settings.theme}${nativeIndent ? ' native-indent' : ''}`}
+        className={`editor-content editor-theme-${settings.theme}`}
       />
       {reviewAnnotations}
       {editor && showSelectionToolbar && (

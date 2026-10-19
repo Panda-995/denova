@@ -55,6 +55,7 @@ type agentConfigLayerSnapshot struct {
 type safeModelEndpointSettings struct {
 	ID       string `json:"id,omitempty"`
 	Name     string `json:"name,omitempty"`
+	Enabled  *bool  `json:"enabled,omitempty"`
 	Provider string `json:"provider,omitempty"`
 	Protocol string `json:"protocol,omitempty"`
 	BaseURL  string `json:"base_url,omitempty"`
@@ -63,6 +64,7 @@ type safeModelEndpointSettings struct {
 type safeModelProfileSettings struct {
 	ID                  string   `json:"id,omitempty"`
 	Name                string   `json:"name,omitempty"`
+	Enabled             *bool    `json:"enabled,omitempty"`
 	EndpointID          string   `json:"endpoint_id,omitempty"`
 	Provider            string   `json:"provider,omitempty"`
 	Protocol            string   `json:"protocol,omitempty"`
@@ -200,7 +202,7 @@ func safeModelEndpoints(endpoints []config.ModelEndpointSettings) []safeModelEnd
 	out := make([]safeModelEndpointSettings, 0, len(endpoints))
 	for _, endpoint := range endpoints {
 		out = append(out, safeModelEndpointSettings{
-			ID: endpoint.ID, Name: endpoint.Name, Provider: endpoint.Provider,
+			ID: endpoint.ID, Name: endpoint.Name, Enabled: endpoint.Enabled, Provider: endpoint.Provider,
 			Protocol: endpoint.Protocol, BaseURL: endpoint.BaseURL,
 		})
 	}
@@ -263,6 +265,7 @@ func safeModelProfiles(profiles []config.ModelProfileSettings) []safeModelProfil
 		out = append(out, safeModelProfileSettings{
 			ID:                  profile.ID,
 			Name:                profile.Name,
+			Enabled:             profile.Enabled,
 			EndpointID:          profile.EndpointID,
 			Provider:            profile.Provider,
 			Protocol:            profile.Protocol,

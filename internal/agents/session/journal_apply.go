@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func appendClearRecordLine(sess *Session, line []byte) error {
@@ -196,7 +196,7 @@ func appendMessageRecordLine(sess *Session, line []byte, kind string) error {
 }
 
 func appendLegacyMessageLine(sess *Session, line []byte) error {
-	var msg agent.Message
+	var msg agentschema.Message
 	if err := json.Unmarshal(line, &msg); err != nil {
 		return err
 	}

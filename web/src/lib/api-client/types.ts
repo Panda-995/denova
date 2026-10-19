@@ -116,6 +116,7 @@ export interface RuleRollChatMessage extends ChatMessageBase {
 }
 
 export interface ContextCompactionChatMessage extends ChatMessageBase {
+  runtime_managed?: boolean
   role: 'context_compaction'
   status?: ChatMessageStatus
   phase?: string
@@ -129,7 +130,7 @@ export interface ContextCompactionChatMessage extends ChatMessageBase {
   context_window_tokens?: number
   threshold?: number
   target_ratio?: number
-  epoch?: number
+  revision?: number
   source_message_count?: number
   message_count_before?: number
   message_count_after?: number
@@ -161,6 +162,10 @@ export interface SystemChatMessage extends ChatMessageBase {
   role: 'system'
 }
 
+export interface TodoChatMessage extends ChatMessageBase {
+  role: 'todo_updated'
+}
+
 export interface ErrorChatMessage extends ChatMessageBase {
   role: 'error'
 }
@@ -176,6 +181,7 @@ export type ChatMessage =
   | ContextCompactionChatMessage
   | TokenUsageChatMessage
   | ProposedPlanChatMessage
+  | TodoChatMessage
   | SystemChatMessage
   | ErrorChatMessage
 
@@ -238,6 +244,7 @@ export interface AgentAskInteraction {
   questions: AgentAskQuestion[]
   allow_other?: boolean
   approval?: AgentToolApprovalPresentation
+  verification?: { execution_id: string; tool: string; arguments: unknown }
   answers?: AgentAskAnswerResult[]
   cancel_reason?: string
   created_at?: string
@@ -247,7 +254,7 @@ export interface AgentAskInteraction {
 export interface AgentAskResolution {
   schema: 'ask.result.v1'
   id: string
-  status: 'answered' | 'cancelled'
+  status: 'pending' | 'answered' | 'cancelled'
   answers?: AgentAskAnswerResult[]
   cancel_reason?: string
 }
@@ -446,20 +453,19 @@ export interface ContextAnalysisPart {
   content: string
   note?: string
   bytes: number
-  chars: number
+  /** Estimated tokens in the displayed text, excluding request framing and image pixels. */
+  token_estimate: number
   /** Provider-neutral fields and safe opaque-state metadata for diagnostics. */
   parts?: ContextAnalysisPart[]
 }
 
 export interface ContextAnalysisCompaction {
   id?: string
-  epoch: number
+  revision: number
   summary: string
   tokens_before?: number
   tokens_after?: number
-  target_ratio?: number
   source_message_count?: number
-  source_turn_count?: number
   removable?: boolean
 }
 
@@ -477,7 +483,7 @@ export interface ContextAnalysis {
 	reserved_tool_result_tokens?: number
   context_window_tokens?: number
   context_usage_ratio?: number
-  compaction_epoch?: number
+  compaction_revision?: number
   compaction_active?: boolean
   would_compact?: boolean
   compaction?: ContextAnalysisCompaction
@@ -735,6 +741,7 @@ export interface VersionRestorePlan {
   current_dirty: boolean
   backup_message?: string
   warnings?: string[]
+  retained_media?: string[]
 }
 
 export interface VersionRestoreResult {
@@ -748,6 +755,7 @@ export interface VersionRestoreResult {
 }
 
 export interface VersionDiff {
+  files_complete?: boolean
   version: VersionEntry
   base_version?: VersionEntry
   comparison: VersionDiffComparison
@@ -775,14 +783,20 @@ export interface VersionFileDiff {
 
 export type VersionDiffComparison = 'workspace' | 'parent'
 
+export interface LoreCategory {
+  id: string
+  name?: string
+}
+
 export interface LoreItem {
   id: string
   enabled: boolean
-  type: 'character' | 'world' | 'location' | 'faction' | 'rule' | 'item' | 'other'
+  type: string
   type_source: 'heuristic' | 'semantic' | 'manual' | 'legacy'
   name: string
   importance: 'major' | 'important' | 'minor'
   load_mode: 'resident' | 'auto' | 'manual'
+  index_memberships?: LoreIndexMembership[]
   tags: string[]
   brief_description: string
   keywords: string[]
@@ -790,12 +804,81 @@ export interface LoreItem {
   created_at: string
   updated_at: string
   image?: LoreItemImage
+  materials?: { entries: Array<{ asset_id: string; name?: string; description?: string }>; cover_asset_id?: string }
+  resolved_materials?: LoreMaterial[]
   provenance?: {
     kind: string
     source_name: string
     source_record_id: string
     source_hash: string
   }
+}
+
+export type LoreIndexDetail = 'name' | 'brief' | 'full'
+export interface LoreIndexMembership {
+  group_id: string
+  detail: 'inherit' | LoreIndexDetail
+}
+export interface LoreIndexGroup {
+  id: string
+  name: string
+  purpose: string
+  body_markdown: string
+  default_detail: LoreIndexDetail
+}
+export interface LoreIndexGuide {
+  intro_markdown: string
+  groups: LoreIndexGroup[]
+  automatic_details?: Record<string, LoreIndexDetail>
+  /** Presentation only: custom:<id> or automatic:<mode[:category]>; never membership. */
+  group_order?: string[]
+  item_order?: Record<string, string[]>
+}
+export interface LoreAutomaticGroup {
+  key: string
+  category_id?: string
+  load_mode: 'resident' | 'auto' | 'manual'
+  default_detail: LoreIndexDetail
+  item_ids: string[]
+}
+export interface LoreIndexPreview {
+  markdown: string
+  token_estimate: number
+  automatic_groups: LoreAutomaticGroup[]
+  custom_item_ids: Record<string, string[]>
+  over_budget: boolean
+}
+export interface LoreIndexSnapshot {
+  guide: LoreIndexGuide
+  revision: string
+}
+
+export interface LoreAsset {
+  id: string
+  path?: string
+  url?: string
+  original_name: string
+  mime_type: string
+  size_bytes: number
+  created_at?: string
+  source: { kind: string; meta_path?: string; url?: string }
+}
+export interface LoreMaterial extends LoreAsset {
+  name: string
+  description?: string
+}
+export interface LoreMaterialMutation {
+  url?: string
+  save_locally?: boolean
+  op: 'link' | 'update' | 'remove' | 'cover' | 'cover_if_missing' | 'remote' | 'localize'
+  asset_id?: string
+  name?: string
+  description?: string
+}
+
+export interface LoreItemSpeechGenerateRequest {
+  name: string
+  text: string
 }
 
 export type LoreClassificationMode = 'heuristic' | 'semantic'
@@ -836,6 +919,7 @@ export interface LoreTypeApplyResult {
 }
 
 interface LoreItemImage {
+  image_url?: string
   schema: 'lore_item_image.v1' | string
   image_path: string
   meta_path: string
@@ -862,7 +946,32 @@ export interface LoreItemImageGenerateRequest {
   profile_id?: string
 }
 
-export type SkillScope = 'builtin' | 'user' | 'workspace'
+export type SkillScope = 'builtin' | 'user' | 'workspace' | 'shared'
+
+export interface SkillRemoteState {
+  source: { url: string; ref?: string; subdir?: string }
+  source_path: string
+  digest: string
+  auto_update: boolean
+  checked_at: string
+  update_available: boolean
+  status?: 'current' | 'available' | 'modified' | 'updated' | 'error'
+}
+
+export interface SkillPreferenceChange {
+  scope?: SkillScope
+  name?: string
+  enabled?: boolean
+  shared_enabled?: boolean
+  auto_update?: boolean
+}
+
+export interface SkillUpdateResult {
+  scope: SkillScope
+  name: string
+  remote?: SkillRemoteState
+  error_key?: string
+}
 
 export interface SkillScopeInfo {
   scope: SkillScope
@@ -882,6 +991,8 @@ export interface SkillSummary {
   path: string
   editable: boolean
   active: boolean
+  enabled?: boolean
+  remote?: SkillRemoteState
   updated_at?: string
 }
 
@@ -901,6 +1012,7 @@ export interface SkillFile {
 export interface SkillSnapshot {
   scopes: SkillScopeInfo[]
   skills: SkillSummary[]
+  shared_enabled?: boolean
 }
 
 export interface SkillDocument extends SkillSummary {
@@ -933,7 +1045,7 @@ export interface SkillInstallResult {
   installed: SkillSummary[]
 }
 
-export type LoreItemInput = Omit<LoreItem, 'created_at' | 'updated_at' | 'provenance'>
+export type LoreItemInput = Omit<LoreItem, 'created_at' | 'updated_at' | 'provenance' | 'materials' | 'resolved_materials'>
 
 type AutomationScope = 'user' | 'workspace'
 type AutomationTemplate = 'memory_consolidation' | 'review' | 'continue_writing' | 'custom_prompt'
@@ -996,13 +1108,14 @@ export interface AutomationRunRecord {
   runtime_command_id?: string
   runtime_operation_id?: string
   runtime_receipt_cursor?: number
-  status: 'running' | 'success' | 'failed' | 'aborted'
+  delivery_status?: 'pending' | 'accepted'
+  status: 'pending' | 'accepted' | 'queued' | 'running' | 'suspended' | 'success' | 'failed' | 'aborted'
   started_at: string
   finished_at?: string
-  summary: string
+  summary?: string
   error?: string
   output_path?: string
-  tool_manifest: Array<{ source: string; allowed: boolean }>
+  tool_manifest?: Array<{ source: string; allowed: boolean }>
 }
 
 export interface AutomationTask {
@@ -1109,4 +1222,11 @@ export interface TextSelection {
   startLine: number
   endLine: number
   content: string
+}
+
+/** A plugin page snapshot travels with one durable Project Agent command. */
+export interface AgentPageContext {
+  plugin_id: string
+  page_id: string
+  data: unknown
 }

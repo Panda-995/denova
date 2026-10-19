@@ -73,6 +73,10 @@ func (service *Service) PreviewClassification(ctx context.Context, projectID str
 	if err != nil {
 		return ClassificationPreview{}, err
 	}
+	categories, err := store.Categories()
+	if err != nil {
+		return ClassificationPreview{}, err
+	}
 	selected := selectClassificationCandidates(items, request.ItemIDs)
 	mode := strings.ToLower(strings.TrimSpace(request.Mode))
 	if mode != booklore.ClassificationModeSemantic {
@@ -91,13 +95,19 @@ func (service *Service) PreviewClassification(ctx context.Context, projectID str
 	for _, item := range selected {
 		input := classificationInputFromItem(item)
 		suggestion := booklore.ClassifyItemHeuristic(input)
+		// Custom categories are user decisions. Local
+		// heuristics must not silently undo them or suggest deleted categories.
+		if !booklore.HasCategory(categories, suggestion.Type) || !booklore.HasCategory(booklore.DefaultCategories(), item.Type) {
+			suggestion.Type = item.Type
+			suggestion.Confidence = booklore.ClassificationConfidenceLow
+		}
 		preview.Items = append(preview.Items, ClassificationPreviewItem{
 			ID: item.ID, Name: item.Name, CurrentType: item.Type, CurrentTypeSource: item.TypeSource,
 			SuggestedType: suggestion.Type, Confidence: suggestion.Confidence, Reason: suggestion.Reason,
 			SuggestionSource: booklore.TypeSourceHeuristic,
 		})
 		previewIndexByID[item.ID] = len(preview.Items) - 1
-		if mode != booklore.ClassificationModeSemantic || suggestion.Confidence == booklore.ClassificationConfidenceHigh {
+		if mode != booklore.ClassificationModeSemantic {
 			continue
 		}
 		semanticEligible++
@@ -118,7 +128,7 @@ func (service *Service) PreviewClassification(ctx context.Context, projectID str
 		} else {
 			for _, suggestion := range suggestions {
 				index, ok := previewIndexByID[strings.TrimSpace(suggestion.ID)]
-				if !ok {
+				if !ok || !booklore.HasCategory(categories, suggestion.Type) {
 					continue
 				}
 				preview.Items[index].SuggestedType = suggestion.Type

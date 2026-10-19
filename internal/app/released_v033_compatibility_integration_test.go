@@ -17,7 +17,9 @@ import (
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentmodel "github.com/alfredxw/denova/agent/model"
+	agentstream "github.com/alfredxw/denova/agent/model/stream"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestReleasedV033WritingSessionMigratesAndContinues(t *testing.T) {
@@ -124,7 +126,7 @@ func TestReleasedV033WritingSessionMigratesAndContinues(t *testing.T) {
 	}
 	effective := active.GetEffectiveMessages()
 	if len(effective) != 4 || effective[0].Content != "请读取第一章里的钥匙线索。" ||
-		len(effective[1].ToolCalls) != 1 || effective[2].Role != agent.ToolRole ||
+		len(effective[1].ToolCalls) != 1 || effective[2].Role != agentschema.ToolRole ||
 		effective[2].Content != "门边放着一把蓝色钥匙。" || effective[3].Content != "第一章的钥匙线索已经找到。" {
 		t.Fatalf("migrated effective context = %#v", effective)
 	}
@@ -221,30 +223,30 @@ func TestReleasedV033WritingSessionMigratesAndContinues(t *testing.T) {
 type releasedV033CaptureModel struct {
 	mu       sync.Mutex
 	response string
-	input    []*agent.Message
+	input    []*agentschema.Message
 }
 
-func (model *releasedV033CaptureModel) Generate(_ context.Context, messages []*agent.Message, _ ...agent.ModelOption) (*agent.Message, error) {
+func (model *releasedV033CaptureModel) Generate(_ context.Context, messages []*agentschema.Message, _ ...agentmodel.ModelOption) (*agentschema.Message, error) {
 	model.capture(messages)
-	return agent.AssistantMessage(model.response, nil), nil
+	return agentschema.AssistantMessage(model.response, nil), nil
 }
 
-func (model *releasedV033CaptureModel) Stream(_ context.Context, messages []*agent.Message, _ ...agent.ModelOption) (*agent.StreamReader[*agent.Message], error) {
+func (model *releasedV033CaptureModel) Stream(_ context.Context, messages []*agentschema.Message, _ ...agentmodel.ModelOption) (*agentstream.StreamReader[*agentschema.Message], error) {
 	model.capture(messages)
-	return agent.StreamReaderFromArray([]*agent.Message{agent.AssistantMessage(model.response, nil)}), nil
+	return agentstream.StreamReaderFromArray([]*agentschema.Message{agentschema.AssistantMessage(model.response, nil)}), nil
 }
 
-func (model *releasedV033CaptureModel) capture(messages []*agent.Message) {
+func (model *releasedV033CaptureModel) capture(messages []*agentschema.Message) {
 	model.mu.Lock()
 	defer model.mu.Unlock()
-	cloned := make([]*agent.Message, len(messages))
+	cloned := make([]*agentschema.Message, len(messages))
 	for index, message := range messages {
-		cloned[index] = agent.CloneMessage(message)
+		cloned[index] = agentschema.CloneMessage(message)
 	}
 	model.input = cloned
 }
 
-func (model *releasedV033CaptureModel) lastInput(t *testing.T) []*agent.Message {
+func (model *releasedV033CaptureModel) lastInput(t *testing.T) []*agentschema.Message {
 	t.Helper()
 	model.mu.Lock()
 	defer model.mu.Unlock()

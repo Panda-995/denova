@@ -3,7 +3,19 @@ import type { ToolPresentationKind } from '@/lib/api-client/types'
 
 export type { AgentApprovalMode } from '@/features/agent-approval/modes'
 
+export interface SpeechSettings {
+  endpoint: string
+  api_key: string
+  model: string
+  voice: string
+}
+
 export interface Settings {
+  market?: { registry_url?: string; github_token?: string }
+  game_creation_defaults?: import('@/features/interactive/game-creation-defaults').GameCreationDefaults
+  game_last_creation?: import('@/features/interactive/game-creation-defaults').GameCreationPreferences
+  speech?: SpeechSettings
+  agent_runtimes?: Partial<Record<'ide' | 'general' | 'interactive_story', import('@/features/agent-runtime/types').RuntimePreferences>>
   openai_api_key?: string
   openai_base_url?: string
   openai_model?: string
@@ -50,6 +62,7 @@ export interface Settings {
   theme?: string
   motion_intensity?: string
   update_check_enabled?: boolean | null
+  update_download_enabled?: boolean | null
   max_iteration?: number | null
   model_max_retries?: number | null
   agent_idle_timeout_seconds?: number | null
@@ -73,13 +86,16 @@ export interface Settings {
   trace_retention_runs?: number | null
   plan_mode_default?: boolean | null
   ide_story_teller_id?: string
-  interactive_story_teller_id?: string
   ide_image_preset_id?: string
   writing_skill_default?: string
   agent_quick_prompts?: AgentQuickPromptRegistry
   agent_quick_prompts_in_commands?: boolean | null
   interactive_stage_font_size?: number | null
+  interactive_stage_scrim_opacity?: number | null
   interactive_stage_line_height?: number | null
+  interactive_stage_text_max_width?: number | null
+  interactive_stage_character_layout?: StageCharacterLayout | null
+  interactive_stage_character_size?: number | null
 }
 
 export interface LabSettings {
@@ -124,6 +140,7 @@ export interface WebAccessSettings {
 export interface ModelProfileSettings {
   id?: string
   name?: string
+  enabled?: boolean
   endpoint_id?: string
   model?: string
   temperature?: number | null
@@ -146,6 +163,7 @@ export type AgentQuickPromptRegistry = Record<string, AgentQuickPromptSettings[]
 export interface ModelEndpointSettings {
   id?: string
   name?: string
+  enabled?: boolean
   provider?: string
   protocol?: string
   api_key?: string
@@ -298,7 +316,6 @@ export interface AgentModelSettings {
   config_manager?: AgentModelOverride
   version_summary?: AgentModelOverride
   tool_agent?: AgentModelOverride
-  automation?: AgentModelOverride
 }
 
 export interface AgentModelOverride {
@@ -316,7 +333,6 @@ export interface AgentToolSettings {
   config_manager?: AgentToolOverride
   version_summary?: AgentToolOverride
   tool_agent?: AgentToolOverride
-  automation?: AgentToolOverride
 }
 
 export interface AgentSkillSettings {
@@ -328,7 +344,6 @@ export interface AgentSkillSettings {
   config_manager?: AgentSkillOverride
   version_summary?: AgentSkillOverride
   tool_agent?: AgentSkillOverride
-  automation?: AgentSkillOverride
 }
 
 export type AgentSkillOverride = Record<string, boolean>
@@ -342,7 +357,6 @@ interface AgentContextSettings {
   config_manager?: AgentContextOverride
   version_summary?: AgentContextOverride
   tool_agent?: AgentContextOverride
-  automation?: AgentContextOverride
 }
 
 export interface AgentContextOverride {
@@ -375,7 +389,6 @@ interface AgentGeneralSubAgentSettings {
   ide?: boolean | null
   interactive_story?: boolean | null
   config_manager?: boolean | null
-  automation?: boolean | null
 }
 
 export type AgentToolCapability =
@@ -446,6 +459,7 @@ export interface SubAgentConfig {
 
 /** Complete user-owned Agent definition inside one stable runtime contract. */
 export interface CustomAgentConfig {
+  runtime?: import('@/features/agent-runtime/types').RuntimePreferences
   id?: string
   name?: string
   description?: string
@@ -517,7 +531,6 @@ interface AgentPromptSettings {
   config_manager?: AgentPromptOverride
   version_summary?: AgentPromptOverride
   tool_agent?: AgentPromptOverride
-  automation?: AgentPromptOverride
 }
 
 export interface AgentPromptOverride {
@@ -547,7 +560,6 @@ interface AgentPromptSourceSettings {
   config_manager?: AgentPromptSourceList
   version_summary?: AgentPromptSourceList
   tool_agent?: AgentPromptSourceList
-  automation?: AgentPromptSourceList
 }
 
 export interface AgentPromptBlocks {
@@ -565,7 +577,6 @@ interface AgentPromptBlockSettings {
   config_manager?: AgentPromptBlocks
   version_summary?: AgentPromptBlocks
   tool_agent?: AgentPromptBlocks
-  automation?: AgentPromptBlocks
 }
 
 interface SettingsPaths {
@@ -591,6 +602,7 @@ interface SettingsRevisions {
 }
 
 export interface LayeredSettings {
+  agent_configuration?: Record<string, import('@/features/agent-runtime/types').AgentConfiguration>
   default: Settings
   global: Settings
   user: Settings
@@ -647,6 +659,7 @@ export interface UpdateInstallResult {
 }
 
 export interface UpdateApplyResult {
+  id: string
   status: 'restarting' | string
   version: string
   log_path?: string
@@ -660,3 +673,22 @@ export interface UpdateInstallProgress {
   total_bytes?: number
   percent?: number
 }
+
+export interface UpdateStatus {
+  check?: UpdateCheckResult
+  checked_at?: string
+  operation?: 'checking' | 'downloading' | 'uploading'
+  progress?: UpdateInstallProgress
+  operation_error?: string
+  restart_waiting?: boolean
+  busy?: boolean
+  current_version: string
+  id?: string
+  version?: string
+  phase: 'idle' | 'staged' | 'waiting' | 'backing_up' | 'applying' | 'starting' | 'rolling_back' | 'succeeded' | 'failed'
+  error?: string
+  log_path?: string
+}
+
+/** Display-only arrangement; does not change the saved scene or Agent choices. */
+export type StageCharacterLayout = 'center' | 'left' | 'right' | 'sides'

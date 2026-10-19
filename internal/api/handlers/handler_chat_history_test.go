@@ -6,7 +6,11 @@ import (
 	"fmt"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
+	"github.com/alfredxw/denova/agent"
+	agentmodel "github.com/alfredxw/denova/agent/model"
+	agentstream "github.com/alfredxw/denova/agent/model/stream"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentsession "github.com/alfredxw/denova/agent/session"
 	"github.com/cloudwego/hertz/pkg/app"
 )
 
@@ -16,13 +20,13 @@ func TestChatPreparationRejectsInvalidHistoryLocally(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = owner.Close(context.Background()) })
-	session, err := owner.Session(context.Background(), agent.NamedSession("broken"))
+	session, err := owner.Session(context.Background(), agentsession.Named("broken"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = session.LoadCanonicalMessages(context.Background(), []*agent.Message{
-		agent.AssistantMessage("", []agent.ToolCall{{ID: "missing", Function: agent.FunctionCall{Name: "read", Arguments: `{}`}}}),
-		agent.UserMessage("continue"),
+	err = session.LoadCanonicalMessages(context.Background(), []*agentschema.Message{
+		agentschema.AssistantMessage("", []agentschema.ToolCall{{ID: "missing", Function: agentschema.FunctionCall{Name: "read", Arguments: `{}`}}}),
+		agentschema.UserMessage("continue"),
 	})
 	if err == nil {
 		t.Fatal("incomplete historical tool batch was accepted")
@@ -48,10 +52,10 @@ func TestChatPreparationRejectsInvalidHistoryLocally(t *testing.T) {
 
 type historyErrorModel struct{}
 
-func (historyErrorModel) Generate(context.Context, []*agent.Message, ...agent.ModelOption) (*agent.Message, error) {
+func (historyErrorModel) Generate(context.Context, []*agentschema.Message, ...agentmodel.ModelOption) (*agentschema.Message, error) {
 	return nil, fmt.Errorf("history validation must not call the model")
 }
 
-func (historyErrorModel) Stream(context.Context, []*agent.Message, ...agent.ModelOption) (*agent.StreamReader[*agent.Message], error) {
+func (historyErrorModel) Stream(context.Context, []*agentschema.Message, ...agentmodel.ModelOption) (*agentstream.StreamReader[*agentschema.Message], error) {
 	return nil, fmt.Errorf("history validation must not call the model")
 }

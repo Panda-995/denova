@@ -83,12 +83,12 @@ func (h *Handlers) HandleProjectBookChapterStatus(_ context.Context, c *app.Requ
 	})
 }
 
-func (h *Handlers) HandleProjectLoreItems(_ context.Context, c *app.RequestContext) {
+func (h *Handlers) HandleProjectLoreItems(ctx context.Context, c *app.RequestContext) {
 	scope, ok := requireProjectScope(c)
 	if !ok {
 		return
 	}
-	items, err := h.app.ProjectBook().LoreItems(scope.ProjectID)
+	items, err := h.app.Lore().Items(ctx, scope.ProjectID)
 	if err != nil {
 		writeProjectBookError(c, err, "api.projectBook.loreFailed")
 		return
@@ -96,7 +96,7 @@ func (h *Handlers) HandleProjectLoreItems(_ context.Context, c *app.RequestConte
 	writeJSON(c, consts.StatusOK, map[string]any{"project_id": scope.ProjectID, "items": items})
 }
 
-func (h *Handlers) HandleProjectLoreItemCreate(_ context.Context, c *app.RequestContext) {
+func (h *Handlers) HandleProjectLoreItemCreate(ctx context.Context, c *app.RequestContext) {
 	scope, ok := requireProjectScope(c)
 	if !ok {
 		return
@@ -106,7 +106,7 @@ func (h *Handlers) HandleProjectLoreItemCreate(_ context.Context, c *app.Request
 		writeErrorKey(c, consts.StatusBadRequest, "api.common.invalidRequestWithDetail", "detail", err.Error())
 		return
 	}
-	item, err := h.app.ProjectBook().CreateLoreItem(scope.ProjectID, input)
+	item, err := h.app.Lore().CreateItem(ctx, scope.ProjectID, input)
 	if err != nil {
 		writeProjectBookError(c, err, "api.projectBook.loreFailed")
 		return
@@ -114,7 +114,7 @@ func (h *Handlers) HandleProjectLoreItemCreate(_ context.Context, c *app.Request
 	writeJSON(c, consts.StatusOK, map[string]any{"project_id": scope.ProjectID, "item": item})
 }
 
-func (h *Handlers) HandleProjectLoreItemUpdate(_ context.Context, c *app.RequestContext) {
+func (h *Handlers) HandleProjectLoreItemUpdate(ctx context.Context, c *app.RequestContext) {
 	scope, ok := requireProjectScope(c)
 	if !ok {
 		return
@@ -123,7 +123,7 @@ func (h *Handlers) HandleProjectLoreItemUpdate(_ context.Context, c *app.Request
 	if !ok {
 		return
 	}
-	item, err := h.app.ProjectBook().UpdateLoreItem(scope.ProjectID, c.Param("id"), input)
+	item, err := h.app.Lore().UpdateItem(ctx, scope.ProjectID, c.Param("id"), input)
 	if err != nil {
 		if errors.Is(err, booklore.ErrRevisionConflict) {
 			writeErrorKey(c, consts.StatusConflict, "api.resource.revisionConflict")
@@ -135,12 +135,12 @@ func (h *Handlers) HandleProjectLoreItemUpdate(_ context.Context, c *app.Request
 	writeJSON(c, consts.StatusOK, map[string]any{"project_id": scope.ProjectID, "item": item})
 }
 
-func (h *Handlers) HandleProjectLoreItemDelete(_ context.Context, c *app.RequestContext) {
+func (h *Handlers) HandleProjectLoreItemDelete(ctx context.Context, c *app.RequestContext) {
 	scope, ok := requireProjectScope(c)
 	if !ok {
 		return
 	}
-	if err := h.app.ProjectBook().DeleteLoreItem(scope.ProjectID, c.Param("id")); err != nil {
+	if err := h.app.Lore().DeleteItem(ctx, scope.ProjectID, c.Param("id")); err != nil {
 		writeProjectBookError(c, err, "api.projectBook.loreFailed")
 		return
 	}
@@ -153,7 +153,7 @@ func (h *Handlers) HandleProjectDocumentReview(ctx context.Context, c *app.Reque
 		return
 	}
 	var thread documentreview.Thread
-	workspace, err := h.app.ProjectBook().WithDocumentReview(scope.ProjectID, func(service *documentreview.Service, _ documentreview.SnapshotResolver) error {
+	workspace, err := h.app.WithProjectDocumentReview(ctx, scope.ProjectID, func(service *documentreview.Service, _ documentreview.SnapshotResolver) error {
 		var readErr error
 		thread, readErr = service.CurrentThread(ctx)
 		return readErr
@@ -177,7 +177,7 @@ func (h *Handlers) HandleProjectDocumentCommentCreate(ctx context.Context, c *ap
 	}
 	var thread documentreview.Thread
 	var comment documentreview.Comment
-	workspace, err := h.app.ProjectBook().WithDocumentReview(scope.ProjectID, func(service *documentreview.Service, resolver documentreview.SnapshotResolver) error {
+	workspace, err := h.app.WithProjectDocumentReview(ctx, scope.ProjectID, func(service *documentreview.Service, resolver documentreview.SnapshotResolver) error {
 		resolved, resolveErr := resolver.ResolveReviewTarget(ctx, request.Target)
 		if resolveErr != nil {
 			return resolveErr
@@ -208,7 +208,7 @@ func (h *Handlers) HandleProjectDocumentCommentUpdate(ctx context.Context, c *ap
 	request.ID = c.Param("id")
 	var thread documentreview.Thread
 	var comment documentreview.Comment
-	workspace, err := h.app.ProjectBook().WithDocumentReview(scope.ProjectID, func(service *documentreview.Service, _ documentreview.SnapshotResolver) error {
+	workspace, err := h.app.WithProjectDocumentReview(ctx, scope.ProjectID, func(service *documentreview.Service, _ documentreview.SnapshotResolver) error {
 		var updateErr error
 		thread, comment, updateErr = service.UpdateComment(ctx, request)
 		return updateErr
@@ -229,7 +229,7 @@ func (h *Handlers) HandleProjectDocumentCommentDelete(ctx context.Context, c *ap
 	}
 	var thread documentreview.Thread
 	var comment documentreview.Comment
-	workspace, err := h.app.ProjectBook().WithDocumentReview(scope.ProjectID, func(service *documentreview.Service, _ documentreview.SnapshotResolver) error {
+	workspace, err := h.app.WithProjectDocumentReview(ctx, scope.ProjectID, func(service *documentreview.Service, _ documentreview.SnapshotResolver) error {
 		var deleteErr error
 		thread, comment, deleteErr = service.DeleteComment(ctx, documentreview.DeleteCommentRequest{ID: c.Param("id")})
 		return deleteErr
@@ -274,6 +274,10 @@ func bindCompleteLoreItemInput(c *app.RequestContext, resourceID string) (booklo
 }
 
 func writeProjectBookError(c *app.RequestContext, err error, fallbackKey string) {
+	if errors.Is(err, booklore.ErrNameRequiredForID) {
+		writeErrorKey(c, consts.StatusBadRequest, "api.lore.nameRequiredForID")
+		return
+	}
 	status := consts.StatusBadRequest
 	if errors.Is(err, os.ErrNotExist) {
 		status = consts.StatusNotFound

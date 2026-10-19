@@ -8,11 +8,13 @@ import (
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentevent "github.com/alfredxw/denova/agent/lifecycle/event"
+	agentinteraction "github.com/alfredxw/denova/agent/lifecycle/interaction"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 // ResolveAsk adapts Denova's stable transport shape to the public Interaction
-// response vocabulary. It never writes the product Session journal.
+// response vocabulary. Only the owning Agent journal accepts the answer.
 func (runtime *Runtime) ResolveAsk(
 	ctx context.Context,
 	options agentrun.Options,
@@ -20,98 +22,62 @@ func (runtime *Runtime) ResolveAsk(
 	answers []agentconversation.HostAskAnswer,
 	cancelReason string,
 ) (agentconversation.HostAskResolution, error) {
-	statusSnapshot, err := runtime.RuntimeStatusProjection(ctx, options)
-	if err != nil {
-		return agentconversation.HostAskResolution{}, err
-	}
-	var pending agent.InteractionRequest
-	for _, candidate := range statusSnapshot.PendingInteractions {
-		if candidate.ID == strings.TrimSpace(askID) {
-			pending = candidate
-			break
-		}
-	}
-	if pending.ID == "" {
-		return agentconversation.HostAskResolution{}, agent.ErrInteractionStale
-	}
-	response := agent.InteractionResponse{Cancelled: status == session.AskCancelled}
-	if !response.Cancelled && pending.Kind == agent.InteractionPermission {
+	response := agentinteraction.InteractionResponse{Cancelled: status == session.AskCancelled}
+	if !response.Cancelled && len(answers) == 1 && answers[0].QuestionID == "tool-approval" {
 		if len(answers) != 1 || len(answers[0].SelectedOptionIDs) != 1 {
-			return agentconversation.HostAskResolution{}, agent.ErrInteractionStale
+			return agentconversation.HostAskResolution{}, agentschema.ErrInteractionStale
 		}
 		switch strings.TrimSpace(answers[0].SelectedOptionIDs[0]) {
 		case session.ToolApprovalAllowOnceOptionID:
-			response.Permission = agent.PermissionAllowOnce
+			response.Permission = agentinteraction.PermissionAllowOnce
 		case session.ToolApprovalAllowWorkspaceOptionID:
-			response.Permission = agent.PermissionRemember
+			response.Permission = agentinteraction.PermissionRemember
 		case session.ToolApprovalDenyOptionID:
-			response.Permission = agent.PermissionDeny
+			response.Permission = agentinteraction.PermissionDeny
 		default:
-			return agentconversation.HostAskResolution{}, agent.ErrInteractionStale
+			return agentconversation.HostAskResolution{}, agentschema.ErrInteractionStale
 		}
 	} else if !response.Cancelled {
-		response.Answers = make([]agent.InteractionAnswer, len(answers))
-		for index, answer := range answers {
-			values := make([]string, 0, len(answer.SelectedOptionIDs))
-			for _, value := range answer.SelectedOptionIDs {
-				if value = strings.TrimSpace(value); value != "" && value != "other" {
-					values = append(values, value)
-				}
-			}
-			response.Answers[index] = agent.InteractionAnswer{
-				QuestionID: answer.QuestionID, Values: values, Text: answer.CustomInput,
-			}
-		}
+		response.Answers = agentconversation.InteractionAnswers(answers)
 	}
 	request, resolution, err := runtime.ResolveInteraction(ctx, options, askID, response)
 	if err != nil {
 		return agentconversation.HostAskResolution{}, err
 	}
 	result := agentconversation.HostAskResolution{Schema: "ask.result.v1", ID: askID}
-	if resolution.Cancelled {
-		result.Status, result.CancelReason = session.AskCancelled, strings.TrimSpace(cancelReason)
+	if request.Verification != nil && resolution.Cancelled && cancelReason == "task_aborted" {
+		root, _, err := runtime.public.openSession(ctx, options)
+		if err != nil {
+			return agentconversation.HostAskResolution{}, err
+		}
+		if _, err := runtime.public.agent.AbortTree(ctx, root.Key(), agentevent.AbortRequest{
+			IdempotencyKey: "abort-verification:" + askID, Reason: "User cancelled the task during effect verification",
+		}); err != nil {
+			return agentconversation.HostAskResolution{}, err
+		}
+		result.Status, result.CancelReason = session.AskCancelled, cancelReason
 		return result, nil
 	}
-	result.Status = session.AskAnswered
-	if request.Kind == agent.InteractionPermission {
+	if request.Verification != nil && (resolution.Cancelled || len(resolution.Answers) != 1 || len(resolution.Answers[0].Values) != 1 ||
+		(resolution.Answers[0].Values[0] != "executed" && resolution.Answers[0].Values[0] != "not_executed")) {
+		result.Status = session.AskPending
 		return result, nil
 	}
-	questions := make(map[string]agent.InteractionQuestion, len(request.Questions))
-	for _, question := range request.Questions {
-		questions[question.ID] = question
-	}
-	for _, answer := range resolution.Answers {
-		question := questions[answer.QuestionID]
-		projected := agentconversation.HostAskAnswerResult{
-			QuestionID: answer.QuestionID, Question: strings.TrimSpace(question.Prompt), CustomInput: answer.Text,
-		}
-		byValue := make(map[string]agent.InteractionOption, len(question.Options))
-		for _, option := range question.Options {
-			byValue[option.Value] = option
-		}
-		for _, value := range answer.Values {
-			option := byValue[value]
-			projected.SelectedOptions = append(projected.SelectedOptions, agentconversation.HostAskSelectedOption{
-				ID: value, Label: strings.TrimSpace(option.Label),
-			})
-		}
-		result.Answers = append(result.Answers, projected)
-	}
-	return result, nil
+	return agentconversation.ProjectAskResolution(request, resolution, cancelReason), nil
 }
 
 // ResolvePermission maps the existing tool-approval action IDs to the public
 // typed response before durable admission.
 func (runtime *Runtime) ResolvePermission(ctx context.Context, options agentrun.Options, interactionID, optionID string) error {
-	choice := agent.PermissionChoice("")
+	choice := agentinteraction.PermissionChoice("")
 	switch strings.TrimSpace(optionID) {
 	case session.ToolApprovalAllowOnceOptionID:
-		choice = agent.PermissionAllowOnce
+		choice = agentinteraction.PermissionAllowOnce
 	case session.ToolApprovalAllowWorkspaceOptionID:
-		choice = agent.PermissionRemember
+		choice = agentinteraction.PermissionRemember
 	case session.ToolApprovalDenyOptionID:
-		choice = agent.PermissionDeny
+		choice = agentinteraction.PermissionDeny
 	}
-	_, _, err := runtime.ResolveInteraction(ctx, options, interactionID, agent.InteractionResponse{Permission: choice})
+	_, _, err := runtime.ResolveInteraction(ctx, options, interactionID, agentinteraction.InteractionResponse{Permission: choice})
 	return err
 }

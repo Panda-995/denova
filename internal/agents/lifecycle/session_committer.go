@@ -12,22 +12,23 @@ import (
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
 )
 
 // SessionOutputCommit is the product-approved session projection of one raw
 // Agent output. Message is the canonical product record; Transcript controls
 // only future public Agent model context.
 type SessionOutputCommit struct {
-	Message    *agent.Message
+	Message    *agentschema.Message
 	Metadata   session.MessageMetadata
-	Transcript *agent.OutputProjection
+	Transcript *agentcanonical.OutputProjection
 }
 
 type SessionOutputProjector func(
 	context.Context,
 	agentchat.AgentContextPreparation,
-	agent.OutputCommitRequest,
+	agentcanonical.OutputCommitRequest,
 	session.MessageMetadata,
 ) (SessionOutputCommit, error)
 
@@ -59,16 +60,17 @@ func NewSessionConversationCommitter(config SessionCommitterConfig) (Conversatio
 
 func (committer *sessionConversationCommitter) MaterializeInput(
 	ctx context.Context,
-	request agent.InputCommitRequest,
-) (agent.CommitReceipt, error) {
+	request agentcanonical.InputCommitRequest,
+) (agentcanonical.CommitReceipt, error) {
 	receipt, err := committer.config.Conversation.MaterializeAgentCanonicalInput(
 		ctx,
 		request.Input.Text,
 		request.Input.Attachments,
 		agentchat.UserMessageReferences(committer.config.Request),
+		request.Checkpoint,
 	)
 	if err != nil {
-		return agent.CommitReceipt{}, err
+		return agentcanonical.CommitReceipt{}, err
 	}
 	if committer.config.InputEffect != nil {
 		effectRequest := inputEffectRequest(request.Identity, request.Hash)
@@ -77,14 +79,14 @@ func (committer *sessionConversationCommitter) MaterializeInput(
 		committer.mu.Unlock()
 		if !called {
 			if err := committer.config.InputEffect.Apply(ctx, effectRequest); err != nil {
-				return agent.CommitReceipt{}, fmt.Errorf("run Denova input-commit callback: %w", err)
+				return agentcanonical.CommitReceipt{}, fmt.Errorf("run Denova input-commit callback: %w", err)
 			}
 			committer.mu.Lock()
 			committer.inputCallbacks[request.Hash] = struct{}{}
 			committer.mu.Unlock()
 		}
 	}
-	return agent.CommitReceipt{Revision: strconv.FormatUint(receipt.ContextRevision, 10)}, nil
+	return agentcanonical.CommitReceipt{Revision: strconv.FormatUint(receipt.ContextRevision, 10)}, nil
 }
 
 func (committer *sessionConversationCommitter) ApplyPreparedContext(
@@ -96,20 +98,20 @@ func (committer *sessionConversationCommitter) ApplyPreparedContext(
 
 func (committer *sessionConversationCommitter) CommitContext(
 	ctx context.Context,
-	request agent.ContextCommitRequest,
-) (agent.CommitReceipt, error) {
+	request agentcanonical.ContextCommitRequest,
+) (agentcanonical.CommitReceipt, error) {
 	receipt, err := committer.config.Conversation.CommitAgentCanonicalContext(ctx, request)
 	if err != nil {
-		return agent.CommitReceipt{}, err
+		return agentcanonical.CommitReceipt{}, err
 	}
-	return agent.CommitReceipt{Revision: strconv.FormatUint(receipt.ContextRevision, 10)}, nil
+	return agentcanonical.CommitReceipt{Revision: strconv.FormatUint(receipt.ContextRevision, 10)}, nil
 }
 
 func (committer *sessionConversationCommitter) CommitOutput(
 	ctx context.Context,
 	prepared agentchat.AgentContextPreparation,
-	request agent.OutputCommitRequest,
-) (agent.OutputCommitReceipt, error) {
+	request agentcanonical.OutputCommitRequest,
+) (agentcanonical.OutputCommitReceipt, error) {
 	options := committer.config.Options
 	metadata := session.MessageMetadata{
 		RunID: request.Identity.RunID, AgentKind: options.AgentKind,
@@ -126,24 +128,24 @@ func (committer *sessionConversationCommitter) CommitOutput(
 	if committer.config.ProjectOutput != nil {
 		projection, err = committer.config.ProjectOutput(ctx, prepared, request, metadata)
 		if err != nil {
-			return agent.OutputCommitReceipt{}, err
+			return agentcanonical.OutputCommitReceipt{}, err
 		}
 	}
 	if projection.Message == nil {
-		return agent.OutputCommitReceipt{}, errors.New("Denova Session output projector returned no canonical message")
+		return agentcanonical.OutputCommitReceipt{}, errors.New("Denova Session output projector returned no canonical message")
 	}
 	receipt, err := committer.config.Conversation.CommitAgentCanonicalOutput(
-		ctx, projection.Message, projection.Metadata,
+		ctx, projection.Message, projection.Metadata, request.Checkpoint,
 	)
 	if err != nil {
-		return agent.OutputCommitReceipt{}, err
+		return agentcanonical.OutputCommitReceipt{}, err
 	}
-	return agent.OutputCommitReceipt{
+	return agentcanonical.OutputCommitReceipt{
 		Revision: strconv.FormatUint(receipt.ContextRevision, 10), Transcript: projection.Transcript,
 	}, nil
 }
 
-func inputEffectRequest(identity agent.CommitIdentity, hash string) agentrun.InputCommitEffectRequest {
+func inputEffectRequest(identity agentcanonical.CommitIdentity, hash string) agentrun.InputCommitEffectRequest {
 	return agentrun.InputCommitEffectRequest{
 		CommandID: identity.CommandID, OperationID: identity.RunID, Cycle: identity.Cycle, Hash: hash,
 	}

@@ -4,11 +4,13 @@ import (
 	"context"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	agentcontext "denova/internal/agents/context"
 	agentrun "denova/internal/agents/run"
 	"denova/internal/interactive"
+
+	"github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
 )
 
 func TestCanonicalCommitterKeepsGameAttachmentsInStoryAndModelInput(t *testing.T) {
@@ -24,11 +26,11 @@ func TestCanonicalCommitterKeepsGameAttachmentsInStoryAndModelInput(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	attachment := agent.Attachment{ID: "att_0123456789abcdef0123456789abcdef", Name: "map.png", MediaType: "image/png", Size: 8, Path: "/state/map.png", SHA256: "digest"}
-	if _, err := committer.MaterializeInput(context.Background(), agent.InputCommitRequest{
-		Identity: agent.CommitIdentity{CommandID: "attachment-command", RunID: "attachment-operation", Cycle: 1, Stage: agent.CommitInput},
+	attachment := agentschema.Attachment{ID: "att_0123456789abcdef0123456789abcdef", Name: "map.png", MediaType: "image/png", Size: 8, Path: "/state/map.png", SHA256: "digest"}
+	if _, err := committer.MaterializeInput(context.Background(), agentcanonical.InputCommitRequest{
+		Identity: agentcanonical.CommitIdentity{CommandID: "attachment-command", RunID: "attachment-operation", Cycle: 1, Stage: agentcanonical.CommitInput},
 		Hash:     "public-input-hash",
-		Input:    agent.Input{Text: "Inspect the map", Attachments: []agent.Attachment{attachment}},
+		Input:    agent.Input{Text: "Inspect the map", Attachments: []agentschema.Attachment{attachment}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +42,7 @@ func TestCanonicalCommitterKeepsGameAttachmentsInStoryAndModelInput(t *testing.T
 		t.Fatalf("canonical game input lost attachments: %#v", snapshot.PendingPlayerInputs)
 	}
 	assembled, err := conversation.AssembleModelContext(context.Background(), "Inspect the map", agentcontext.ModelContextInput{
-		UserMessage: "Inspect the map", Attachments: []agent.Attachment{attachment}, Budget: conversation.ModelContextBudget(),
+		UserMessage: "Inspect the map", Attachments: []agentschema.Attachment{attachment}, Budget: conversation.ModelContextBudget(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -65,8 +67,8 @@ func TestGameInterruptionSurvivesRepeatedBindingOfSameCycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := committer.MaterializeInput(context.Background(), agent.InputCommitRequest{
-		Identity: agent.CommitIdentity{CommandID: "pause-command", RunID: "pause-operation", Cycle: 1, Stage: agent.CommitInput},
+	if _, err := committer.MaterializeInput(context.Background(), agentcanonical.InputCommitRequest{
+		Identity: agentcanonical.CommitIdentity{CommandID: "pause-command", RunID: "pause-operation", Cycle: 1, Stage: agentcanonical.CommitInput},
 		Hash:     "pause-input-hash",
 		Input:    agent.Input{Text: "Wait by the door"},
 	}); err != nil {

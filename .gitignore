@@ -1,4 +1,5 @@
 .codex/
+/.codex-tmp/
 .agents/
 playground
 output/
@@ -9,6 +10,7 @@ log/
 .gomodcache/
 .npm-cache/
 denova-windows-test/
+denova.exe
 denova-test.exe
 nova-windows-test/
 nova-test.exe
@@ -23,13 +25,23 @@ docs/*
 !docs/tests/
 docs/tests/*
 !docs/tests/large-change-regression-checklist.md
-!docs/continual-learning-user-state-design.md
-!docs/dynamic-tool-orchestration-design.md
-!docs/agent-package-api-design.md
-!docs/agent-package-migration-parity-audit.md
-!docs/agent-prompt-architecture-audit.md
-!docs/agent-prompt-context-architecture-benchmark.md
-!docs/portable-denova-data-directory-design.md
+!docs/automation-project-agent.md
+!docs/plugin-developer-guide.md
+!docs/game-developer-guide.md
+!docs/plugin-platform-design.md
+!docs/plugin-extensibility-audit-and-plan.md
+!docs/plugin-platform-api.md
+!docs/extension-development.md
+!docs/claude-runtime.md
+!docs/ci-performance.md
+!docs/skills-library.md
+!docs/lore-index.md
+!docs/automatic-updates.md
+!docs/resource-pack-import-export-design.md
+!docs/speech.md
+!docs/agent-runtime-session-design-audit.md
+!docs/analytics.md
+!docs/creative-evaluation.md
 .worktrees/
 .pnpm-store/
 .DS_Store
@@ -38,4 +50,11 @@ docs/tests/*
 prd
 .playwright-cli/
 tmp/
+.tmp/
 /npm/
+
+# Local AVG engine and its integration checks are not distributed.
+/internal/extensions/avgengine/
+/internal/app/avgengine_local_test.go
+/web/tests/e2e/avgengine.local.spec.ts
+/web/tests/support/avgengine-local.ts

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alfredxw/denova/agent/providers"
+	"github.com/alfredxw/denova/agent/model/providers"
 )
 
 func TestReadSettingsFileMigratesLegacyModelProfileFields(t *testing.T) {

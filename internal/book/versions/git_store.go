@@ -32,14 +32,9 @@ func (s *Service) gitStore() GitStore {
 func (g GitStore) OpenExisting() (*git.Repository, error) {
 	repo, err := openStateRepository(g.workspace, g.repository)
 	if errors.Is(err, git.ErrRepositoryNotExists) {
-		migrated, migrationErr := MigrateLegacyRepository(g.workspace, g.repository)
-		if migrationErr != nil {
-			return nil, migrationErr
-		}
-		if !migrated {
-			return nil, nil
-		}
-		return openStateRepository(g.workspace, g.repository)
+		// Registry.EnsureStore owns the released Book migration. A general
+		// Project's source repository must never become Denova version history.
+		return nil, nil
 	}
 	if err != nil {
 		return nil, err
@@ -350,6 +345,8 @@ func (s *Service) commitFiles(id string) (map[string]versionFileData, error) {
 
 // commitFileIndex projects a commit from tree/blob metadata only. Callers that
 // only compare versions never decompress or copy file contents into memory.
+// Apply current visibility rules to historical snapshots too: older commits
+// may contain runtime files that are now excluded from workspace collection.
 func (s *Service) commitFileIndex(id string) (map[string]versionFileData, error) {
 	repo, err := s.openVersionRepo()
 	if err != nil {
@@ -365,6 +362,9 @@ func (s *Service) commitFileIndex(id string) (map[string]versionFileData, error)
 	}
 	files := map[string]versionFileData{}
 	err = iter.ForEach(func(file *object.File) error {
+		if isVersionExcludedRelPath(file.Name) {
+			return nil
+		}
 		files[file.Name] = versionFileData{
 			Path: file.Name,
 			Hash: file.Hash.String(),
@@ -406,7 +406,7 @@ func (s *Service) restoreCommitToWorkspace(id string) error {
 		return err
 	}
 	if err := s.withProtectedExcludedWorkspaceDirs(func() error {
-		return s.gitStore().CheckoutWhole(repo, id)
+		return s.preservingNewerLoreMedia(id, func() error { return s.gitStore().CheckoutWhole(repo, id) })
 	}); err != nil {
 		return err
 	}

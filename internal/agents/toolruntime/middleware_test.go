@@ -2,17 +2,19 @@ package toolruntime
 
 import (
 	"context"
-	agentinteractive "denova/internal/agents/interactive"
-	agentrun "denova/internal/agents/run"
-	agenttool "denova/internal/agents/tool"
 	"strings"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
+	agentinteractive "denova/internal/agents/interactive"
+	agentrun "denova/internal/agents/run"
+	agenttool "denova/internal/agents/tool"
 	"denova/internal/agents/toolresult"
 	"denova/internal/interactive"
+
+	agentmiddleware "github.com/alfredxw/denova/agent/engine/middleware"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	sdktool "github.com/alfredxw/denova/agent/tool"
 )
 
 func TestInteractiveStoryToolMiddlewareBlocksWorkspaceAndHostMutations(t *testing.T) {
@@ -20,7 +22,7 @@ func TestInteractiveStoryToolMiddlewareBlocksWorkspaceAndHostMutations(t *testin
 	for _, name := range []string{"write", "edit", "bash", "pwsh"} {
 		called := false
 		endpoint, err := wrapTextToolCallForTest(middleware,
-			func(context.Context, string, ...agent.ToolOption) (string, error) {
+			func(context.Context, string, ...sdktool.ToolOption) (string, error) {
 				called = true
 				return "ok", nil
 			},
@@ -41,13 +43,13 @@ func TestInteractiveStoryToolMiddlewareBlocksWorkspaceAndHostMutations(t *testin
 
 func TestInteractiveTurnReceiptRecordsDomainOutcomeSeparatelyFromTransport(t *testing.T) {
 	record := agenttool.ExecutionRecord{ToolName: agentinteractive.TurnSubmissionToolName, Status: "success"}
-	applyInteractiveTurnReceiptToExecutionRecord(&record, agent.ToolResult{Details: []byte(`{"ready":false,"module_status":{"state_changes":"rejected","choices":"accepted"},"diagnostics":[{"code":"invalid_module"}],"retry_modules":["state_changes"]}`)})
+	applyInteractiveTurnReceiptToExecutionRecord(&record, agentschema.ToolResult{Details: []byte(`{"ready":false,"module_status":{"state_changes":"rejected","choices":"accepted"},"diagnostics":[{"code":"invalid_module"}],"retry_modules":["state_changes"]}`)})
 	if record.Status != "success" || record.DomainStatus != "rejected" || record.DomainDiagnosticCount != 1 || len(record.RetryModules) != 1 || record.RetryModules[0] != "state_changes" {
 		t.Fatalf("transport success should retain the rejected domain outcome: %#v", record)
 	}
 
 	accepted := agenttool.ExecutionRecord{ToolName: agentinteractive.TurnSubmissionToolName, Status: "success"}
-	applyInteractiveTurnReceiptToExecutionRecord(&accepted, agent.ToolResult{Details: []byte(`{"ready":true,"module_status":{"state_changes":"accepted","choices":"accepted"}}`)})
+	applyInteractiveTurnReceiptToExecutionRecord(&accepted, agentschema.ToolResult{Details: []byte(`{"ready":true,"module_status":{"state_changes":"accepted","choices":"accepted"}}`)})
 	if accepted.DomainStatus != "accepted" || accepted.DomainDiagnosticCount != 0 {
 		t.Fatalf("ready receipt should be recorded as domain accepted: %#v", accepted)
 	}
@@ -57,7 +59,7 @@ func TestInteractiveStoryToolMiddlewareAllowsReadTools(t *testing.T) {
 	middleware := NewInteractiveStoryMiddleware()
 	called := false
 	endpoint, err := wrapTextToolCallForTest(middleware,
-		func(context.Context, string, ...agent.ToolOption) (string, error) {
+		func(context.Context, string, ...sdktool.ToolOption) (string, error) {
 			called = true
 			return "ok", nil
 		},
@@ -110,20 +112,20 @@ func TestInteractiveStoryToolMiddlewareAllowsDomainWorkflowMutations(t *testing.
 			continue
 		}
 		wanted[info.Name] = true
-		if definition.Descriptor.Execution != agent.ToolExecutionSessionExclusive ||
-			definition.Descriptor.MutationScope != agent.ToolMutationSession ||
-			definition.Descriptor.PostCheck != agent.ToolPostCheckSessionState {
+		if definition.Descriptor.Execution != sdktool.ToolExecutionSessionExclusive ||
+			definition.Descriptor.MutationScope != sdktool.ToolMutationSession ||
+			definition.Descriptor.PostCheck != sdktool.ToolPostCheckSessionState {
 			t.Fatalf("%s must remain a session-scoped domain workflow: %+v", info.Name, definition.Descriptor)
 		}
-		toolContext := &agent.ToolContext{
+		toolContext := &agentmiddleware.ToolContext{
 			Name: info.Name,
-			Definition: agent.ToolDefinitionSnapshot{
+			Definition: sdktool.ToolDefinitionSnapshot{
 				Info: info, Descriptor: definition.Descriptor,
 			},
 		}
 		called := false
 		endpoint, wrapErr := wrapTextToolCallForTest(middleware,
-			func(context.Context, string, ...agent.ToolOption) (string, error) {
+			func(context.Context, string, ...sdktool.ToolOption) (string, error) {
 				called = true
 				return "ok", nil
 			},
@@ -157,7 +159,7 @@ func TestToolOrchestratorBlocksInteractiveWriteTools(t *testing.T) {
 	middleware := &OrchestratorMiddleware{agentKind: agentrun.AgentKindInteractiveStory}
 	called := false
 	endpoint, err := wrapTextToolCallForTest(middleware,
-		func(context.Context, string, ...agent.ToolOption) (string, error) {
+		func(context.Context, string, ...sdktool.ToolOption) (string, error) {
 			called = true
 			return "ok", nil
 		},
@@ -182,7 +184,7 @@ func TestToolOrchestratorBlocksInteractiveSubAgentWriteTools(t *testing.T) {
 	middleware := &OrchestratorMiddleware{agentKind: "researcher", policyKind: agentrun.AgentKindInteractiveStory}
 	called := false
 	endpoint, err := wrapTextToolCallForTest(middleware,
-		func(context.Context, string, ...agent.ToolOption) (string, error) {
+		func(context.Context, string, ...sdktool.ToolOption) (string, error) {
 			called = true
 			return "ok", nil
 		},
@@ -207,7 +209,7 @@ func TestToolOrchestratorKeepsExecutionMetadataOutOfModelResult(t *testing.T) {
 	middleware := &OrchestratorMiddleware{agentKind: agentrun.AgentKindIDE}
 	content := strings.Repeat("正文", 100)
 	endpoint, err := wrapTextToolCallForTest(middleware,
-		func(context.Context, string, ...agent.ToolOption) (string, error) {
+		func(context.Context, string, ...sdktool.ToolOption) (string, error) {
 			return content, nil
 		},
 		testToolContext("write", "call-1"),
@@ -229,9 +231,9 @@ func TestToolOrchestratorKeepsExecutionMetadataOutOfModelResult(t *testing.T) {
 
 func TestToolOrchestratorPreservesResultForFixedProcessorWhenLimitConfigured(t *testing.T) {
 	middleware := &OrchestratorMiddleware{agentKind: agentrun.AgentKindIDE, toolResultMaxBytes: 128}
-	ctx := agent.ContextWithToolArtifactStore(context.Background(), &processorArtifactStore{})
+	ctx := sdktool.ContextWithToolArtifactStore(context.Background(), &processorArtifactStore{})
 	endpoint, err := wrapTextToolCallForTest(middleware,
-		func(context.Context, string, ...agent.ToolOption) (string, error) {
+		func(context.Context, string, ...sdktool.ToolOption) (string, error) {
 			return strings.Repeat("正文", 200), nil
 		},
 		testToolContext("write", "call-1"),
@@ -253,7 +255,7 @@ func TestToolOrchestratorBlocksMalformedJSONArguments(t *testing.T) {
 	middleware := &OrchestratorMiddleware{agentKind: agentrun.AgentKindIDE}
 	called := false
 	endpoint, err := wrapTextToolCallForTest(middleware,
-		func(context.Context, string, ...agent.ToolOption) (string, error) {
+		func(context.Context, string, ...sdktool.ToolOption) (string, error) {
 			called = true
 			return "ok", nil
 		},
@@ -299,7 +301,7 @@ func TestToolOrchestratorBlocksValidArgumentsWhenModelOutputIsIncomplete(t *test
 			middleware := &OrchestratorMiddleware{agentKind: agentrun.AgentKindIDE}
 			called := false
 			endpoint, err := wrapTextToolCallForTest(middleware,
-				func(context.Context, string, ...agent.ToolOption) (string, error) {
+				func(context.Context, string, ...sdktool.ToolOption) (string, error) {
 					called = true
 					return "ok", nil
 				},
@@ -344,7 +346,7 @@ func TestToolOrchestratorReturnsContentFilterContextForIncompleteWriteArguments(
 	middleware := &OrchestratorMiddleware{agentKind: agentrun.AgentKindIDE}
 	called := false
 	endpoint, err := wrapTextToolCallForTest(middleware,
-		func(context.Context, string, ...agent.ToolOption) (string, error) {
+		func(context.Context, string, ...sdktool.ToolOption) (string, error) {
 			called = true
 			return "ok", nil
 		},
@@ -413,7 +415,7 @@ func TestToolOrchestratorBlocksValidArgumentsWhenModelWasContentFiltered(t *test
 	middleware := &OrchestratorMiddleware{agentKind: agentrun.AgentKindIDE}
 	called := false
 	endpoint, err := wrapTextToolCallForTest(middleware,
-		func(context.Context, string, ...agent.ToolOption) (string, error) {
+		func(context.Context, string, ...sdktool.ToolOption) (string, error) {
 			called = true
 			return "unsafe", nil
 		},
@@ -450,7 +452,7 @@ func TestToolOrchestratorAllowsEscapedSpecialCharactersInJSONArguments(t *testin
 	middleware := &OrchestratorMiddleware{agentKind: agentrun.AgentKindIDE}
 	called := false
 	endpoint, err := wrapTextToolCallForTest(middleware,
-		func(context.Context, string, ...agent.ToolOption) (string, error) {
+		func(context.Context, string, ...sdktool.ToolOption) (string, error) {
 			called = true
 			return "ok", nil
 		},
@@ -476,7 +478,7 @@ func TestToolOrchestratorBlocksDisabledCapability(t *testing.T) {
 	}
 	called := false
 	endpoint, err := wrapTextToolCallForTest(middleware,
-		func(context.Context, string, ...agent.ToolOption) (string, error) {
+		func(context.Context, string, ...sdktool.ToolOption) (string, error) {
 			called = true
 			return "ok", nil
 		},

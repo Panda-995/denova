@@ -2,6 +2,7 @@ package generation
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"strings"
@@ -91,6 +92,9 @@ func (adapter *GeminiAdapter) Generate(ctx context.Context, profile config.Resol
 					ImageSize:   strings.ToUpper(strings.TrimSpace(request.Resolution)),
 				}},
 			},
+		}
+		for _, input := range request.Images {
+			payload.Contents[0].Parts = append(payload.Contents[0].Parts, geminiPart{InlineData: &geminiInlineData{MIMEType: input.MIMEType, Data: base64.StdEncoding.EncodeToString(input.Data)}})
 		}
 		var response geminiImageResponse
 		if err := doJSON(ctx, adapter.httpClient, http.MethodPost, endpoint, headers, payload, &response); err != nil {

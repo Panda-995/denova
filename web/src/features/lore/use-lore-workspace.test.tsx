@@ -2,7 +2,6 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { preserveAutosaveConflict } from '@/lib/api-client/autosave-conflicts'
 import {
-  createProjectLoreItem,
   deleteProjectLoreItem,
   getProjectLoreItems,
   updateProjectLoreItem,
@@ -12,7 +11,6 @@ import { notifyLoreUpdated } from './events'
 import { useLoreWorkspace } from './use-lore-workspace'
 
 vi.mock('@/lib/api', () => ({
-  createProjectLoreItem: vi.fn(),
   deleteProjectLoreItem: vi.fn(),
   getProjectLoreItems: vi.fn(),
   updateProjectLoreItem: vi.fn(),
@@ -127,7 +125,6 @@ describe('useLoreWorkspace', () => {
     })
     vi.mocked(getProjectLoreItems).mockResolvedValue([initial])
     vi.mocked(updateProjectLoreItem).mockResolvedValue(saved)
-    vi.mocked(createProjectLoreItem).mockResolvedValue(created)
 
     const { result } = renderHook(() => useLoreWorkspace({
       projectId: 'book-demo',
@@ -139,7 +136,8 @@ describe('useLoreWorkspace', () => {
       result.current.setDraft({ ...result.current.draft!, name: 'Saved name' })
     })
     await act(async () => {
-      await result.current.createItem({ name: 'New character' })
+      expect(await result.current.flush()).toBe(true)
+      result.current.acceptCreatedItem(created)
     })
 
     expect(updateProjectLoreItem).toHaveBeenCalledWith(

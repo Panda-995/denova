@@ -57,7 +57,7 @@ func (a *App) registerProjectTask(task *apptask.Task, projectID, workspace, stat
 		stop:      context.AfterFunc(operation.Context(), task.Abort),
 	}
 	a.mu.Lock()
-	if a.closed {
+	if a.closed || a.updateRestarting {
 		a.mu.Unlock()
 		registration.release()
 		return fmt.Errorf("App is closed")
@@ -146,6 +146,9 @@ func (a *App) registerWorkspaceTaskLocked(task *apptask.Task, workspace string, 
 // failed apptask.NewDeferred registration does not return the Task to
 // its caller, so no outer cleanup can safely recover these resources.
 func (a *App) registerOwnedTaskLocked(task *apptask.Task, workspace string, scope *concurrency.Scope) error {
+	if a.closed || a.updateRestarting {
+		return concurrency.ErrClosing
+	}
 	if task == nil {
 		return fmt.Errorf("cannot register a nil Task")
 	}

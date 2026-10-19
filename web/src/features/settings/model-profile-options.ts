@@ -1,4 +1,4 @@
-import { modelProfileID, modelProfileLabel, modelProfilesWithDefault } from './model-profiles'
+import { modelProfileID, modelProfileLabel, modelProfilesWithDefault, selectableModelProfiles } from './model-profiles'
 import type { LayeredSettings, ModelProfileSettings } from './types'
 
 export interface ModelProfileOption {
@@ -18,8 +18,8 @@ export function buildModelProfileOptions(
     if (!id) return
     profiles.set(id, modelProfileLabel(profile))
   }
-  modelProfilesWithDefault(settings.effective).forEach(add)
-  if (!profiles.has('default')) profiles.set('default', t('chat.modelProfile.defaultModel'))
+  selectableModelProfiles(settings.effective).forEach(add)
+  if (modelProfilesWithDefault(settings.effective).length === 0) profiles.set('default', t('chat.modelProfile.defaultModel'))
   return Array.from(profiles.entries()).map(([id, label]) => ({
     id,
     modelLabel: label,

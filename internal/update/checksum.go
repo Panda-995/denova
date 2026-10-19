@@ -6,53 +6,42 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 )
 
-func (s *Service) verifyChecksum(ctx context.Context, assetName, archivePath string) error {
-	release, err := s.latestRelease(ctx)
+// releaseChecksum binds verification to the release selected before downloading.
+func (s *Service) releaseChecksum(ctx context.Context, release githubRelease, assetName string) (string, error) {
+	asset := selectChecksumAsset(release.Assets)
+	if asset == nil {
+		return "", fmt.Errorf("release is missing checksums.txt; refusing to install %q", assetName)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubAssetDownloadURL(*asset), nil)
 	if err != nil {
-		return err
+		return "", err
 	}
-	checksumAsset := selectChecksumAsset(release.Assets)
-	if checksumAsset == nil {
-		return fmt.Errorf("release is missing checksums.txt; refusing to install asset %q", assetName)
-	}
-	temp, err := os.CreateTemp("", "denova-checksums-*")
+	req.Header.Set("Accept", "application/octet-stream")
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
-	defer os.Remove(temp.Name())
-	if err := temp.Close(); err != nil {
-		return err
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download checksums: HTTP %d", resp.StatusCode)
 	}
-	if err := s.downloadAsset(ctx, githubAssetDownloadURL(*checksumAsset), temp.Name(), 0, nil); err != nil {
-		return err
-	}
-	expected, err := checksumForAsset(temp.Name(), assetName)
-	if err != nil {
-		return err
-	}
-	actual, err := fileSHA256(archivePath)
-	if err != nil {
-		return err
-	}
-	if !strings.EqualFold(expected, actual) {
-		return fmt.Errorf("update package checksum mismatch: expected=%s actual=%s", expected, actual)
-	}
-	return nil
-}
-
-func checksumForAsset(path, assetName string) (string, error) {
-	data, err := os.ReadFile(path)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return "", err
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[1] == assetName {
-			return fields[0], nil
+		if len(fields) == 2 && strings.TrimPrefix(fields[1], "*") == assetName {
+			digest, err := hex.DecodeString(fields[0])
+			if err != nil || len(digest) != sha256.Size {
+				return "", fmt.Errorf("invalid SHA-256 for %s", assetName)
+			}
+			return strings.ToLower(fields[0]), nil
 		}
 	}
 	return "", fmt.Errorf("checksums.txt is missing %s", assetName)

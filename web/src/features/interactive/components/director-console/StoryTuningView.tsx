@@ -1,7 +1,13 @@
+import { SortableControlSections } from './SortableControlSections'
+import { errorMessage } from '@/lib/error-diagnostics'
+import { StoryPresentationControls } from './StoryPresentationControls'
+import { StorySpeechControls } from './StorySpeechControls'
+import { useImageModelConfigured } from '@/features/settings/use-image-model-configured'
+import { requestSettingsSection } from '@/features/onboarding/events'
 import { Bot, Dices, ImagePlus, UserRound } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { Switch } from '@/components/ui/switch'
 import { getActorStates, getEventPackages, getRuleSystems } from '../../api'
 import { normalizeStoryCheckSettings } from '../../check-settings'
@@ -19,6 +25,8 @@ import type {
   StoryCheckSettings,
   StoryDirectorModuleRefs,
   StorySummary,
+  TurnEvent,
+  PresentationMaterial,
   Teller,
 } from '../../types'
 import { StateDisplayPreferenceMenu } from '../story-state/StateDisplayPreferenceMenu'
@@ -31,6 +39,10 @@ type ModuleIDKey = 'narrative_style_id' | 'rule_system_id' | 'actor_state_id' | 
 type ModuleDisabledKey = 'narrative_style_disabled' | 'rule_system_disabled' | 'actor_state_disabled' | 'image_preset_disabled'
 
 export interface StoryTuningViewProps {
+  currentTurn?: TurnEvent
+  onBackgroundChange?: (turnId: string, background?: PresentationMaterial) => Promise<void>
+  backgroundDisabled?: boolean
+  projectId?: string
   story?: StorySummary
   planningTemplates: GamePlanningTemplate[]
   tellers: Teller[]
@@ -51,6 +63,10 @@ const DEFAULT_MODULE_REFS: StoryDirectorModuleRefs = {
 }
 
 export function StoryTuningView({
+  projectId,
+  currentTurn,
+  onBackgroundChange,
+  backgroundDisabled,
   story,
   planningTemplates,
   tellers,
@@ -62,6 +78,7 @@ export function StoryTuningView({
   onOpenPresets,
 }: StoryTuningViewProps) {
   const { t } = useTranslation()
+  const imageConfigured = useImageModelConfigured(projectId)
   const [savingKey, setSavingKey] = useState('')
   const [eventPackages, setEventPackages] = useState<EventPackageModule[]>([])
   const [ruleSystems, setRuleSystems] = useState<RuleSystemModule[]>([])
@@ -95,7 +112,7 @@ export function StoryTuningView({
       await onUpdate(input)
     } catch (error) {
       console.error('[story-console] Failed to update story tuning', { storyId: story.id, key, error })
-      toast.error(t('directorPanel.tuning.saveFailed'))
+      toast.error(errorMessage(error, t('directorPanel.tuning.saveFailed')))
     } finally {
       setSavingKey('')
     }
@@ -108,7 +125,7 @@ export function StoryTuningView({
       await onPlanningTemplateChange(templateId)
     } catch (error) {
       console.error('[story-console] Failed to update planning template', { storyId: story.id, templateId, error })
-      toast.error(t('directorPanel.tuning.saveFailed'))
+      toast.error(errorMessage(error, t('directorPanel.tuning.saveFailed')))
     } finally {
       setSavingKey('')
     }
@@ -152,8 +169,8 @@ export function StoryTuningView({
 
   return (
     <div className="director-console__scroll h-full min-h-0 overflow-y-auto px-2.5 py-2.5">
-      <div className="flex flex-col gap-2">
-        <ControlSection
+      <SortableControlSections>
+        <ControlSection key="agent"
           icon={<Bot className="size-4" />}
           title={t('directorPanel.tuning.agent.title')}
           action={
@@ -224,7 +241,7 @@ export function StoryTuningView({
           </TuningRow>
         </ControlSection>
 
-        <ControlSection icon={<Dices className="size-4" />} title={t('directorPanel.tuning.check.title')}>
+        <ControlSection key="checks" icon={<Dices className="size-4" />} title={t('directorPanel.tuning.check.title')}>
           <TuningRow title={t('directorPanel.tuning.check.enabled')} busy={savingKey === 'checks-enabled'}>
             <Switch
               checked={ruleEnabled}
@@ -294,66 +311,59 @@ export function StoryTuningView({
               })}
             />
           </TuningRow>
-          <TuningRow title={t('directorPanel.tuning.check.visibility')} busy={savingKey === 'visibility'}>
-            <TuningSelect
-              value={checkSettings.rule_visibility_mode || 'audit_only'}
-              options={ruleVisibilityOptions(t)}
-              label={t('directorPanel.tuning.check.visibility')}
-              disabled={disabled || !ruleEnabled}
-              onChange={(value) => void save('visibility', {
-                check_settings: {
-                  ...checkSettings,
-                  rule_visibility_mode: value as StoryCheckSettings['rule_visibility_mode'],
-                },
-              })}
-            />
-          </TuningRow>
         </ControlSection>
 
-        <ControlSection icon={<ImagePlus className="size-4" />} title={t('directorPanel.tuning.image.title')}>
-          <TuningRow title={t('directorPanel.tuning.image.automatic')} busy={savingKey === 'image-mode'}>
-            <Switch
-              checked={imageSettings.mode === 'interval'}
+        <ControlSection key="image" icon={<ImagePlus className="size-4" />} title={t('directorPanel.tuning.image.title')}
+          action={<TuningLinkButton label={t('directorPanel.tuning.image.configure')} onClick={() => requestSettingsSection('image')} />}>
+          {imageConfigured && <>
+            <TuningRow title={t('directorPanel.tuning.image.automatic')} busy={savingKey === 'image-mode'}>
+              <Switch
+                checked={imageSettings.mode === 'interval'}
+                disabled={disabled}
+                aria-label={t('directorPanel.tuning.image.automatic')}
+                onCheckedChange={(automatic) => void save('image-mode', {
+                  image_settings: { ...imageSettings, mode: automatic ? 'interval' : 'manual' },
+                })}
+              />
+            </TuningRow>
+            <TuningRow title={t('directorPanel.tuning.image.interval')} busy={savingKey === 'image-interval'}>
+              <NumberSettingInput
+                value={imageSettings.interval_turns}
+                min={1}
+                max={50}
+                label={t('directorPanel.tuning.image.interval')}
+                disabled={disabled || imageSettings.mode !== 'interval'}
+                onCommit={(interval_turns) => void save('image-interval', {
+                  image_settings: {
+                    ...imageSettings,
+                    interval_turns: normalizeImageIntervalTurns(interval_turns),
+                  },
+                })}
+              />
+            </TuningRow>
+            <ModuleSelectRow
+              label={t('directorPanel.tuning.image.preset')}
+              value={imageSettings.preset_id || String(refs.image_preset_id || '')}
+              moduleDisabled={Boolean(refs.image_preset_disabled)}
+              options={imageOptions}
+              busy={savingKey === 'image-preset'}
               disabled={disabled}
-              aria-label={t('directorPanel.tuning.image.automatic')}
-              onCheckedChange={(automatic) => void save('image-mode', {
-                image_settings: { ...imageSettings, mode: automatic ? 'interval' : 'manual' },
-              })}
+              onChange={(value) => updateModule(
+                'image-preset',
+                'image_preset_id',
+                'image_preset_disabled',
+                value,
+                (nextID) => ({ image_settings: { ...imageSettings, preset_id: nextID } }),
+              )}
             />
-          </TuningRow>
-          <TuningRow title={t('directorPanel.tuning.image.interval')} busy={savingKey === 'image-interval'}>
-            <NumberSettingInput
-              value={imageSettings.interval_turns}
-              min={1}
-              max={50}
-              label={t('directorPanel.tuning.image.interval')}
-              disabled={disabled || imageSettings.mode !== 'interval'}
-              onCommit={(interval_turns) => void save('image-interval', {
-                image_settings: {
-                  ...imageSettings,
-                  interval_turns: normalizeImageIntervalTurns(interval_turns),
-                },
-              })}
-            />
-          </TuningRow>
-          <ModuleSelectRow
-            label={t('directorPanel.tuning.image.preset')}
-            value={imageSettings.preset_id || String(refs.image_preset_id || '')}
-            moduleDisabled={Boolean(refs.image_preset_disabled)}
-            options={imageOptions}
-            busy={savingKey === 'image-preset'}
-            disabled={disabled}
-            onChange={(value) => updateModule(
-              'image-preset',
-              'image_preset_id',
-              'image_preset_disabled',
-              value,
-              (nextID) => ({ image_settings: { ...imageSettings, preset_id: nextID } }),
-            )}
-          />
+          </>}
         </ControlSection>
 
-        <ControlSection icon={<UserRound className="size-4" />} title={t('directorPanel.tuning.state.title')}>
+        <StoryPresentationControls currentTurn={currentTurn} onBackgroundChange={onBackgroundChange} backgroundDisabled={backgroundDisabled} key="presentation" projectId={projectId} value={story?.presentation_settings} disabled={disabled} onChange={presentation_settings => { void save('presentation_settings', { presentation_settings }) }} />
+
+        <StorySpeechControls key="speech" story={story} disabled={disabled} onChange={speech_settings => { void save('speech_settings', { speech_settings }) }} />
+
+        <ControlSection key="state" icon={<UserRound className="size-4" />} title={t('directorPanel.tuning.state.title')}>
           <ModuleSelectRow
             label={t('directorPanel.tuning.state.system')}
             value={String(refs.actor_state_id || '')}
@@ -378,7 +388,7 @@ export function StoryTuningView({
             />
           </TuningRow>
         </ControlSection>
-      </div>
+      </SortableControlSections>
     </div>
   )
 }
@@ -406,12 +416,5 @@ function ruleStateConsumptionOptions(t: ReturnType<typeof useTranslation>['t']):
   return ['hybrid_auto', 'suggestions_only'].map((mode) => ({
     id: mode,
     label: t(`directorPanel.tuning.check.stateConsumption.${mode}`),
-  }))
-}
-
-function ruleVisibilityOptions(t: ReturnType<typeof useTranslation>['t']): TuningSelectOption[] {
-  return ['audit_only', 'public_roll'].map((mode) => ({
-    id: mode,
-    label: t(`directorPanel.tuning.check.visibility.${mode}`),
   }))
 }

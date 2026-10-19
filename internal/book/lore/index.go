@@ -270,8 +270,8 @@ func renderLoreIndexMarkdown(entries []loreIndexEntry, matchedTotal, libraryTota
 		hint       string
 	}{
 		{briefRunes: 180},
-		{briefRunes: 72, hint: "[Index compressed: briefs were truncated. Narrow with keywords/types, then call read_lore_items for complete bodies.]"},
-		{nameOnly: true, hint: "[Index too large: showing IDs and names only. Narrow with keywords/types, then call read_lore_items for complete bodies.]"},
+		{briefRunes: 72, hint: "[Index compressed: briefs were truncated. Narrow with keywords/types, then call query_lore_items with detail=full for complete bodies.]"},
+		{nameOnly: true, hint: "[Index too large: showing IDs and names only. Narrow with keywords/types, then call query_lore_items with detail=full for complete bodies.]"},
 	}
 	for _, candidate := range candidates {
 		out := renderLoreIndexCandidate(entries, matchedTotal, libraryTotal, options, candidate.briefRunes, candidate.nameOnly, candidate.hint)
@@ -328,7 +328,7 @@ func writeLoreIndexHeader(sb *strings.Builder, matchedTotal, libraryTotal, retur
 	if options.ExcludeResident {
 		scope = "non-resident lore items"
 	}
-	fmt.Fprintf(sb, "Total: %d %s. The default index contains only ID, name, and brief; call read_lore_items for complete bodies.\n\n", matchedTotal, scope)
+	fmt.Fprintf(sb, "Total: %d %s. The default index contains only ID, name, and brief; call query_lore_items with detail=full for complete bodies.\n\n", matchedTotal, scope)
 }
 
 func formatCompactLoreIndexEntry(entry loreIndexEntry, briefRunes int, nameOnly bool) string {

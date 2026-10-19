@@ -1,3 +1,4 @@
+import type { AgentPageContext } from './types'
 import type { UIMessageChunk } from 'ai'
 import { fetchAPI, jsonHeaders, parseUIMessageStream, readErrorMessage, requestJSON } from './client'
 import type { AgentAskAnswer, AgentAskInteraction, AgentAskResolution, AgentRunTrace, AgentRunTraceSummary, ContextAnalysis, GlobalAgentRunTraceCatalog, IDEContext, SessionSummary, TextSelection } from './types'
@@ -69,6 +70,7 @@ export async function analyzeChatContext(
   ideContext?: IDEContext,
   imagePresetId?: string,
   tellerId?: string,
+  pageContext?: AgentPageContext,
 ): Promise<ContextAnalysis> {
   return requestJSON('/api/chat/context-analysis', {
     method: 'POST',
@@ -89,6 +91,7 @@ export async function analyzeChatContext(
       writing_skill: writingSkill || undefined,
       image_preset_id: imagePresetId || undefined,
       teller_id: tellerId || undefined,
+      page_context: pageContext,
     }),
   })
 }
@@ -123,7 +126,7 @@ export type AgentRuntimeQueueDelivery = AgentCommandDelivery | 'next_turn'
 export type AgentQueuedCommandAction = 'steer_queued' | 'cancel_queued'
 
 export type AgentRuntimeRecoveryActionKind =
-  'start_turn' | 'steer' | 'follow_up' | 'next_turn' | 'compact_context' | 'remove_compaction' | 'abort'
+  'start_turn' | 'resume' | 'steer' | 'follow_up' | 'next_turn' | 'compact_context' | 'remove_compaction' | 'abort'
 
 /** Public, payload-free identity selected from the server recovery projection. */
 export interface AgentRuntimeRecoveryAction {
@@ -189,6 +192,7 @@ export interface ActiveChatTask {
   last_operation?: AgentRuntimeOperation
   /** Durable interaction shown even when the display stream must be reattached. */
   pending_ask?: AgentAskInteraction
+  pending_asks?: AgentAskInteraction[]
   /** Exact durable pause checkpoint available to the next idle turn. */
   pending_interruption_id?: string
 }
@@ -213,8 +217,8 @@ export function createAgentCommandID(): string {
   return `agent-command-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
-export async function getActiveChatTask(sessionId: string): Promise<ActiveChatTask> {
-  return requestJSON(`/api/chat/active?session_id=${encodeURIComponent(sessionId)}`)
+export async function getActiveChatTask(sessionId: string, signal?: AbortSignal): Promise<ActiveChatTask> {
+  return requestJSON(`/api/chat/active?session_id=${encodeURIComponent(sessionId)}`, { signal, timeoutMs: 15_000 })
 }
 
 export function answerSessionAsk(sessionId: string, askId: string, answers: AgentAskAnswer[]): Promise<AgentAskResolution> {
@@ -225,17 +229,18 @@ export function answerSessionAsk(sessionId: string, askId: string, answers: Agen
   })
 }
 
-export function cancelSessionAsk(sessionId: string, askId: string): Promise<AgentAskResolution> {
+export function cancelSessionAsk(sessionId: string, askId: string, reason = 'user_cancelled'): Promise<AgentAskResolution> {
   return requestJSON(`/api/session/asks/${encodeURIComponent(askId)}/cancel`, {
     method: 'POST',
     headers: jsonHeaders,
-    body: JSON.stringify({ session_id: sessionId, reason: 'user_cancelled' }),
+    body: JSON.stringify({ session_id: sessionId, reason }),
   })
 }
 
 /** Resume only the exact payload-free action selected by the backend. */
-export function recoverChatAgentRuntime(action: AgentRuntimeRecoveryAction, sessionId: string): Promise<AgentRuntimeRecoveryReceipt> {
+export function recoverChatAgentRuntime(action: AgentRuntimeRecoveryAction, sessionId: string, signal?: AbortSignal): Promise<AgentRuntimeRecoveryReceipt> {
   return requestJSON('/api/chat/recovery', {
+    signal, timeoutMs: 15_000,
     method: 'POST',
     headers: jsonHeaders,
     body: JSON.stringify({ session_id: sessionId, action }),
@@ -244,7 +249,7 @@ export function recoverChatAgentRuntime(action: AgentRuntimeRecoveryAction, sess
 
 /** Submit a command to the exact operation currently shown by the client. */
 export async function submitChatCommand(
-  type: AgentCommandDelivery | 'abort',
+  type: AgentCommandDelivery | 'abort' | 'suspend',
   commandId: string,
   targetOperationId: string,
   sessionId: string,
@@ -322,7 +327,7 @@ export async function getMessagesPage(sessionId?: string, options: { limit?: num
         messages?: AgentUIMessage[]
         page?: { next_before?: string; has_more?: boolean; total?: number }
       }
-  >(`/api/session/messages?${query.toString()}`)
+  >(`/api/session/messages?${query.toString()}`, { timeoutMs: 15_000 })
   if (Array.isArray(data)) {
     return {
       messages: data,

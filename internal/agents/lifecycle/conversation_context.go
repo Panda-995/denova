@@ -11,8 +11,8 @@ import (
 	agentrun "denova/internal/agents/run"
 	"denova/internal/book"
 
-	agent "github.com/alfredxw/denova/agent"
 	publiccontext "github.com/alfredxw/denova/agent/context"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 const minimumDenovaContextHardLimit = publiccontext.DefaultLifecycleHardLimit
@@ -25,7 +25,7 @@ type ConversationContextConfig struct {
 	BookService  *book.Service
 	Request      agentchat.ChatRequest
 	Options      agentrun.Options
-	Identity     agent.CapabilityIdentity
+	Identity     agentschema.CapabilityIdentity
 	OnPrepared   func(agentchat.AgentContextPreparation)
 }
 
@@ -33,7 +33,7 @@ type conversationContextSource struct {
 	config ConversationContextConfig
 }
 
-func NewConversationContextSource(config ConversationContextConfig) (agent.ContextSource, error) {
+func NewConversationContextSource(config ConversationContextConfig) (publiccontext.ContextSource, error) {
 	if config.Conversation == nil {
 		return nil, errors.New("Denova Conversation ContextSource requires a conversation")
 	}
@@ -44,14 +44,14 @@ func NewConversationContextSource(config ConversationContextConfig) (agent.Conte
 	return &conversationContextSource{config: config}, nil
 }
 
-func (source *conversationContextSource) Identity() agent.CapabilityIdentity {
+func (source *conversationContextSource) Identity() agentschema.CapabilityIdentity {
 	if source == nil {
-		return agent.CapabilityIdentity{}
+		return agentschema.CapabilityIdentity{}
 	}
 	return source.config.Identity
 }
 
-func (source *conversationContextSource) Materialize(ctx context.Context, request agent.ContextRequest) ([]agent.ContextFragment, error) {
+func (source *conversationContextSource) Materialize(ctx context.Context, request publiccontext.ContextRequest) ([]agentschema.ContextFragment, error) {
 	if source == nil || source.config.Conversation == nil {
 		return nil, errors.New("Denova Conversation ContextSource is unavailable")
 	}
@@ -84,7 +84,7 @@ func (source *conversationContextSource) Materialize(ctx context.Context, reques
 	return fragments, nil
 }
 
-func bindConversationCycle(conversation agentchat.Conversation, agentKind string, run agent.RunView) error {
+func bindConversationCycle(conversation agentchat.Conversation, agentKind string, run agentschema.RunView) error {
 	identity := agentrun.CycleIdentity{
 		CommandID: agentrun.CommandID(run.CommandID), OperationID: agentrun.OperationID(run.ID), Cycle: run.Cycle,
 	}
@@ -102,9 +102,9 @@ func bindConversationCycle(conversation agentchat.Conversation, agentKind string
 
 func projectConversationContext(
 	prepared agentchat.AgentContextPreparation,
-	request agent.ContextRequest,
+	request publiccontext.ContextRequest,
 	budget agentcontext.Budget,
-) ([]agent.ContextFragment, error) {
+) ([]agentschema.ContextFragment, error) {
 	modelUser := lastUserMessage(prepared.ModelContext.Messages)
 	if modelUser == nil {
 		return nil, errors.New("Denova context assembly produced no final user message")
@@ -115,10 +115,10 @@ func projectConversationContext(
 	if err != nil {
 		return nil, fmt.Errorf("export Denova model context to Agent lifecycle: %w", err)
 	}
-	fragments = append(fragments, agent.ContextFragment{
+	fragments = append(fragments, agentschema.ContextFragment{
 		Source: "denova.turn.context", Purpose: "preserve the exact localized Denova turn assembly",
 		Resource: firstContextValue(request.Run.CommandID, request.Run.ID, "turn"), Revision: request.Run.ID,
-		Stability: agent.ContextTurn, Placement: agent.ContextFinalUserMessage, Rendering: agent.ContextRenderVerbatim,
+		Stability: agentschema.ContextTurn, Placement: agentschema.ContextFinalUserMessage, Rendering: agentschema.ContextRenderVerbatim,
 		Content: modelUser.Content, HardLimit: hardLimit,
 	})
 	return fragments, nil
@@ -133,9 +133,9 @@ func firstContextValue(values ...string) string {
 	return ""
 }
 
-func lastUserMessage(messages []*agent.Message) *agent.Message {
+func lastUserMessage(messages []*agentschema.Message) *agentschema.Message {
 	for index := len(messages) - 1; index >= 0; index-- {
-		if messages[index] != nil && messages[index].Role == agent.User && !agent.IsContextStateMessage(messages[index]) && messages[index].TaskCompletion == nil {
+		if messages[index] != nil && messages[index].Role == agentschema.User && !publiccontext.IsContextStateMessage(messages[index]) && messages[index].TaskCompletion == nil {
 			return messages[index].Clone()
 		}
 	}

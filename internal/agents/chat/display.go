@@ -2,18 +2,18 @@ package chat
 
 import (
 	"context"
-	agentrun "denova/internal/agents/run"
-	agenttoolruntime "denova/internal/agents/toolruntime"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	agentplan "denova/internal/agents/plan"
+	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
+	agenttoolruntime "denova/internal/agents/toolruntime"
+
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 // displaySegmentIDEventKey carries the stable identity shared by the live
@@ -51,7 +51,7 @@ type displayToolArgsAppender interface {
 }
 
 type displayToolResultUpdater interface {
-	UpdateDisplayToolResult(id, name, status, result string, presentation *agent.ToolPresentation) error
+	UpdateDisplayToolResult(id, name, status, result string, presentation *agenttool.ToolPresentation) error
 }
 
 type displayToolIllustrationUpdater interface {
@@ -316,6 +316,29 @@ func (r *displayEventRecorder) Record(ev agentrun.Event) {
 		}
 	case "subagent_settled":
 		r.flushSource(eventMetadataFromData(ev.Data))
+	case "context_compaction":
+		if !eventDataBool(ev.Data, "runtime_managed") {
+			return
+		}
+		status := eventDataString(ev.Data, "status")
+		if status != "completed" && status != "failed" {
+			return
+		}
+		r.flushAllText()
+		if status == "completed" {
+			status = "success"
+		} else {
+			status = "error"
+		}
+		meta := eventMetadataFromData(ev.Data)
+		if err := r.appender.AppendDisplayEvent(session.DisplayEvent{
+			ID: eventDataString(ev.Data, "id"), Role: "context_compaction", Status: status,
+			Phase: eventDataString(ev.Data, "phase"), RuntimeManaged: true,
+			Content: eventDataString(ev.Data, "summary"), RunID: meta.RunID,
+			AgentKind: meta.AgentKind, AgentCycle: meta.AgentCycle,
+		}); err != nil {
+			slog.ErrorContext(context.Background(), "Persist runtime compaction display failed", "error", err)
+		}
 	case "token_usage":
 		r.flushAllText()
 		stats := runTokenUsage{
@@ -565,6 +588,9 @@ func (r *displayEventRecorder) nextTextSegmentID(meta agentEventMetadata, role s
 	if runID == "" {
 		runID = "run"
 	}
+	if meta.ResponseOrdinal > 0 {
+		return fmt.Sprintf("%s-cycle-%03d-response-%03d-display-%03d-%s", runID, r.cycle, meta.ResponseOrdinal, r.segmentSeq, role)
+	}
 	return fmt.Sprintf("%s-cycle-%03d-display-%03d-%s", runID, r.cycle, r.segmentSeq, role)
 }
 
@@ -773,7 +799,7 @@ func eventDataAskInteraction(data interface{}) *session.AskInteraction {
 	return &interaction
 }
 
-func eventDataToolPresentation(data interface{}) *agent.ToolPresentation {
+func eventDataToolPresentation(data interface{}) *agenttool.ToolPresentation {
 	typed, ok := data.(map[string]interface{})
 	if !ok {
 		return nil
@@ -786,7 +812,7 @@ func eventDataToolPresentation(data interface{}) *agent.ToolPresentation {
 	if err != nil {
 		return nil
 	}
-	var presentation agent.ToolPresentation
+	var presentation agenttool.ToolPresentation
 	if err := json.Unmarshal(raw, &presentation); err != nil {
 		return nil
 	}

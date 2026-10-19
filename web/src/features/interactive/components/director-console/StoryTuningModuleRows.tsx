@@ -24,7 +24,8 @@ interface ModuleSelectRowProps {
 }
 
 export function ModuleSelectRow({ label, value, moduleDisabled, options, busy, disabled, locked, onChange }: ModuleSelectRowProps) {
-  const visibleOptions = includeIDs(options, value)
+  const { t } = useTranslation()
+  const visibleOptions = includeIDs(options, id => t('gameDefaults.resourceUnavailable', { id }), value)
   return (
     <TuningRow title={label} source={moduleSelectSource(locked, moduleDisabled)} busy={busy} disabled={disabled}>
       <TuningSelect
@@ -51,6 +52,7 @@ export function EventPackagesRow({ refs, options, busy, disabled, onChange }: Ev
   const selected = refs.event_package_ids || []
   const visible = includeIDs(
     options.map((item) => ({ id: item.id, label: item.name || item.id })),
+    id => t('gameDefaults.resourceUnavailable', { id }),
     ...selected,
   )
   const summary = refs.event_packages_disabled
@@ -115,10 +117,10 @@ function moduleSelectSource(locked: boolean | undefined, disabled: boolean): Tun
   return 'story'
 }
 
-function includeIDs(options: TuningSelectOption[], ...ids: string[]): TuningSelectOption[] {
+function includeIDs(options: TuningSelectOption[], unavailable: (id: string) => string, ...ids: string[]): TuningSelectOption[] {
   const result = [...options]
   for (const id of ids) {
-    if (id && !result.some((option) => option.id === id)) result.push({ id, label: id })
+    if (id && !result.some((option) => option.id === id)) result.push({ id, label: unavailable(id) })
   }
   return result
 }

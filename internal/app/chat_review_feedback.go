@@ -27,6 +27,6 @@ func reviewRuntime(runtime ideChatRuntime) reviewapp.Runtime {
 	}
 	return reviewapp.Runtime{
 		Workspace: runtime.workspace, StateRoot: runtime.projectStore, SessionID: sessionID,
-		DocumentsEnabled: runtime.state != nil, BookService: runtime.bookService,
+		BookService: runtime.bookService,
 	}
 }

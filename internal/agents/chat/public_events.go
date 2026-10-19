@@ -9,11 +9,20 @@ import (
 	"sync"
 	"time"
 
+	agentattachment "denova/internal/agents/attachment"
 	agentplan "denova/internal/agents/plan"
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/toolresult"
 
-	agent "github.com/alfredxw/denova/agent"
+	"github.com/alfredxw/denova/agent"
+	agentcontext "github.com/alfredxw/denova/agent/context"
+	agentcompaction "github.com/alfredxw/denova/agent/context/compaction"
+	agentevent "github.com/alfredxw/denova/agent/lifecycle/event"
+	agentinteraction "github.com/alfredxw/denova/agent/lifecycle/interaction"
+	agentmodel "github.com/alfredxw/denova/agent/model"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 // PublicEventProjector converts the reusable Agent event vocabulary into the
@@ -42,6 +51,7 @@ type PublicEventProjector struct {
 	runSummarized           bool
 	interactive             publicInteractiveOutput
 	explicitSkillsProjected bool
+	previews                map[string]*publicResponsePreview
 }
 
 type publicToolInput struct {
@@ -49,18 +59,18 @@ type publicToolInput struct {
 	parentCallID   string
 	name           string
 	index          int
-	descriptor     *agent.ToolDescriptor
+	descriptor     *agenttool.ToolDescriptor
 	arguments      string
 	targetEmitted  bool
 }
 
 type publicInteraction struct {
-	request agent.InteractionRequest
+	request agentinteraction.InteractionRequest
 	data    map[string]any
 }
 
 type publicCompactionBinder interface {
-	BindAgentCompaction(*agent.CompactionState) error
+	BindAgentCompaction(*agentcompaction.CompactionState) error
 }
 
 func NewPublicEventProjector(
@@ -73,6 +83,7 @@ func NewPublicEventProjector(
 		conversation: conversation, request: request, options: options, emit: emit,
 		toolInputs: make(map[string]publicToolInput), interactions: make(map[string]publicInteraction),
 		nestedContent: make(map[string]*strings.Builder), nestedThinking: make(map[string]*strings.Builder),
+		previews: make(map[string]*publicResponsePreview),
 	}
 	projector.compaction, _ = conversation.(publicCompactionBinder)
 	projector.recorder = newDisplayEventRecorder(conversation, displayEventRecorderOptions{
@@ -99,30 +110,32 @@ func (projector *PublicEventProjector) EmitProduct(event agentrun.Event) {
 	projector.emitEvent(event)
 }
 
-func (projector *PublicEventProjector) Project(event agent.Event) {
+func (projector *PublicEventProjector) Project(event agentevent.Event) {
 	projector.mu.Lock()
 	defer projector.mu.Unlock()
-	projector.projectLocked(event, agent.EventSource{}, "")
+	projector.projectLocked(event, agentevent.EventSource{}, "")
 }
 
-func (projector *PublicEventProjector) projectLocked(event agent.Event, inherited agent.EventSource, parentCallID string) {
+func (projector *PublicEventProjector) projectLocked(event agentevent.Event, inherited agentevent.EventSource, parentCallID string) {
 	projector.bindRunIDLocked(event.RunID)
 	meta := projector.metadata(event.RunID, inherited, parentCallID)
 	switch payload := event.Payload.(type) {
-	case agent.NestedEvent:
+	case agentevent.NestedEvent:
 		child := payload.Child
 		// Denova display remains attached to the parent operation while the
 		// typed NestedEvent retains the exact child Run identity for observers.
 		child.RunID = event.RunID
 		projector.projectLocked(child, inheritedEventSource(payload.Source, inherited), firstNonEmpty(payload.ParentCallID, parentCallID))
-	case agent.RunAccepted:
+	case agentevent.RunAccepted:
 		// Acceptance is already represented by the task transport and the
 		// Denova-specific agent_cycle_started edge.
-	case agent.RunStarted:
+	case agentevent.RunStarted:
 		// The execution host owns command delivery and calls ProjectRunStarted
 		// with the durable cycle plus Denova-only command metadata.
-	case agent.AssistantDelta:
+	case agentevent.AssistantDelta:
 		meta = projector.metadata(event.RunID, inheritedEventSource(payload.Source, inherited), parentCallID)
+		meta.ResponseOrdinal = payload.ResponseOrdinal
+		projector.beginPreview(meta)
 		content := payload.Delta
 		if !meta.SubAgent && !payload.DisplayOnly {
 			projector.generatedBytes += len(payload.Delta)
@@ -142,8 +155,10 @@ func (projector *PublicEventProjector) projectLocked(event agent.Event, inherite
 				projector.nestedOutput(projector.nestedContent, meta).WriteString(content)
 			}
 		}
-	case agent.ThinkingDelta:
+	case agentevent.ThinkingDelta:
 		meta = projector.metadata(event.RunID, inheritedEventSource(payload.Source, inherited), parentCallID)
+		meta.ResponseOrdinal = payload.ResponseOrdinal
+		projector.beginPreview(meta)
 		if payload.Delta != "" {
 			if !meta.SubAgent && !payload.DisplayOnly {
 				projector.thinking.WriteString(payload.Delta)
@@ -153,7 +168,7 @@ func (projector *PublicEventProjector) projectLocked(event agent.Event, inherite
 				projector.nestedOutput(projector.nestedThinking, meta).WriteString(payload.Delta)
 			}
 		}
-	case agent.AssistantFinal:
+	case agentevent.AssistantFinal:
 		if meta.SubAgent {
 			content := missingPublicOutputSuffix(projector.nestedOutput(projector.nestedContent, meta).String(), payload.Content)
 			if content != "" {
@@ -182,28 +197,34 @@ func (projector *PublicEventProjector) projectLocked(event agent.Event, inherite
 			projector.thinking.WriteString(thinking)
 			projector.emitEvent(agentrun.Event{Type: "thinking", Data: meta.appendTo(map[string]any{"content": thinking})})
 		}
-	case agent.ModelCompleted:
+	case agentevent.ModelCompleted:
 		meta = projector.metadata(event.RunID, inheritedEventSource(payload.Source, inherited), parentCallID)
 		projector.finishInteractiveResponseLocked(payload.RequestedTools)
+		projector.recorder.flushSource(meta)
+		delete(projector.previews, meta.SubAgentSessionID)
 		if projector.usage == nil {
 			projector.usage = newRunTokenUsageCollector(event.RunID, projector.options.AgentKind)
 		}
-		calls := make([]agent.ToolCall, 0, len(payload.RequestedTools))
+		calls := make([]agentschema.ToolCall, 0, len(payload.RequestedTools))
 		for _, name := range payload.RequestedTools {
-			calls = append(calls, agent.ToolCall{Function: agent.FunctionCall{Name: name}})
+			calls = append(calls, agentschema.ToolCall{Function: agentschema.FunctionCall{Name: name}})
 		}
 		usage := payload.Usage
-		projector.usage.AddMessage(&agent.Message{
-			Role: agent.Assistant, ToolCalls: calls,
-			ResponseMeta: &agent.ResponseMeta{FinishReason: payload.FinishReason, Usage: &usage},
+		projector.usage.AddMessage(&agentschema.Message{
+			Role: agentschema.Assistant, ToolCalls: calls,
+			ResponseMeta: &agentschema.ResponseMeta{FinishReason: payload.FinishReason, Usage: &usage},
 		})
-	case agent.ContextNormalized:
+	case agentevent.ModelRetry:
+		meta = projector.metadata(event.RunID, inheritedEventSource(payload.Source, inherited), parentCallID)
+		projector.projectRetry(meta, payload)
+	case agentevent.ContextNormalized:
 		projector.emitEvent(agentrun.Event{Type: "context_normalizer", Data: meta.appendTo(map[string]any{
 			"status": "repaired", "context_normalizer_repair_count": payload.RepairCount,
 			"messages_before": payload.MessagesBefore, "messages_after": payload.MessagesAfter,
 		})})
-	case agent.ToolInputStarted:
+	case agentevent.ToolInputStarted:
 		meta = projector.metadata(event.RunID, inheritedEventSource(payload.Source, inherited), parentCallID)
+		projector.beginPreview(meta)
 		projector.observeInteractiveToolLocked(meta, payload.Name)
 		if agentplan.EmitToolRunning(payload.Name, meta.planMetadata(), planEventEmitter(projector.emitEvent)) {
 			return
@@ -228,7 +249,7 @@ func (projector *PublicEventProjector) projectLocked(event agent.Event, inherite
 		}
 		appendToolDescriptorProjection(data, payload.Descriptor)
 		projector.emitEvent(agentrun.Event{Type: "tool_call", Data: data})
-	case agent.ToolInputDelta:
+	case agentevent.ToolInputDelta:
 		meta = projector.metadata(event.RunID, inheritedEventSource(payload.Source, inherited), parentCallID)
 		if agentplan.IsToolName(payload.Name) || payload.Delta == "" {
 			return
@@ -266,7 +287,7 @@ func (projector *PublicEventProjector) projectLocked(event agent.Event, inherite
 			"id": payload.CallID, "provider_call_id": input.providerCallID,
 			"name": input.name, "index": input.index, "delta": payload.Delta,
 		})})
-	case agent.ToolStarted:
+	case agentevent.ToolStarted:
 		meta = projector.metadata(event.RunID, inheritedEventSource(payload.Source, inherited), parentCallID)
 		projector.observeInteractiveToolLocked(meta, payload.Name)
 		arguments := string(payload.Arguments)
@@ -326,7 +347,7 @@ func (projector *PublicEventProjector) projectLocked(event agent.Event, inherite
 		}
 		appendToolDescriptorProjection(data, input.descriptor)
 		projector.emitEvent(agentrun.Event{Type: "tool_started", Data: data})
-	case agent.ToolProgress:
+	case agentevent.ToolProgress:
 		meta = projector.metadata(event.RunID, inheritedEventSource(payload.Source, inherited), parentCallID)
 		input := projector.toolInputs[payload.CallID]
 		data := meta.appendTo(map[string]any{
@@ -338,7 +359,7 @@ func (projector *PublicEventProjector) projectLocked(event agent.Event, inherite
 		}
 		appendToolDescriptorProjection(data, payload.Descriptor)
 		projector.emitEvent(agentrun.Event{Type: "tool_progress", Data: data})
-	case agent.ToolFinished:
+	case agentevent.ToolFinished:
 		meta = projector.metadata(event.RunID, inheritedEventSource(payload.Source, inherited), parentCallID)
 		input := projector.toolInputs[payload.CallID]
 		delete(projector.toolInputs, payload.CallID)
@@ -391,14 +412,17 @@ func (projector *PublicEventProjector) projectLocked(event agent.Event, inherite
 					data["artifact_persist_failure_count"] = 1
 				}
 			}
-			if projection.Status == agent.ToolResultSuccess && isWorkspaceArtifactRead(payload.Name, projection.Metadata.Target) {
+			if projection.Status == agentschema.ToolResultSuccess && isWorkspaceArtifactRead(payload.Name, projection.Metadata.Target) {
 				data["artifact_reread_count"] = 1
 			}
 			domainPayload := projection.ModelContent
 			if len(projection.Details) != 0 && json.Valid(projection.Details) {
 				domainPayload = string(projection.Details)
 			}
-			for _, warning := range projectPublicToolResult(projector.options, payload.Name, domainPayload, meta, data, projector.emitEvent) {
+			for _, warning := range ProjectToolResult(projector.options.ProjectID, payload.Name, domainPayload, data, func(event agentrun.Event) {
+				event.Data = meta.appendTo(event.Data.(map[string]any))
+				projector.emitEvent(event)
+			}) {
 				slog.WarnContext(context.Background(), "[agent-public-runtime] project ToolResult display data failed",
 					"tool", payload.Name, "error", warning)
 			}
@@ -407,17 +431,17 @@ func (projector *PublicEventProjector) projectLocked(event agent.Event, inherite
 			projector.usage.NoteToolResult(payload.Name)
 		}
 		projector.emitEvent(agentrun.Event{Type: "tool_result", Data: data})
-	case agent.ArtifactProduced:
+	case agentevent.ArtifactProduced:
 		if meta.SubAgent {
 			projector.emitEvent(agentrun.Event{Type: "subagent_artifact", Data: meta.appendTo(map[string]any{
 				"call_id": payload.CallID, "artifact": payload.Artifact,
 			})})
 		}
-	case agent.EventStreamGap:
+	case agentevent.EventStreamGap:
 		projector.emitEvent(agentrun.Event{Type: "agent_event_stream_gap", Data: meta.appendTo(map[string]any{
 			"dropped": payload.Dropped, "resume_after": payload.ResumeAfter,
 		})})
-	case agent.GoalUpdated:
+	case agentevent.GoalUpdated:
 		data := meta.appendTo(map[string]any{
 			"schema": "agent.goal.v1", "present": payload.Present,
 			"id": payload.State.ID, "objective": payload.State.Objective,
@@ -428,13 +452,13 @@ func (projector *PublicEventProjector) projectLocked(event agent.Event, inherite
 			"active_duration_millis": payload.State.ActiveDurationMillis,
 		})
 		projector.emitEvent(agentrun.Event{Type: "goal_updated", Data: data})
-	case agent.GoalEvaluationFailed:
+	case agentevent.GoalEvaluationFailed:
 		projector.emitEvent(agentrun.Event{Type: "goal_evaluation_failed", Data: meta.appendTo(map[string]any{
 			"code": payload.Code, "goal_id": payload.GoalID, "goal_revision": payload.GoalRevision,
 			"message": "目标完成度评估失败，目标仍保持进行中；请重试或继续执行。 / Goal completion evaluation failed; the goal remains active. Retry or continue execution.",
 			"detail":  payload.Detail,
 		})})
-	case agent.TodoUpdated:
+	case agentevent.TodoUpdated:
 		items := make([]map[string]any, len(payload.State.Items))
 		for index, item := range payload.State.Items {
 			items[index] = map[string]any{"id": item.ID, "text": item.Text, "status": item.Status}
@@ -442,14 +466,14 @@ func (projector *PublicEventProjector) projectLocked(event agent.Event, inherite
 		projector.emitEvent(agentrun.Event{Type: "todo_updated", Data: meta.appendTo(map[string]any{
 			"schema": "agent.todo.v1", "revision": payload.State.Revision, "items": items,
 		})})
-	case agent.InteractionRequested:
+	case agentevent.InteractionRequested:
 		projected := projectInteractionRequested(payload.Request, meta)
 		data, _ := projected.Data.(map[string]any)
 		projector.interactions[payload.Request.ID] = publicInteraction{request: payload.Request, data: clonePublicEventData(data)}
 		projector.emitEvent(projected)
-	case agent.InteractionResolved:
+	case agentevent.InteractionResolved:
 		status := "answered"
-		if payload.Resolution.Cancelled || payload.Resolution.Permission == agent.PermissionDeny {
+		if payload.Resolution.Cancelled || payload.Resolution.Permission == agentinteraction.PermissionDeny {
 			status = "cancelled"
 		}
 		interaction := projector.interactions[payload.ID]
@@ -466,34 +490,34 @@ func (projector *PublicEventProjector) projectLocked(event agent.Event, inherite
 			data["answers"] = answers
 		}
 		projector.emitEvent(agentrun.Event{Type: "ask_resolved", Data: data})
-	case agent.CleanupStarted:
+	case agentevent.CleanupStarted:
 		projector.emitEvent(agentrun.Event{Type: "context_cleanup", Data: meta.appendTo(cleanupMetricsData(map[string]any{
 			"id": payload.ID, "phase": maintenancePhase(payload.Automatic), "status": "started",
 			"action": "cleanup", "trigger_reason": payload.Reason, "transient": payload.Transient,
 		}, payload.Metrics))})
-	case agent.CleanupCompleted:
+	case agentevent.CleanupCompleted:
 		projector.emitEvent(agentrun.Event{Type: "context_cleanup", Data: meta.appendTo(cleanupMetricsData(map[string]any{
 			"id": payload.ID, "phase": maintenancePhase(payload.Automatic), "status": "completed",
 			"action": "cleanup", "trigger_reason": payload.Reason, "transient": payload.Transient,
 		}, payload.Metrics))})
-	case agent.CleanupFailed:
+	case agentevent.CleanupFailed:
 		projector.emitEvent(agentrun.Event{Type: "context_cleanup", Data: meta.appendTo(cleanupMetricsData(map[string]any{
 			"id": payload.ID, "phase": maintenancePhase(payload.Automatic), "status": "failed",
 			"action": "cleanup", "trigger_reason": payload.Reason, "error": payload.Reason,
 		}, payload.Metrics))})
-	case agent.CleanupSkipped:
+	case agentevent.CleanupSkipped:
 		projector.emitEvent(agentrun.Event{Type: "context_cleanup", Data: meta.appendTo(cleanupMetricsData(map[string]any{
 			"id": payload.ID, "phase": maintenancePhase(payload.Automatic), "status": "skipped",
 			"action": "cleanup", "trigger_reason": payload.Reason, "skipped_reason": payload.Reason,
 		}, payload.Metrics))})
-	case agent.CleanupCommitted:
+	case agentevent.CleanupCommitted:
 		projector.emitEvent(agentrun.Event{Type: "context_cleanup", Data: meta.appendTo(cleanupMetricsData(map[string]any{
 			"id": payload.State.ID, "phase": maintenancePhase(payload.Automatic), "status": "committed",
 			"action": "cleanup", "epoch": int(payload.State.Revision), "renderer": payload.State.Renderer,
 			"source_start": payload.State.SourceStart, "source_end": payload.State.SourceEnd,
 			"replacement_count": len(payload.State.Replacements),
 		}, payload.State.Metrics))})
-	case agent.CompactionStarted:
+	case agentevent.CompactionStarted:
 		action := "compact"
 		if payload.Remove {
 			action = "remove"
@@ -505,7 +529,7 @@ func (projector *PublicEventProjector) projectLocked(event agent.Event, inherite
 		projector.emitEvent(agentrun.Event{Type: "context_compaction", Data: meta.appendTo(compactionMetricsData(map[string]any{
 			"id": payload.ID, "phase": phase, "status": "started", "action": action,
 		}, payload.Metrics))})
-	case agent.CompactionCommitted:
+	case agentevent.CompactionCommitted:
 		if projector.compaction != nil {
 			state := payload.State
 			if err := projector.compaction.BindAgentCompaction(&state); err != nil {
@@ -516,40 +540,38 @@ func (projector *PublicEventProjector) projectLocked(event agent.Event, inherite
 		if payload.Automatic {
 			phase = "model_step"
 		}
-		metrics := payload.State.Metrics
-		if metrics.SourceMessageCount == 0 {
-			metrics.SourceMessageCount = payload.State.ReplacementTo - payload.State.ReplacementFrom
-		}
+		metrics := payload.Metrics
+		metrics.SourceMessageCount = payload.State.SourceMessageCount
 		projector.emitEvent(agentrun.Event{Type: "context_compaction", Data: meta.appendTo(compactionMetricsData(map[string]any{
 			"id": payload.State.ID, "phase": phase, "status": "completed",
-			"summary": payload.State.Summary, "tokens_after": payload.State.TokenEstimate,
-			"epoch": int(payload.State.Revision),
+			"summary": payload.State.Summary, "tokens_after": payload.State.TokensAfter,
+			"revision": int(payload.State.Revision),
 		}, metrics))})
-	case agent.CompactionRemoved:
+	case agentevent.CompactionRemoved:
 		if projector.compaction != nil {
 			if err := projector.compaction.BindAgentCompaction(nil); err != nil {
 				slog.ErrorContext(context.Background(), fmt.Sprintf("[agent-run] clear removed Compaction projection failed id=%s revision=%d err=%v", payload.ID, payload.Revision, err))
 			}
 		}
 		projector.emitEvent(agentrun.Event{Type: "context_compaction", Data: meta.appendTo(map[string]any{
-			"id": payload.ID, "phase": "agent", "status": "removed", "epoch": payload.Revision,
+			"id": payload.ID, "phase": "agent", "status": "removed", "revision": payload.Revision,
 		})})
-	case agent.CompactionFailed:
+	case agentevent.CompactionFailed:
 		projector.emitEvent(agentrun.Event{Type: "context_compaction", Data: meta.appendTo(compactionMetricsData(map[string]any{
 			"id": payload.ID, "phase": "model_step", "status": "failed", "reason": payload.Reason,
 			"consecutive_failures": payload.ConsecutiveFailures, "failure_fuse_open": payload.FailureFuseOpen,
 		}, payload.Metrics))})
-	case agent.CompactionSkipped:
+	case agentevent.CompactionSkipped:
 		projector.emitEvent(agentrun.Event{Type: "context_compaction", Data: meta.appendTo(compactionMetricsData(map[string]any{
 			"id": payload.ID, "phase": "model_step", "status": "skipped", "skipped_reason": payload.Reason,
 			"consecutive_failures": payload.ConsecutiveFailures, "failure_fuse_open": payload.FailureFuseOpen,
 		}, payload.Metrics))})
-	case agent.SessionCleared:
+	case agentevent.SessionCleared:
 		// Clear commands are initiated by Denova endpoints, which own UI refresh.
-	case agent.ContextLimitReached:
+	case agentevent.ContextLimitReached:
 		// The following RunSettled result carries the terminal, user-visible
 		// error without publishing two competing terminal events.
-	case agent.RunSettled:
+	case agentevent.RunSettled:
 		if meta.SubAgent {
 			projector.emitEvent(agentrun.Event{Type: "subagent_settled", Data: meta.appendTo(map[string]any{
 				"status": payload.Status, "reason": payload.Reason,
@@ -564,7 +586,7 @@ func (projector *PublicEventProjector) projectLocked(event agent.Event, inherite
 	}
 }
 
-func inheritedEventSource(source, inherited agent.EventSource) agent.EventSource {
+func inheritedEventSource(source, inherited agentevent.EventSource) agentevent.EventSource {
 	if source.Name == "" && len(source.Path) == 0 && source.InvocationID == "" && source.InvocationType == "" {
 		return inherited
 	}
@@ -622,7 +644,7 @@ func maintenancePhase(automatic bool) string {
 	return "agent"
 }
 
-func cleanupMetricsData(data map[string]any, metrics agent.CleanupMetrics) map[string]any {
+func cleanupMetricsData(data map[string]any, metrics agentcontext.CleanupMetrics) map[string]any {
 	data["estimated_tokens_before"] = metrics.EstimatedTokensBefore
 	data["local_projected_tokens"] = metrics.LocalProjectedTokens
 	data["observed_prompt_tokens"] = metrics.ObservedPromptTokens
@@ -664,7 +686,7 @@ func cleanupMetricsData(data map[string]any, metrics agent.CleanupMetrics) map[s
 	return data
 }
 
-func compactionMetricsData(data map[string]any, metrics agent.CompactionMetrics) map[string]any {
+func compactionMetricsData(data map[string]any, metrics agentcompaction.CompactionMetrics) map[string]any {
 	data["estimated_tokens_before"] = metrics.EstimatedTokensBefore
 	data["observed_prompt_tokens"] = metrics.ObservedPromptTokens
 	data["observed_estimate_tokens"] = metrics.ObservedEstimateTokens
@@ -694,7 +716,7 @@ func compactionMetricsData(data map[string]any, metrics agent.CompactionMetrics)
 	return data
 }
 
-func appendToolDescriptorProjection(data map[string]any, descriptor *agent.ToolDescriptor) {
+func appendToolDescriptorProjection(data map[string]any, descriptor *agenttool.ToolDescriptor) {
 	if data == nil || descriptor == nil || descriptor.Execution == "" {
 		return
 	}
@@ -736,6 +758,9 @@ func (projector *PublicEventProjector) ProjectRunStarted(runID string, cycle int
 		"message": projector.request.Message, "operation_id": strings.TrimSpace(runID),
 		"run_id": strings.TrimSpace(runID), "cycle": cycle,
 	}
+	if files := agentattachment.Descriptors(projector.request.AttachedFiles); len(files) > 0 {
+		data["attachments"] = files
+	}
 	if !projector.runStartedAt.IsZero() {
 		data["run_started_at"] = projector.runStartedAt.Format(time.RFC3339Nano)
 	}
@@ -745,7 +770,7 @@ func (projector *PublicEventProjector) ProjectRunStarted(runID string, cycle int
 // ProjectPreparedContext restores the established visible Skill load cards at
 // the same seam that injects explicitly requested Skills into the first model
 // request. These are product projections, not synthetic Agent tool executions.
-func (projector *PublicEventProjector) ProjectPreparedContext(run agent.RunView, prepared AgentContextPreparation) {
+func (projector *PublicEventProjector) ProjectPreparedContext(run agentschema.RunView, prepared AgentContextPreparation) {
 	if projector == nil || len(prepared.ExplicitSkills) == 0 {
 		return
 	}
@@ -845,18 +870,20 @@ func (projector *PublicEventProjector) Finalize(status agent.ResultStatus, reaso
 		return
 	}
 	projector.terminal = true
-	if status == agent.ResultAborted && strings.TrimSpace(reason) == agentrun.AbortReasonUserRequested {
+	if status == agentschema.ResultAborted && strings.TrimSpace(reason) == agentrun.AbortReasonUserRequested {
 		markInterruptionIfNeeded(projector.conversation, projector.request.Message, projector.content.String(), reason)
 	}
 	projector.emitExecutionSummaryLocked(status)
 	switch status {
-	case agent.ResultCompleted:
+	case agentschema.ResultCompleted:
 		projector.emitEvent(agentrun.Event{Type: "done", Data: map[string]string{}})
-	case agent.ResultAborted:
+	case agentschema.ResultAborted:
 		projector.emitEvent(agentrun.NewAbortedEvent(reason))
+	case agentschema.ResultSuspended:
+		projector.emitEvent(agentrun.Event{Type: "suspended", Data: map[string]string{"reason": reason}})
 	default:
 		data := map[string]string{"message": reason}
-		if agent.IsModelIncompleteTerminalReason(reason) {
+		if agentmodel.IsModelIncompleteTerminalReason(reason) || reason == agentschema.ModelImageInputRejectedReason || reason == agentschema.ModelRequestTooLargeReason {
 			data["code"] = reason
 		}
 		projector.emitEvent(agentrun.Event{Type: "error", Data: data})
@@ -922,7 +949,7 @@ func (projector *PublicEventProjector) TerminalProjected() bool {
 // already approved by Denova's public projection. Plan protocol tags stay
 // display-only, while Game commits the narrative accumulated across model and
 // tool steps instead of trusting only the final provider message.
-func (projector *PublicEventProjector) ProjectCanonicalOutput(message *agent.Message) (*agent.Message, *agent.OutputProjection) {
+func (projector *PublicEventProjector) ProjectCanonicalOutput(message *agentschema.Message) (*agentschema.Message, *agentcanonical.OutputProjection) {
 	if projector == nil || message == nil {
 		return nil, nil
 	}
@@ -939,7 +966,7 @@ func (projector *PublicEventProjector) ProjectCanonicalOutput(message *agent.Mes
 		projected.Content = ""
 		projected.ReasoningContent = ""
 		projected.ToolCalls = nil
-		return projected, &agent.OutputProjection{}
+		return projected, &agentcanonical.OutputProjection{}
 	}
 	if projector.options.AgentKind != agentrun.AgentKindInteractiveStory {
 		return projected, nil
@@ -953,10 +980,16 @@ func (projector *PublicEventProjector) ProjectCanonicalOutput(message *agent.Mes
 	projected.Content = content
 	projected.ReasoningContent = thinking
 	projected.ToolCalls = nil
-	return projected, &agent.OutputProjection{Content: content, Thinking: thinking}
+	return projected, &agentcanonical.OutputProjection{Content: content, Thinking: thinking}
 }
 
 func (projector *PublicEventProjector) emitEvent(event agentrun.Event) {
+	meta := eventMetadataFromData(event.Data)
+	if preview := projector.previews[meta.SubAgentSessionID]; preview != nil && preview.ordinal > 0 {
+		if data, ok := event.Data.(map[string]any); ok {
+			data["response_ordinal"] = preview.ordinal
+		}
+	}
 	if projector.recorder != nil {
 		// One public Run can contain several replies. Carry its durable cycle in
 		// every sourced display event so live and restored views share a boundary.
@@ -965,16 +998,24 @@ func (projector *PublicEventProjector) emitEvent(event agentrun.Event) {
 		}
 		projector.recorder.Record(event)
 	}
+	if preview := projector.previews[meta.SubAgentSessionID]; preview != nil {
+		if id := event.DataString("display_segment_id"); id != "" {
+			preview.segments[id] = false
+		}
+		if event.Type == "tool_call" {
+			preview.segments[event.DataString("id")] = true
+		}
+	}
 	if projector.emit != nil {
 		projector.emit(event)
 	}
 }
 
 func (projector *PublicEventProjector) rootMetadata() agentEventMetadata {
-	return projector.metadata(firstNonEmpty(projector.runID, projector.options.TaskID), agent.EventSource{Name: projector.options.RootAgentName}, "")
+	return projector.metadata(firstNonEmpty(projector.runID, projector.options.TaskID), agentevent.EventSource{Name: projector.options.RootAgentName}, "")
 }
 
-func (projector *PublicEventProjector) metadata(runID string, source agent.EventSource, parentCallID string) agentEventMetadata {
+func (projector *PublicEventProjector) metadata(runID string, source agentevent.EventSource, parentCallID string) agentEventMetadata {
 	name := strings.TrimSpace(source.Name)
 	if name == "" {
 		name = projector.options.RootAgentName
@@ -997,7 +1038,7 @@ func (projector *PublicEventProjector) metadata(runID string, source agent.Event
 	return meta
 }
 
-func projectInteractionRequested(request agent.InteractionRequest, meta agentEventMetadata) agentrun.Event {
+func projectInteractionRequested(request agentinteraction.InteractionRequest, meta agentEventMetadata) agentrun.Event {
 	toolCallID := request.ID
 	kind := "question"
 	questions := make([]map[string]any, len(request.Questions))
@@ -1022,7 +1063,10 @@ func projectInteractionRequested(request agent.InteractionRequest, meta agentEve
 		"tool_call_id": toolCallID, "agent_kind": meta.AgentKind, "status": "pending",
 		"questions": questions, "allow_other": request.AllowOther,
 	})
-	if request.Kind == agent.InteractionPermission && request.Permission != nil {
+	if request.Verification != nil {
+		data["verification"] = request.Verification
+	}
+	if request.Kind == agentinteraction.InteractionPermission && request.Permission != nil {
 		permission := request.Permission
 		kind = "tool_approval"
 		toolCallID = firstNonEmpty(permission.CallID, request.ID)
@@ -1051,13 +1095,13 @@ func clonePublicEventData(data map[string]any) map[string]any {
 	return clone
 }
 
-func projectInteractionAnswers(request agent.InteractionRequest, resolution agent.InteractionResolution) []map[string]any {
-	if request.Kind == agent.InteractionPermission && resolution.Permission != "" {
+func projectInteractionAnswers(request agentinteraction.InteractionRequest, resolution agentinteraction.InteractionResolution) []map[string]any {
+	if request.Kind == agentinteraction.InteractionPermission && resolution.Permission != "" {
 		option := "allow-once"
 		switch resolution.Permission {
-		case agent.PermissionRemember:
+		case agentinteraction.PermissionRemember:
 			option = "allow-workspace"
-		case agent.PermissionDeny:
+		case agentinteraction.PermissionDeny:
 			option = "deny"
 		}
 		return []map[string]any{{
@@ -1065,7 +1109,7 @@ func projectInteractionAnswers(request agent.InteractionRequest, resolution agen
 			"selected_options": []map[string]any{{"id": option, "label": option}},
 		}}
 	}
-	questions := make(map[string]agent.InteractionQuestion, len(request.Questions))
+	questions := make(map[string]agentinteraction.InteractionQuestion, len(request.Questions))
 	for _, question := range request.Questions {
 		questions[question.ID] = question
 	}

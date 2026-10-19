@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	agentcontext "denova/internal/agents/context"
 	"denova/internal/agents/conversationjournal"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 // refreshCanonicalTailLocked materializes only physical transactions appended
@@ -94,7 +94,7 @@ func cloneSessionForTailReplay(source *Session) *Session {
 		messageBaseIndex:   source.messageBaseIndex, messageCount: source.messageCount,
 		historyBaseIndex:       source.historyBaseIndex,
 		partialMaterialization: source.partialMaterialization,
-		messages:               append([]*agent.Message(nil), source.messages...),
+		messages:               append([]*agentschema.Message(nil), source.messages...),
 		records:                make([]historyRecord, len(source.records)),
 	}
 	result.runtimeConfigRevision = source.runtimeConfigRevision
@@ -143,7 +143,7 @@ func (s *Session) trimMaterializedWindowLocked() {
 		return
 	}
 	drop := len(s.messages) - sessionRecentTransactionLimit
-	s.messages = append([]*agent.Message(nil), s.messages[drop:]...)
+	s.messages = append([]*agentschema.Message(nil), s.messages[drop:]...)
 	s.messageBaseIndex += drop
 	// Keep record mutations addressable for active streams while avoiding a
 	// second unbounded resident copy. This is deliberately a larger mixed-event

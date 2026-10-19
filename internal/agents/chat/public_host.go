@@ -7,7 +7,8 @@ import (
 	agenttoolruntime "denova/internal/agents/toolruntime"
 	producttools "denova/internal/agents/tools"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentexecution "github.com/alfredxw/denova/agent/engine/execution"
+	agentmiddleware "github.com/alfredxw/denova/agent/engine/middleware"
 )
 
 // PublicHostMiddleware installs Denova-only trace, review scope, and plan-mode
@@ -15,7 +16,7 @@ import (
 // are bound through their dedicated Definition capabilities; the Agent package
 // remains independent from Denova session types.
 type PublicHostMiddleware struct {
-	*agent.BaseMiddleware
+	*agentmiddleware.BaseMiddleware
 	request ChatRequest
 	options agentrun.Options
 	trace   PublicRunTraceBinder
@@ -33,20 +34,20 @@ func NewPublicHostMiddleware(
 	trace PublicRunTraceBinder,
 ) *PublicHostMiddleware {
 	return &PublicHostMiddleware{
-		BaseMiddleware: &agent.BaseMiddleware{}, request: request, options: options, trace: trace,
+		BaseMiddleware: &agentmiddleware.BaseMiddleware{}, request: request, options: options, trace: trace,
 	}
 }
 
 func (middleware *PublicHostMiddleware) BeforeAgent(
 	ctx context.Context,
-	run *agent.RunContext,
-) (context.Context, *agent.RunContext, error) {
+	run *agentmiddleware.RunContext,
+) (context.Context, *agentmiddleware.RunContext, error) {
 	runID := ""
-	if scope, ok := agent.InvocationScopeFromContext(ctx); ok {
+	if scope, ok := agentexecution.InvocationScopeFromContext(ctx); ok {
 		runID = scope.OperationID
 	}
 	if runID == "" {
-		if identity, ok := agent.InvocationIdentityFromContext(ctx); ok {
+		if identity, ok := agentexecution.InvocationIdentityFromContext(ctx); ok {
 			runID = identity.OperationID
 			if runID == "" {
 				runID = identity.RunID
@@ -66,4 +67,4 @@ func (middleware *PublicHostMiddleware) BeforeAgent(
 	return ctx, run, nil
 }
 
-var _ agent.Middleware = (*PublicHostMiddleware)(nil)
+var _ agentmiddleware.Middleware = (*PublicHostMiddleware)(nil)

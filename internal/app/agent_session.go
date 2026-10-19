@@ -11,12 +11,12 @@ import (
 	"sort"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	agentconversation "denova/internal/agents/conversation"
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
 	"denova/internal/agents/trajectory"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 type AgentAskAnswer = agentconversation.HostAskAnswer
@@ -24,7 +24,7 @@ type AgentAskSelectedOption = agentconversation.HostAskSelectedOption
 type AgentAskAnswerResult = agentconversation.HostAskAnswerResult
 type AgentAskResolution = agentconversation.HostAskResolution
 
-var ErrAgentAskNotFound = agent.ErrInteractionStale
+var ErrAgentAskNotFound = agentschema.ErrInteractionStale
 
 const defaultGlobalAgentRunTraceLimit = 100
 
@@ -98,22 +98,8 @@ func (a *App) AgentSessionMessagesPage(ctx context.Context, agentKind string, be
 	return sess.ReadHistoryPage(ctx, before, limit)
 }
 
-func (a *App) ClearAgentSession(agentKind string) error {
-	a.mu.RLock()
-	store := a.sessionStore
-	a.mu.RUnlock()
-	if store == nil {
-		return ErrNoWorkspace
-	}
-	return session.ClearAgentSession(store, agentKind)
-}
-
 func persistAgentCallInStore(store *session.Store, agentKind, instruction, response string) error {
 	return session.PersistAgentCall(store, agentKind, instruction, response)
-}
-
-func clearAgentSessionInStore(store *session.Store, agentKind string) error {
-	return session.ClearAgentSession(store, agentKind)
 }
 
 func agentSessionFromStore(store *session.Store, agentKind string) (*session.Session, error) {
@@ -163,8 +149,12 @@ func (a *App) resolveSessionAsk(ctx context.Context, sessionID, askID, status st
 	if isAgentSessionID(sessionID) {
 		return AgentAskResolution{}, fmt.Errorf("cannot resolve a fixed Agent ask through the Writing Agent session endpoint: %s", sessionID)
 	}
-	if _, err := store.Get(sessionID); err != nil {
+	sess, err := store.Get(sessionID)
+	if err != nil {
 		return AgentAskResolution{}, err
+	}
+	if result, owned, err := a.AgentEngines().Operations.ResolveAsk(ctx, projectID, sess, askID, status, answers, cancelReason); owned || err != nil {
+		return result, err
 	}
 	return executionRuntime.ResolveAsk(ctx, agentrun.Options{
 		AgentKind: agentrun.AgentKindIDE, ProjectID: projectID, StateRoot: stateRoot,

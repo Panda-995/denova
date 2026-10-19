@@ -14,6 +14,7 @@ import (
 	agentconversation "denova/internal/agents/conversation"
 	agentexecution "denova/internal/agents/execution"
 	agentrun "denova/internal/agents/run"
+	agentruntime "denova/internal/agents/runtime"
 	"denova/internal/agents/session"
 	appagentruntime "denova/internal/app/agentruntime"
 	conversationapp "denova/internal/app/conversation"
@@ -52,6 +53,7 @@ func (service *Service) MaterializeAttachments(ctx context.Context, binding Bind
 }
 
 type projectRuntime struct {
+	pageInstructions func(context.Context, string, string, string) (string, error)
 	projectID        string
 	projectType      projectdomain.Type
 	agentKind        string
@@ -72,7 +74,8 @@ func (runtime *projectRuntime) conversation(sess *session.Session) conversationa
 		return conversationapp.Runtime{}
 	}
 	return conversationapp.Runtime{
-		ProjectID: runtime.projectID, ProjectType: runtime.projectType, ProjectStore: runtime.stateRoot,
+		PageInstructions: runtime.pageInstructions,
+		ProjectID:        runtime.projectID, ProjectType: runtime.projectType, ProjectStore: runtime.stateRoot,
 		AgentKind: runtime.agentKind, Session: sess, State: runtime.state,
 		BookService: runtime.bookService, ExecutionRuntime: runtime.executionRuntime, Workspace: runtime.workspace,
 		VersionService: runtime.versionService, Config: runtime.cfg,
@@ -92,7 +95,17 @@ func (runtime *projectRuntime) close() {
 	})
 }
 
+// runKind keeps internal maintenance out of durable command and chat-stream
+// projections; both kinds own the same scoped Task occupancy.
+type runKind uint8
+
+const (
+	turnRun runKind = iota
+	compactionRun
+)
+
 type run struct {
+	kind            runKind
 	binding         Binding
 	commandID       string
 	task            *apptask.Task
@@ -245,6 +258,9 @@ func (service *Service) ResolveBinding(binding Binding) (Binding, error) {
 	if binding.SessionID == "" {
 		return Binding{}, fmt.Errorf("AgentChat session is required / AgentChat 会话不能为空")
 	}
+	if agentconversation.IsReservedSessionID(binding.SessionID) {
+		return Binding{}, fmt.Errorf("reserved Agent session cannot be opened as a Project conversation")
+	}
 	return binding, nil
 }
 
@@ -331,7 +347,8 @@ func (service *Service) projectRuntime(ctx context.Context, projectID string) (*
 	}
 	runtimeCfg.ProjectID = record.ID
 	project = &projectRuntime{
-		projectID: record.ID, projectType: record.Type, agentKind: agentKind, stateRoot: layout.StoreRoot,
+		pageInstructions: service.host.PageInstructions,
+		projectID:        record.ID, projectType: record.Type, agentKind: agentKind, stateRoot: layout.StoreRoot,
 		workspace: workspace, state: state, store: store, bookService: book.NewService(workspace),
 		versionService: versionService, executionRuntime: executionRuntime, cfg: runtimeCfg,
 	}
@@ -412,7 +429,7 @@ func (service *Service) installActiveRun(active *run) error {
 		return fmt.Errorf("AgentChat service is closed")
 	}
 	if current := service.active[key]; current != nil && current.task != nil && !current.task.Finished() {
-		return appagentruntime.ErrOperationActive
+		return agentruntime.ErrOperationActive
 	}
 	service.active[key] = active
 	return nil
@@ -468,7 +485,7 @@ func (service *Service) CloseProject(ctx context.Context, projectID string) erro
 	for _, active := range service.active {
 		if active != nil && active.binding.ProjectID == projectID && active.task != nil && !active.task.Finished() {
 			service.mu.Unlock()
-			return fmt.Errorf("%w: project has a running Agent conversation", appagentruntime.ErrOperationActive)
+			return fmt.Errorf("%w: project has a running Agent conversation", agentruntime.ErrOperationActive)
 		}
 	}
 	project := service.projects[projectID]

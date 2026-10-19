@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-	"github.com/alfredxw/denova/agent/providers"
+	"github.com/alfredxw/denova/agent/model/providers"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestContextAnalysisShowsReasoningAndSafeProviderContinuationMetadata(t *testing.T) {
@@ -20,8 +20,8 @@ func TestContextAnalysisShowsReasoningAndSafeProviderContinuationMetadata(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	message := agent.AssistantMessage("I will inspect the file.", []agent.ToolCall{{
-		ID: "call-read", Type: "function", Function: agent.FunctionCall{Name: "read_file", Arguments: `{"path":"chapter.md"}`},
+	message := agentschema.AssistantMessage("I will inspect the file.", []agentschema.ToolCall{{
+		ID: "call-read", Type: "function", Function: agentschema.FunctionCall{Name: "read_file", Arguments: `{"path":"chapter.md"}`},
 	}})
 	message.ReasoningContent = "The file contents are required."
 	message.Extra = map[string]any{providers.ExtraKeyContinuation: continuation}

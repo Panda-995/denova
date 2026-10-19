@@ -12,12 +12,13 @@ import (
 	agenttool "denova/internal/agents/tool"
 	agenttoolruntime "denova/internal/agents/toolruntime"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
 )
 
 // ToolEffectObserver receives only effects accepted by the product. It is
 // process-local accounting and never effect authority.
-type ToolEffectObserver func(agent.EffectRequest, agenttool.Mutation)
+type ToolEffectObserver func(agentcanonical.EffectRequest, agenttool.Mutation)
 
 // NewToolEffectApplier adapts Denova's product mutation host to Agent's direct
 // canonical effect API. One invalid item does not discard successful siblings;
@@ -26,7 +27,7 @@ func NewToolEffectApplier(
 	applier agenttoolruntime.ToolMutationApplier,
 	options agentrun.Options,
 	observe ToolEffectObserver,
-) (agent.EffectApplier, error) {
+) (agentcanonical.EffectApplier, error) {
 	if applier == nil {
 		return nil, errors.New("Denova Tool mutation applier is required")
 	}
@@ -41,11 +42,11 @@ func NewToolEffectApplier(
 	}
 	// Product identity is stable when DataRoot moves; runtime paths and observer
 	// callbacks must not enter the effect capability's behavior identity.
-	identity := agent.CapabilityIdentity{Kind: "denova.tool_effects", Version: 1,
+	identity := agentschema.CapabilityIdentity{Kind: "denova.tool_effects", Version: 1,
 		ConfigHash: fmt.Sprintf("%x", sha256.Sum256([]byte(key.Namespace+"\x00"+key.ID))),
 	}
-	return agent.EffectApplierFuncs{CapabilityIdentity: identity, ApplyEffectsFn: func(ctx context.Context, requests []agent.EffectRequest) ([]agent.EffectResult, error) {
-		results := make([]agent.EffectResult, len(requests))
+	return agentcanonical.EffectApplierFuncs{CapabilityIdentity: identity, ApplyEffectsFn: func(ctx context.Context, requests []agentcanonical.EffectRequest) ([]agentcanonical.EffectResult, error) {
+		results := make([]agentcanonical.EffectResult, len(requests))
 		origin := agenttoolruntime.ToolMutationOrigin{
 			AgentKind: options.AgentKind, ProjectID: options.ProjectID,
 			TaskID: options.TaskID, AutomationTaskID: options.AutomationTaskID,
@@ -54,7 +55,7 @@ func NewToolEffectApplier(
 			MaintenanceTask: options.MaintenanceTask, Workspace: options.Workspace, Mode: options.Mode,
 		}
 		for index, request := range requests {
-			result := agent.EffectResult{ID: request.ID}
+			result := agentcanonical.EffectResult{ID: request.ID}
 			if err := ctx.Err(); err != nil {
 				result.Error = err.Error()
 				results[index] = result

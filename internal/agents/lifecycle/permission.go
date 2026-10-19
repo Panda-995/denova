@@ -15,7 +15,9 @@ import (
 	"denova/config"
 	"denova/internal/agents/toolapproval"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentinteraction "github.com/alfredxw/denova/agent/lifecycle/interaction"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentpermission "github.com/alfredxw/denova/agent/tool/permission"
 )
 
 type PermissionConfig struct {
@@ -48,7 +50,7 @@ type permissionRuleState struct {
 // public durable PermissionPolicy. Persisted rules are dynamic policy data,
 // not Definition behavior identity: a remembered rule becomes visible without
 // rebuilding tool definitions.
-func NewPermissionPolicy(configValue PermissionConfig) (agent.PermissionPolicy, error) {
+func NewPermissionPolicy(configValue PermissionConfig) (agentpermission.PermissionPolicy, error) {
 	configValue.Mode = config.NormalizeAgentApprovalMode(configValue.Mode)
 	configValue.AgentKind = strings.TrimSpace(configValue.AgentKind)
 	configValue.ProjectID = strings.TrimSpace(configValue.ProjectID)
@@ -73,10 +75,10 @@ func NewPermissionPolicy(configValue PermissionConfig) (agent.PermissionPolicy, 
 // and transaction without changing the policy's semantic identity. Dynamic
 // rule contents are deliberately excluded from Definition identity.
 func BindPermissionRuleStore(
-	policy agent.PermissionPolicy,
+	policy agentpermission.PermissionPolicy,
 	load func(context.Context) ([]config.AgentApprovalRule, error),
 	persist func(context.Context, config.AgentApprovalRule) error,
-) agent.PermissionPolicy {
+) agentpermission.PermissionPolicy {
 	denova, ok := policy.(*denovaPermissionPolicy)
 	if !ok || denova == nil {
 		return policy
@@ -88,7 +90,7 @@ func BindPermissionRuleStore(
 	return &cloned
 }
 
-func (policy *denovaPermissionPolicy) Identity() agent.CapabilityIdentity {
+func (policy *denovaPermissionPolicy) Identity() agentschema.CapabilityIdentity {
 	payload := struct {
 		Mode           config.AgentApprovalMode
 		AgentKind      string
@@ -106,36 +108,36 @@ func (policy *denovaPermissionPolicy) Identity() agent.CapabilityIdentity {
 	}
 	encoded, _ := json.Marshal(payload)
 	digest := sha256.Sum256(encoded)
-	return agent.CapabilityIdentity{
+	return agentschema.CapabilityIdentity{
 		Kind: "denova.permission", Version: 3, ConfigHash: hex.EncodeToString(digest[:]),
 	}
 }
 
-func (policy *denovaPermissionPolicy) Evaluate(ctx context.Context, request agent.PermissionRequest) (agent.PermissionDecision, error) {
+func (policy *denovaPermissionPolicy) Evaluate(ctx context.Context, request agentpermission.PermissionRequest) (agentpermission.PermissionDecision, error) {
 	rules, err := policy.rulesForEvaluation(ctx)
 	if err != nil {
-		return agent.PermissionDecision{}, err
+		return agentpermission.PermissionDecision{}, err
 	}
 	decision := policy.evaluate(request, rules)
 	if err := decision.Validate(); err != nil {
-		return agent.PermissionDecision{}, err
+		return agentpermission.PermissionDecision{}, err
 	}
-	kind := agent.PermissionAsk
+	kind := agentpermission.PermissionAsk
 	switch decision.Action {
 	case toolapproval.ActionAllow:
-		kind = agent.PermissionAllow
+		kind = agentpermission.PermissionAllow
 	case toolapproval.ActionPrompt:
 		if policy.config.NonInteractive {
-			kind = agent.PermissionBlock
+			kind = agentpermission.PermissionBlock
 		} else {
-			kind = agent.PermissionAsk
+			kind = agentpermission.PermissionAsk
 		}
 	case toolapproval.ActionDeny:
-		kind = agent.PermissionBlock
+		kind = agentpermission.PermissionBlock
 	default:
-		return agent.PermissionDecision{}, fmt.Errorf("unsupported Denova approval action %q", decision.Action)
+		return agentpermission.PermissionDecision{}, fmt.Errorf("unsupported Denova approval action %q", decision.Action)
 	}
-	details := agent.PermissionDetails{
+	details := agentpermission.PermissionDetails{
 		Mode: string(policy.config.Mode), Command: decision.Command, Cwd: decision.Cwd,
 		Risk: string(decision.Risk), RuleID: decision.RuleID,
 	}
@@ -144,7 +146,7 @@ func (policy *denovaPermissionPolicy) Evaluate(ctx context.Context, request agen
 	} else if decision.Command == "" {
 		details.Details = strings.TrimSpace(strings.ToValidUTF8(string(request.Arguments), "\uFFFD"))
 	}
-	if decision.Remember != nil && kind == agent.PermissionAsk {
+	if decision.Remember != nil && kind == agentpermission.PermissionAsk {
 		details.CanRemember = true
 		details.RuleMatcherVersion = decision.Remember.MatcherVersion
 		details.RuleMatchKey = decision.Remember.MatchKey
@@ -152,37 +154,37 @@ func (policy *denovaPermissionPolicy) Evaluate(ctx context.Context, request agen
 	}
 	reason := localizedApprovalReason(decision.Reason)
 	if policy.config.NonInteractive && decision.Action == toolapproval.ActionPrompt {
-		reason = agent.LocalizedText{
+		reason = agentinteraction.LocalizedText{
 			Chinese: "子 Agent 不能请求用户授权；请将受阻原因返回给父 Agent。",
 			English: "Delegated Agents cannot request user approval; return the blocker to the parent Agent.",
 		}
 	}
-	return agent.PermissionDecision{Kind: kind, Reason: reason, Details: details}, nil
+	return agentpermission.PermissionDecision{Kind: kind, Reason: reason, Details: details}, nil
 }
 
-func (policy *denovaPermissionPolicy) Resolve(ctx context.Context, request agent.PermissionResolveRequest) (agent.PermissionResolvedDecision, error) {
+func (policy *denovaPermissionPolicy) Resolve(ctx context.Context, request agentpermission.PermissionResolveRequest) (agentpermission.PermissionResolvedDecision, error) {
 	switch request.Resolution.Permission {
-	case agent.PermissionAllowOnce:
-		return agent.PermissionResolvedDecision{Allowed: true}, nil
-	case agent.PermissionDeny:
-		return agent.PermissionResolvedDecision{}, nil
-	case agent.PermissionRemember:
+	case agentinteraction.PermissionAllowOnce:
+		return agentpermission.PermissionResolvedDecision{Allowed: true}, nil
+	case agentinteraction.PermissionDeny:
+		return agentpermission.PermissionResolvedDecision{}, nil
+	case agentinteraction.PermissionRemember:
 		rules, err := policy.rulesForEvaluation(ctx)
 		if err != nil {
-			return agent.PermissionResolvedDecision{}, err
+			return agentpermission.PermissionResolvedDecision{}, err
 		}
 		decision := policy.evaluate(request.Request, rules)
 		if err := decision.Validate(); err != nil {
-			return agent.PermissionResolvedDecision{}, err
+			return agentpermission.PermissionResolvedDecision{}, err
 		}
 		if decision.Action == toolapproval.ActionAllow {
-			return agent.PermissionResolvedDecision{Allowed: true, Remembered: true}, nil
+			return agentpermission.PermissionResolvedDecision{Allowed: true, Remembered: true}, nil
 		}
 		if decision.Action != toolapproval.ActionPrompt || decision.Remember == nil {
-			return agent.PermissionResolvedDecision{}, errors.New("Denova approval does not permit a remembered workspace rule")
+			return agentpermission.PermissionResolvedDecision{}, errors.New("Denova approval does not permit a remembered workspace rule")
 		}
 		if policy.config.PersistRule == nil {
-			return agent.PermissionResolvedDecision{}, errors.New("Denova Permission remember requires a rule store")
+			return agentpermission.PermissionResolvedDecision{}, errors.New("Denova Permission remember requires a rule store")
 		}
 		approvedInput := strings.TrimSpace(decision.Command)
 		if approvedInput == "" {
@@ -202,20 +204,20 @@ func (policy *denovaPermissionPolicy) Resolve(ctx context.Context, request agent
 			policy.config.clock(),
 		)
 		if err != nil {
-			return agent.PermissionResolvedDecision{}, err
+			return agentpermission.PermissionResolvedDecision{}, err
 		}
 		if err := policy.rules.canRemember(rule); err != nil {
-			return agent.PermissionResolvedDecision{}, err
+			return agentpermission.PermissionResolvedDecision{}, err
 		}
 		if err := policy.config.PersistRule(ctx, rule); err != nil {
-			return agent.PermissionResolvedDecision{}, fmt.Errorf("persist Denova Agent approval rule: %w", err)
+			return agentpermission.PermissionResolvedDecision{}, fmt.Errorf("persist Denova Agent approval rule: %w", err)
 		}
 		if err := policy.rules.remember(rule); err != nil {
-			return agent.PermissionResolvedDecision{}, err
+			return agentpermission.PermissionResolvedDecision{}, err
 		}
-		return agent.PermissionResolvedDecision{Allowed: true, Remembered: true}, nil
+		return agentpermission.PermissionResolvedDecision{Allowed: true, Remembered: true}, nil
 	default:
-		return agent.PermissionResolvedDecision{}, errors.New("invalid Denova Permission resolution")
+		return agentpermission.PermissionResolvedDecision{}, errors.New("invalid Denova Permission resolution")
 	}
 }
 
@@ -235,7 +237,7 @@ func (policy *denovaPermissionPolicy) rulesForEvaluation(ctx context.Context) ([
 	return clonePermissionRules(rules), nil
 }
 
-func (policy *denovaPermissionPolicy) evaluate(request agent.PermissionRequest, rules []config.AgentApprovalRule) toolapproval.Decision {
+func (policy *denovaPermissionPolicy) evaluate(request agentpermission.PermissionRequest, rules []config.AgentApprovalRule) toolapproval.Decision {
 	if decision, matched := trajectoryPermission(request); matched {
 		return decision
 	}
@@ -259,7 +261,7 @@ func (policy *denovaPermissionPolicy) evaluate(request agent.PermissionRequest, 
 // trajectoryPermission keeps the redacted read-only evidence projection out
 // of workspace approval prompts. Only the Agents Project receives this URI
 // adapter, so recognizing the scheme cannot grant another Agent a capability.
-func trajectoryPermission(request agent.PermissionRequest) (toolapproval.Decision, bool) {
+func trajectoryPermission(request agentpermission.PermissionRequest) (toolapproval.Decision, bool) {
 	toolName := strings.TrimSpace(request.Tool)
 	switch toolName {
 	case "read":
@@ -335,13 +337,13 @@ func clonePermissionRules(rules []config.AgentApprovalRule) []config.AgentApprov
 	return append([]config.AgentApprovalRule(nil), rules...)
 }
 
-func localizedApprovalReason(reason string) agent.LocalizedText {
+func localizedApprovalReason(reason string) agentinteraction.LocalizedText {
 	reason = strings.TrimSpace(reason)
 	parts := strings.SplitN(reason, " / ", 2)
 	if len(parts) == 2 && strings.TrimSpace(parts[0]) != "" && strings.TrimSpace(parts[1]) != "" {
-		return agent.LocalizedText{Chinese: strings.TrimSpace(parts[0]), English: strings.TrimSpace(parts[1])}
+		return agentinteraction.LocalizedText{Chinese: strings.TrimSpace(parts[0]), English: strings.TrimSpace(parts[1])}
 	}
-	return agent.LocalizedText{Chinese: reason, English: reason}
+	return agentinteraction.LocalizedText{Chinese: reason, English: reason}
 }
 
-var _ agent.PermissionPolicy = (*denovaPermissionPolicy)(nil)
+var _ agentpermission.PermissionPolicy = (*denovaPermissionPolicy)(nil)

@@ -30,6 +30,8 @@ const editor = {
   'editor.currentLine': 'Line {{line}}',
   'editor.selectedWords': 'Selected: {{count}} words',
   'editor.lineHeight': 'Line Height',
+  'editor.firstLineIndent': 'Automatic first-line indent',
+  'editor.firstLineIndentDescription': 'Indent body text by two character widths. Display only.',
   'editor.dialogueHighlightColor': 'Dialogue Highlight',
   'editor.dialogueHighlightReset': 'Reset default',
   'editor.dialogueHighlightField': 'Choose dialogue highlight color',

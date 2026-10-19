@@ -6,18 +6,18 @@ import (
 	"io"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	agentcontext "denova/internal/agents/context"
-	"denova/internal/agents/run"
-	"denova/internal/agents/tool"
+	agentrun "denova/internal/agents/run"
+	agenttool "denova/internal/agents/tool"
+
+	agentmodel "github.com/alfredxw/denova/agent/model"
 )
 
 // applyModelOutputToolSafety rejects calls from an incomplete model response.
 // The core scheduler still creates exactly one paired synthetic result.
 func applyModelOutputToolSafety(decision agenttool.Decision, outcome agentrun.LLMOutcome) agenttool.Decision {
 	reason := strings.TrimSpace(outcome.FinishReason)
-	class := agent.ClassifyModelFinishReason(reason)
+	class := agentmodel.ClassifyModelFinishReason(reason)
 	if !class.Incomplete() {
 		return decision
 	}
@@ -35,7 +35,7 @@ func applyModelOutputToolSafety(decision agenttool.Decision, outcome agentrun.LL
 func incompleteModelToolArgumentsMessage(
 	decision agenttool.Decision,
 	finishReason string,
-	class agent.ModelFinishReasonClass,
+	class agentmodel.ModelFinishReasonClass,
 ) string {
 	target := strings.TrimSpace(decision.Target)
 	if target == "" {
@@ -45,13 +45,13 @@ func incompleteModelToolArgumentsMessage(
 	retryable := true
 	explanation := "The provider returned an incomplete model response, so the tool arguments may be incomplete. Denova blocked execution with no side effects; retry the model step."
 	switch class {
-	case agent.ModelFinishReasonOutputLimit:
+	case agentmodel.ModelFinishReasonOutputLimit:
 		reason = "model_output_token_limit"
 		explanation = "The model reached its output-token limit, so the tool arguments are incomplete. Denova blocked execution with no side effects; retry with shorter arguments or split the task."
-	case agent.ModelFinishReasonContextLimit:
+	case agentmodel.ModelFinishReasonContextLimit:
 		reason = "model_context_window_exceeded"
 		explanation = "The model reached its context-window limit, so the tool arguments may be incomplete. Denova blocked execution with no side effects; reduce the request or output limit before retrying."
-	case agent.ModelFinishReasonContentFilter:
+	case agentmodel.ModelFinishReasonContentFilter:
 		reason = "model_output_interrupted_by_content_filter"
 		retryable = false
 		explanation = "Content filtering interrupted the model response, so the tool arguments are incomplete. Denova blocked execution with no side effects."

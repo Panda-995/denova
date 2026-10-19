@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	agentattachment "denova/internal/agents/attachment"
 	chatagent "denova/internal/agents/chat"
 	"denova/internal/interactive"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 // MaterializeWritingAttachments persists transport payloads in the selected
@@ -60,8 +60,8 @@ func (a *App) MaterializeInteractiveAttachments(storyID, commandID string, reque
 	return materializeChatAttachments(layout.StoreRoot, agentattachment.StoryScope(storyID), commandID, request)
 }
 
-func attachmentDescriptors(files []agent.Attachment) []agent.Attachment {
-	result := append([]agent.Attachment(nil), files...)
+func attachmentDescriptors(files []agentschema.Attachment) []agentschema.Attachment {
+	result := append([]agentschema.Attachment(nil), files...)
 	for index := range result {
 		result[index].Path = ""
 		result[index].SHA256 = ""
@@ -92,7 +92,7 @@ func materializeChatAttachments(stateRoot string, scope agentattachment.Scope, c
 		return fmt.Errorf("materialize chat attachments: %w", err)
 	}
 	request.AttachmentUploads = nil
-	request.AttachedFiles = append([]agent.Attachment(nil), files...)
+	request.AttachedFiles = append([]agentschema.Attachment(nil), files...)
 	request.AttachmentIDs = make([]string, 0, len(files))
 	for _, file := range files {
 		request.AttachmentIDs = append(request.AttachmentIDs, file.ID)

@@ -1,6 +1,7 @@
 package project
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"denova/internal/portablepath"
 )
 
 const (
@@ -32,9 +35,15 @@ type legacyBookRegistry struct {
 }
 
 func (registry *Registry) loadOrMigrateLocked() (registryData, bool, error) {
+	if err := portablepath.CheckPath(registry.denovaDir, "projects.json"); err != nil {
+		return registryData{}, false, fmt.Errorf("inspect Project Registry path: %w", err)
+	}
 	var data registryData
 	raw, err := os.ReadFile(registry.path)
 	if err == nil {
+		if cached := registry.readCache; cached != nil && bytes.Equal(raw, cached.raw) {
+			return cloneRegistryData(cached.data), false, nil
+		}
 		if err := json.Unmarshal(raw, &data); err != nil {
 			return registryData{}, false, fmt.Errorf("decode project registry: %w", err)
 		}
@@ -56,10 +65,14 @@ func (registry *Registry) loadOrMigrateLocked() (registryData, bool, error) {
 			if err := registry.normalizeRegistryData(&data); err != nil {
 				return registryData{}, false, err
 			}
-			if err := registry.migrateProjectStoresOnce(data.Projects); err != nil {
+			changed, err := registry.repairIncompleteBookRegistrations(&data, raw)
+			if err != nil {
 				return registryData{}, false, err
 			}
-			return data, false, nil
+			if !changed {
+				registry.readCache = &registryReadCache{raw: raw, data: cloneRegistryData(data)}
+			}
+			return data, changed, nil
 		case legacyProjectStateRegistryVersion:
 			if err := registry.normalizeRegistryData(&data); err != nil {
 				return registryData{}, false, err
@@ -67,7 +80,7 @@ func (registry *Registry) loadOrMigrateLocked() (registryData, bool, error) {
 			if err := registry.saveLocked(data); err != nil {
 				return registryData{}, false, fmt.Errorf("persist Project Store Registry: %w", err)
 			}
-			if err := registry.migrateProjectStoresOnce(data.Projects); err != nil {
+			if err := registry.migrateLegacyProjectStores(data.Projects); err != nil {
 				return registryData{}, false, err
 			}
 			return data, false, nil
@@ -81,7 +94,7 @@ func (registry *Registry) loadOrMigrateLocked() (registryData, bool, error) {
 			if err := registry.saveLocked(data); err != nil {
 				return registryData{}, false, fmt.Errorf("persist portable Project locations: %w", err)
 			}
-			if err := registry.migrateProjectStoresOnce(data.Projects); err != nil {
+			if err := registry.migrateLegacyProjectStores(data.Projects); err != nil {
 				return registryData{}, false, err
 			}
 			return data, false, nil
@@ -100,7 +113,7 @@ func (registry *Registry) loadOrMigrateLocked() (registryData, bool, error) {
 			if err := registry.saveLocked(data); err != nil {
 				return registryData{}, false, fmt.Errorf("persist readable Project Store directories: %w", err)
 			}
-			if err := registry.migrateProjectStoresOnce(data.Projects); err != nil {
+			if err := registry.migrateLegacyProjectStores(data.Projects); err != nil {
 				return registryData{}, false, err
 			}
 			return data, false, nil

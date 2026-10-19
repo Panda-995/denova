@@ -7,14 +7,16 @@ import (
 	"strings"
 	"sync"
 
-	agent "github.com/alfredxw/denova/agent"
-	"github.com/alfredxw/denova/agent/providers"
-
 	"denova/config"
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
 	novaskills "denova/internal/agents/skills"
 	"denova/internal/agents/toolresult"
+
+	"github.com/alfredxw/denova/agent/model/providers"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 type SessionConversation struct {
@@ -162,7 +164,7 @@ func (c *SessionConversation) AppendAssistantWithMetadata(content, _ string, met
 	if !agentrun.ValidCycleIdentity(identity) {
 		return ErrMissingAgentCycleIdentity
 	}
-	message := agent.AssistantMessage(content, nil)
+	message := agentschema.AssistantMessage(content, nil)
 	message.Extra = providers.ContinuationExtra(metadata.ProviderContinuation)
 	intent, err := session.NewDomainCommitIntent(session.DomainCommitIdentity{
 		CommandID: string(identity.CommandID), OperationID: string(identity.OperationID), Cycle: identity.Cycle,
@@ -186,13 +188,14 @@ func (c *SessionConversation) AppendAssistantWithMetadata(content, _ string, met
 // view, but recovery always uses this exact raw output.
 func (c *SessionConversation) CommitAgentCanonicalOutput(
 	ctx context.Context,
-	message *agent.Message,
+	message *agentschema.Message,
 	metadata session.MessageMetadata,
+	checkpoint agentcanonical.CanonicalCheckpoint,
 ) (session.DomainCommitReceipt, error) {
 	if c == nil || c.session == nil {
 		return session.DomainCommitReceipt{}, fmt.Errorf("会话不存在")
 	}
-	if message == nil || message.Role != agent.Assistant || len(message.ToolCalls) != 0 {
+	if message == nil || message.Role != agentschema.Assistant || len(message.ToolCalls) != 0 {
 		return session.DomainCommitReceipt{}, fmt.Errorf("canonical session output requires a final assistant message")
 	}
 	identity := c.agentCycleIdentitySnapshot()
@@ -207,6 +210,7 @@ func (c *SessionConversation) CommitAgentCanonicalOutput(
 	}
 	c.cycleMu.Lock()
 	intent = intent.WithExpectedContextCursor(c.cycleCursor)
+	intent.Checkpoint = checkpoint
 	c.cycleMu.Unlock()
 	receipt, err := c.session.CommitDomainMessageContext(ctx, intent)
 	if err != nil {
@@ -214,6 +218,8 @@ func (c *SessionConversation) CommitAgentCanonicalOutput(
 	}
 	c.cycleMu.Lock()
 	c.cycleCursor = c.session.ContextCursor()
+	c.ensureCycleCommitMapsLocked()
+	c.lastCommitReceipts[agentrun.DomainCommitOutput] = &receipt
 	c.cycleMu.Unlock()
 	return receipt, nil
 }
@@ -353,14 +359,14 @@ func (c *SessionConversation) agentCycleCursorSnapshot() session.ContextCursor {
 	return cursor
 }
 
-func (c *SessionConversation) AppendContextMessage(msg *agent.Message) error {
+func (c *SessionConversation) AppendContextMessage(msg *agentschema.Message) error {
 	if msg == nil || (msg.Role == "" && strings.TrimSpace(msg.Content) == "" && len(msg.ToolCalls) == 0) {
 		return nil
 	}
 	return c.AppendContextMessages(msg)
 }
 
-func (c *SessionConversation) AppendContextMessages(messages ...*agent.Message) error {
+func (c *SessionConversation) AppendContextMessages(messages ...*agentschema.Message) error {
 	if c == nil || c.session == nil {
 		return fmt.Errorf("会话不存在")
 	}
@@ -390,7 +396,7 @@ func (c *SessionConversation) ToolResultContextPolicy() toolresult.ContextPolicy
 	return toolresult.ResolveContextPolicy(c.cfg, agentKind)
 }
 
-func (c *SessionConversation) ToolArtifactStore() agent.ToolArtifactBackend {
+func (c *SessionConversation) ToolArtifactStore() agenttool.ToolArtifactBackend {
 	if c == nil || c.session == nil {
 		return nil
 	}
@@ -446,7 +452,11 @@ func (c *SessionConversation) FinalizeDisplayAssistantRun(runID, finalSegmentID,
 	return c.session.FinalizeDisplayAssistantRun(runID, finalSegmentID, terminalPhase)
 }
 
-func (c *SessionConversation) UpdateDisplayToolResult(id, name, status, result string, presentation *agent.ToolPresentation) error {
+func (c *SessionConversation) DiscardDisplayEvents(ids []string) error {
+	return c.session.DiscardDisplayEvents(ids)
+}
+
+func (c *SessionConversation) UpdateDisplayToolResult(id, name, status, result string, presentation *agenttool.ToolPresentation) error {
 	if c == nil || c.session == nil {
 		return fmt.Errorf("会话不存在")
 	}

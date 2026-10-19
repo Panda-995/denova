@@ -13,9 +13,10 @@ import (
 )
 
 var (
-	ErrPromptRequired       = errors.New("image prompt is required")
-	ErrUnsupportedProtocol  = errors.New("unsupported image protocol")
-	ErrImageCountOutOfRange = errors.New("image count must be between 1 and 10")
+	ErrPromptRequired        = errors.New("image prompt is required")
+	ErrUnsupportedImageInput = errors.New("image input is unsupported by this protocol")
+	ErrUnsupportedProtocol   = errors.New("unsupported image protocol")
+	ErrImageCountOutOfRange  = errors.New("image count must be between 1 and 10")
 )
 
 type Service struct {
@@ -67,6 +68,16 @@ func (s *Service) Generate(ctx context.Context, cfg *config.Config, request Gene
 		return Result{}, err
 	}
 
+	if len(request.Images) > 0 && profile.Protocol == config.ImageProtocolComfyUI {
+		return Result{}, fmt.Errorf("%w: ComfyUI profile does not declare image input bindings", ErrUnsupportedImageInput)
+	}
+	if request.Mask != nil && profile.Protocol != config.ImageProtocolOpenAI {
+		return Result{}, fmt.Errorf("%w: this protocol does not support an explicit mask; use a selection instead", ErrUnsupportedImageInput)
+	}
+	request, err = prepareImageEdit(request, profile.Protocol)
+	if err != nil {
+		return Result{}, err
+	}
 	adapter := s.adapters[profile.Protocol]
 	if adapter == nil {
 		return Result{}, fmt.Errorf("%w: %s", ErrUnsupportedProtocol, profile.Protocol)

@@ -7,66 +7,67 @@ import (
 	"path/filepath"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/internal/agents/toolresult"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 // Agent orchestration uses the public runtime vocabulary directly; these
 // aliases keep lifecycle records readable without introducing duplicate enum
 // definitions.
-type ToolSource = agent.ToolSource
-type ToolExecutionClass = agent.ToolExecutionClass
-type ToolMutationScope = agent.ToolMutationScope
-type ToolPostCheckPolicy = agent.ToolPostCheckPolicy
-type ToolRecoveryClass = agent.ToolRecoveryClass
+type ToolSource = agenttool.ToolSource
+type ToolExecutionClass = agenttool.ToolExecutionClass
+type ToolMutationScope = agenttool.ToolMutationScope
+type ToolPostCheckPolicy = agenttool.ToolPostCheckPolicy
+type ToolRecoveryClass = agenttool.ToolRecoveryClass
 
 const (
-	ToolSourceOther = agent.ToolSourceOther
-	ToolSourceRead  = agent.ToolSourceRead
-	ToolSourceWrite = agent.ToolSourceWrite
-	ToolSourceShell = agent.ToolSourceShell
+	ToolSourceOther = agenttool.ToolSourceOther
+	ToolSourceRead  = agenttool.ToolSourceRead
+	ToolSourceWrite = agenttool.ToolSourceWrite
+	ToolSourceShell = agenttool.ToolSourceShell
 	// ToolSourceLore is Denova's product-specific lore capability. Public Agent
 	// tool vocabulary intentionally remains product-neutral.
-	ToolSourceLore    = agent.ToolSource("denova.lore")
-	ToolSourceHistory = agent.ToolSourceHistory
-	ToolSourceWeb     = agent.ToolSourceWeb
-	ToolSourceImage   = agent.ToolSourceImage
+	ToolSourceLore    = agenttool.ToolSource("denova.lore")
+	ToolSourceHistory = agenttool.ToolSourceHistory
+	ToolSourceWeb     = agenttool.ToolSourceWeb
+	ToolSourceImage   = agenttool.ToolSourceImage
 )
 
 const (
-	ToolExecutionParallelRead       = agent.ToolExecutionParallelRead
-	ToolExecutionWorkspaceExclusive = agent.ToolExecutionWorkspaceExclusive
-	ToolExecutionSessionExclusive   = agent.ToolExecutionSessionExclusive
-	ToolExecutionConfigExclusive    = agent.ToolExecutionConfigExclusive
-	ToolExecutionInteractiveWait    = agent.ToolExecutionInteractiveWait
-	ToolExecutionChild              = agent.ToolExecutionChild
+	ToolExecutionParallelRead       = agenttool.ToolExecutionParallelRead
+	ToolExecutionWorkspaceExclusive = agenttool.ToolExecutionWorkspaceExclusive
+	ToolExecutionSessionExclusive   = agenttool.ToolExecutionSessionExclusive
+	ToolExecutionConfigExclusive    = agenttool.ToolExecutionConfigExclusive
+	ToolExecutionInteractiveWait    = agenttool.ToolExecutionInteractiveWait
+	ToolExecutionChild              = agenttool.ToolExecutionChild
 )
 
 const (
-	ToolMutationNone      = agent.ToolMutationNone
-	ToolMutationWorkspace = agent.ToolMutationWorkspace
-	ToolMutationSession   = agent.ToolMutationSession
-	ToolMutationConfig    = agent.ToolMutationConfig
-	ToolMutationExternal  = agent.ToolMutationExternal
+	ToolMutationNone      = agenttool.ToolMutationNone
+	ToolMutationWorkspace = agenttool.ToolMutationWorkspace
+	ToolMutationSession   = agenttool.ToolMutationSession
+	ToolMutationConfig    = agenttool.ToolMutationConfig
+	ToolMutationExternal  = agenttool.ToolMutationExternal
 )
 
 const (
-	ToolPostCheckNone            = agent.ToolPostCheckNone
-	ToolPostCheckWorkspaceChange = agent.ToolPostCheckWorkspaceChange
-	ToolPostCheckSessionState    = agent.ToolPostCheckSessionState
-	ToolPostCheckConfigRevision  = agent.ToolPostCheckConfigRevision
-	ToolPostCheckExternalReceipt = agent.ToolPostCheckExternalReceipt
+	ToolPostCheckNone            = agenttool.ToolPostCheckNone
+	ToolPostCheckWorkspaceChange = agenttool.ToolPostCheckWorkspaceChange
+	ToolPostCheckSessionState    = agenttool.ToolPostCheckSessionState
+	ToolPostCheckConfigRevision  = agenttool.ToolPostCheckConfigRevision
+	ToolPostCheckExternalReceipt = agenttool.ToolPostCheckExternalReceipt
 )
 
 const (
-	ToolRecoveryReadOnly      = agent.ToolRecoveryReadOnly
-	ToolRecoveryIdempotent    = agent.ToolRecoveryIdempotent
-	ToolRecoveryReconcilable  = agent.ToolRecoveryReconcilable
-	ToolRecoveryNonIdempotent = agent.ToolRecoveryNonIdempotent
+	ToolRecoveryReadOnly      = agenttool.ToolRecoveryReadOnly
+	ToolRecoveryIdempotent    = agenttool.ToolRecoveryIdempotent
+	ToolRecoveryReconcilable  = agenttool.ToolRecoveryReconcilable
+	ToolRecoveryNonIdempotent = agenttool.ToolRecoveryNonIdempotent
 )
 
-const ToolResultBoundedModelContext = agent.ToolResultBoundedModelContext
+const ToolResultBoundedModelContext = agentschema.ToolResultBoundedModelContext
 
 // NormalizeName returns the canonical lookup form of a tool name.
 func NormalizeName(name string) string {
@@ -97,58 +98,58 @@ type Mutation struct {
 // Decision is the bounded authorization and execution projection for one tool
 // call. It contains no raw tool result or model content.
 type Decision struct {
-	ToolName          string               `json:"tool_name"`
-	ProviderCallID    string               `json:"provider_call_id,omitempty"`
-	ExecutionID       string               `json:"execution_id,omitempty"`
-	ParentCallID      string               `json:"parent_call_id,omitempty"`
-	Source            ToolSource           `json:"source"`
-	Capability        string               `json:"capability,omitempty"`
-	Action            string               `json:"action"`
-	Reason            string               `json:"reason,omitempty"`
-	MutationScope     ToolMutationScope    `json:"mutation_scope"`
-	PostCheck         ToolPostCheckPolicy  `json:"post_check"`
-	Target            string               `json:"target,omitempty"`
-	ArgsBytes         int                  `json:"args_bytes,omitempty"`
-	ArgsComplete      *bool                `json:"args_complete,omitempty"`
-	ModelFinishReason string               `json:"model_finish_reason,omitempty"`
-	Descriptor        agent.ToolDescriptor `json:"descriptor"`
+	ToolName          string                   `json:"tool_name"`
+	ProviderCallID    string                   `json:"provider_call_id,omitempty"`
+	ExecutionID       string                   `json:"execution_id,omitempty"`
+	ParentCallID      string                   `json:"parent_call_id,omitempty"`
+	Source            ToolSource               `json:"source"`
+	Capability        string                   `json:"capability,omitempty"`
+	Action            string                   `json:"action"`
+	Reason            string                   `json:"reason,omitempty"`
+	MutationScope     ToolMutationScope        `json:"mutation_scope"`
+	PostCheck         ToolPostCheckPolicy      `json:"post_check"`
+	Target            string                   `json:"target,omitempty"`
+	ArgsBytes         int                      `json:"args_bytes,omitempty"`
+	ArgsComplete      *bool                    `json:"args_complete,omitempty"`
+	ModelFinishReason string                   `json:"model_finish_reason,omitempty"`
+	Descriptor        agenttool.ToolDescriptor `json:"descriptor"`
 }
 
 // ExecutionRecord is the bounded lifecycle projection stored by the durable
 // runtime. Display content and unrestricted diagnostic details are excluded.
 type ExecutionRecord struct {
-	ToolName              string               `json:"tool_name"`
-	ProviderCallID        string               `json:"provider_call_id,omitempty"`
-	ExecutionID           string               `json:"execution_id,omitempty"`
-	ParentCallID          string               `json:"parent_call_id,omitempty"`
-	Workspace             string               `json:"workspace,omitempty"`
-	Status                string               `json:"status"`
-	SyntheticReason       string               `json:"synthetic_reason,omitempty"`
-	Result                string               `json:"result,omitempty"`
-	DomainStatus          string               `json:"domain_status,omitempty"`
-	DomainDiagnosticCount int                  `json:"domain_diagnostic_count,omitempty"`
-	RetryModules          []string             `json:"retry_modules,omitempty"`
-	Capability            string               `json:"capability,omitempty"`
-	OriginalBytes         int                  `json:"original_bytes,omitempty"`
-	ReturnedBytes         int                  `json:"returned_bytes,omitempty"`
-	Truncated             bool                 `json:"truncated,omitempty"`
-	Target                string               `json:"target,omitempty"`
-	IdempotencyKey        string               `json:"idempotency_key,omitempty"`
-	Error                 string               `json:"error,omitempty"`
-	ArgsBytes             int                  `json:"args_bytes,omitempty"`
-	ArgsComplete          *bool                `json:"args_complete,omitempty"`
-	ModelFinishReason     string               `json:"model_finish_reason,omitempty"`
-	ChangeGroupID         string               `json:"change_group_id,omitempty"`
-	ReviewThreadID        string               `json:"review_thread_id,omitempty"`
-	ChangeSetID           string               `json:"change_set_id,omitempty"`
-	BaseRevision          string               `json:"base_revision,omitempty"`
-	Revision              string               `json:"revision,omitempty"`
-	ReviewStatus          string               `json:"review_status,omitempty"`
-	ApplyState            string               `json:"apply_state,omitempty"`
-	LoreItemIDs           []string             `json:"lore_item_ids,omitempty"`
-	DeletedLoreItemIDs    []string             `json:"deleted_lore_item_ids,omitempty"`
-	MutationReceiptSchema string               `json:"mutation_receipt_schema,omitempty"`
-	Descriptor            agent.ToolDescriptor `json:"descriptor"`
+	ToolName              string                   `json:"tool_name"`
+	ProviderCallID        string                   `json:"provider_call_id,omitempty"`
+	ExecutionID           string                   `json:"execution_id,omitempty"`
+	ParentCallID          string                   `json:"parent_call_id,omitempty"`
+	Workspace             string                   `json:"workspace,omitempty"`
+	Status                string                   `json:"status"`
+	SyntheticReason       string                   `json:"synthetic_reason,omitempty"`
+	Result                string                   `json:"result,omitempty"`
+	DomainStatus          string                   `json:"domain_status,omitempty"`
+	DomainDiagnosticCount int                      `json:"domain_diagnostic_count,omitempty"`
+	RetryModules          []string                 `json:"retry_modules,omitempty"`
+	Capability            string                   `json:"capability,omitempty"`
+	OriginalBytes         int                      `json:"original_bytes,omitempty"`
+	ReturnedBytes         int                      `json:"returned_bytes,omitempty"`
+	Truncated             bool                     `json:"truncated,omitempty"`
+	Target                string                   `json:"target,omitempty"`
+	IdempotencyKey        string                   `json:"idempotency_key,omitempty"`
+	Error                 string                   `json:"error,omitempty"`
+	ArgsBytes             int                      `json:"args_bytes,omitempty"`
+	ArgsComplete          *bool                    `json:"args_complete,omitempty"`
+	ModelFinishReason     string                   `json:"model_finish_reason,omitempty"`
+	ChangeGroupID         string                   `json:"change_group_id,omitempty"`
+	ReviewThreadID        string                   `json:"review_thread_id,omitempty"`
+	ChangeSetID           string                   `json:"change_set_id,omitempty"`
+	BaseRevision          string                   `json:"base_revision,omitempty"`
+	Revision              string                   `json:"revision,omitempty"`
+	ReviewStatus          string                   `json:"review_status,omitempty"`
+	ApplyState            string                   `json:"apply_state,omitempty"`
+	LoreItemIDs           []string                 `json:"lore_item_ids,omitempty"`
+	DeletedLoreItemIDs    []string                 `json:"deleted_lore_item_ids,omitempty"`
+	MutationReceiptSchema string                   `json:"mutation_receipt_schema,omitempty"`
+	Descriptor            agenttool.ToolDescriptor `json:"descriptor"`
 }
 
 const (

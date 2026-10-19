@@ -56,6 +56,16 @@ describe('StoryTuningView', () => {
 
   beforeEach(() => onUpdate.mockClear())
 
+  it('saves presentation switches without dropping the pinned default background', async () => {
+    const default_background = { item_id: 'station', asset_id: 'day', path: 'assets/day.png', name: 'Day' }
+    render(<StoryTuningView story={{ ...story(1), presentation_settings: { background: true, characters: true, default_background } }} planningTemplates={[planningTemplate]} tellers={[teller]} imagePresets={[]} stateDisplayPreference="preview" onStateDisplayPreferenceChange={vi.fn()} onUpdate={onUpdate} />)
+    fireEvent.click(screen.getByRole('switch', { name: '动态背景' }))
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledWith({ presentation_settings: { background: false, characters: true, default_background } }))
+    await waitFor(() => expect(screen.getByRole('switch', { name: '角色差分' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('switch', { name: '角色差分' }))
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledWith({ presentation_settings: { background: true, characters: false, default_background } }))
+  })
+
   it('shows every control group by default and saves story-level agent tuning', async () => {
     render(<StoryTuningView story={story()} planningTemplates={[planningTemplate]} tellers={[teller]} imagePresets={[{ version: 1, id: 'game-cg', name: 'Game CG', description: '', custom: false }]} stateDisplayPreference="preview" onStateDisplayPreferenceChange={vi.fn()} onPlanningTemplateChange={vi.fn()} onUpdate={onUpdate} />)
 

@@ -2,17 +2,20 @@ package toolruntime
 
 import (
 	"context"
-	"denova/internal/agents/run"
-	"denova/internal/agents/tool"
 	"fmt"
 	"strings"
 	"unicode/utf8"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
+	agentrun "denova/internal/agents/run"
+	agenttool "denova/internal/agents/tool"
 	"denova/internal/agents/toolresult"
 	producttools "denova/internal/agents/tools"
+
+	agentexecution "github.com/alfredxw/denova/agent/engine/execution"
+	agentmiddleware "github.com/alfredxw/denova/agent/engine/middleware"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	sdktool "github.com/alfredxw/denova/agent/tool"
 )
 
 const maxToolErrorDiagnosticBytes = 4 * 1024
@@ -21,7 +24,7 @@ const maxToolErrorDiagnosticBytes = 4 * 1024
 // preserves product tool settings, workspace coordination, lifecycle receipts,
 // and result projection without owning permission or batch scheduling.
 type OrchestratorMiddleware struct {
-	*agent.BaseMiddleware
+	*agentmiddleware.BaseMiddleware
 	agentKind           string
 	policyKind          string
 	toolSettings        config.ResolvedAgentToolSettings
@@ -45,7 +48,7 @@ type OrchestratorConfig struct {
 
 func NewOrchestratorMiddleware(cfg OrchestratorConfig) *OrchestratorMiddleware {
 	return &OrchestratorMiddleware{
-		BaseMiddleware:      &agent.BaseMiddleware{},
+		BaseMiddleware:      &agentmiddleware.BaseMiddleware{},
 		agentKind:           cfg.AgentKind,
 		policyKind:          cfg.PolicyKind,
 		toolSettings:        cfg.ToolSettings,
@@ -70,36 +73,38 @@ func (m *OrchestratorMiddleware) Configuration() OrchestratorConfig {
 	}
 }
 
-type interactiveStoryToolMiddleware struct{ *agent.BaseMiddleware }
+type interactiveStoryToolMiddleware struct {
+	*agentmiddleware.BaseMiddleware
+}
 
-func NewInteractiveStoryMiddleware() agent.Middleware {
-	return &interactiveStoryToolMiddleware{BaseMiddleware: &agent.BaseMiddleware{}}
+func NewInteractiveStoryMiddleware() agentmiddleware.Middleware {
+	return &interactiveStoryToolMiddleware{BaseMiddleware: &agentmiddleware.BaseMiddleware{}}
 }
 
 func (m *interactiveStoryToolMiddleware) WrapToolCall(
 	_ context.Context,
-	endpoint agent.ToolCallEndpoint,
-	toolCtx *agent.ToolContext,
-) (agent.ToolCallEndpoint, error) {
-	return func(ctx context.Context, args string, opts ...agent.ToolOption) (agent.ToolResult, error) {
+	endpoint agentmiddleware.ToolCallEndpoint,
+	toolCtx *agentmiddleware.ToolContext,
+) (agentmiddleware.ToolCallEndpoint, error) {
+	return func(ctx context.Context, args string, opts ...sdktool.ToolOption) (agentschema.ToolResult, error) {
 		if isInteractiveStoryForbiddenMutation(toolCtx) {
-			return agent.SyntheticToolResult(agent.ToolResultBlocked, agent.ToolSyntheticPolicyBlocked, interactiveStoryWriteToolBlockedMessage(toolName(toolCtx))), nil
+			return sdktool.SyntheticToolResult(agentschema.ToolResultBlocked, agentschema.ToolSyntheticPolicyBlocked, interactiveStoryWriteToolBlockedMessage(toolName(toolCtx))), nil
 		}
 		return endpoint(ctx, args, opts...)
 	}, nil
 }
 
-func toolName(toolCtx *agent.ToolContext) string {
+func toolName(toolCtx *agentmiddleware.ToolContext) string {
 	if toolCtx == nil {
 		return ""
 	}
 	return toolCtx.Name
 }
 
-func isInteractiveStoryForbiddenMutation(toolCtx *agent.ToolContext) bool {
+func isInteractiveStoryForbiddenMutation(toolCtx *agentmiddleware.ToolContext) bool {
 	if toolCtx != nil {
 		descriptor := toolCtx.Definition.Descriptor
-		if descriptor.Capability == config.AgentToolShell || descriptor.MutationScope == agent.ToolMutationWorkspace {
+		if descriptor.Capability == config.AgentToolShell || descriptor.MutationScope == sdktool.ToolMutationWorkspace {
 			return true
 		}
 	}
@@ -124,10 +129,10 @@ func interactiveStoryWriteToolBlockedMessage(name string) string {
 
 func (m *OrchestratorMiddleware) WrapToolCall(
 	_ context.Context,
-	endpoint agent.ToolCallEndpoint,
-	toolCtx *agent.ToolContext,
-) (agent.ToolCallEndpoint, error) {
-	return func(ctx context.Context, args string, opts ...agent.ToolOption) (agent.ToolResult, error) {
+	endpoint agentmiddleware.ToolCallEndpoint,
+	toolCtx *agentmiddleware.ToolContext,
+) (agentmiddleware.ToolCallEndpoint, error) {
+	return func(ctx context.Context, args string, opts ...sdktool.ToolOption) (agentschema.ToolResult, error) {
 		decision := m.buildToolDecision(ctx, toolCtx, args)
 		observer := agentrun.ObserverFromContext(ctx)
 		outcome := agentrun.LLMOutcome{}
@@ -147,33 +152,33 @@ func (m *OrchestratorMiddleware) WrapToolCall(
 			if observer != nil {
 				observer.RecordToolExecution(blockedToolExecutionRecord(decision, message))
 			}
-			reason := agent.ToolSyntheticPolicyBlocked
+			reason := agentschema.ToolSyntheticPolicyBlocked
 			if decision.ArgsComplete != nil && !*decision.ArgsComplete && decision.ModelFinishReason != "" {
-				reason = agent.ToolSyntheticModelIncomplete
+				reason = agentschema.ToolSyntheticModelIncomplete
 			}
 			prepared := toolresult.PrepareStructured(
 				decision.ToolName, decision.Descriptor, args,
-				agent.SyntheticToolResult(agent.ToolResultBlocked, reason, message),
+				sdktool.SyntheticToolResult(agentschema.ToolResultBlocked, reason, message),
 			)
 			return prepared.Result, nil
 		}
 
 		release, err := m.acquireToolExecution(ctx, decision)
 		if err != nil {
-			return agent.ToolResult{}, err
+			return agentschema.ToolResult{}, err
 		}
 		defer release()
 		if err := ctx.Err(); err != nil {
-			return agent.ToolResult{}, err
+			return agentschema.ToolResult{}, err
 		}
 		result, err := endpoint(ctx, args, opts...)
 		if err != nil {
 			toolErr := err
-			if decision.Descriptor.Steering == agent.SteeringInterruptibleWait && agent.ToolSteeringPending(ctx) {
-				result = agent.SyntheticToolResult(agent.ToolResultSkipped, agent.ToolSyntheticSteeringInterrupted,
+			if decision.Descriptor.Steering == sdktool.SteeringInterruptibleWait && sdktool.ToolSteeringPending(ctx) {
+				result = sdktool.SyntheticToolResult(agentschema.ToolResultSkipped, agentschema.ToolSyntheticSteeringInterrupted,
 					fmt.Sprintf("tool %q was interrupted to apply pending user steering", decision.ToolName))
 			} else if ctx.Err() != nil {
-				return agent.ToolResult{}, err
+				return agentschema.ToolResult{}, err
 			} else {
 				result, record := projectToolError(decision, args, result, toolErr, m.toolResultLimitBytes())
 				result, effectErr := appendAgentMutationEffect(result, record)
@@ -181,7 +186,7 @@ func (m *OrchestratorMiddleware) WrapToolCall(
 					return result, effectErr
 				}
 				recordToolExecution(ctx, record)
-				if agent.IsToolControlError(toolErr) {
+				if sdktool.IsToolControlError(toolErr) {
 					return result, toolErr
 				}
 				return result, nil
@@ -208,7 +213,7 @@ func (m *OrchestratorMiddleware) WrapToolCall(
 	}, nil
 }
 
-func appendAgentMutationEffect(result agent.ToolResult, record agenttool.ExecutionRecord) (agent.ToolResult, error) {
+func appendAgentMutationEffect(result agentschema.ToolResult, record agenttool.ExecutionRecord) (agentschema.ToolResult, error) {
 	effect, present, err := AgentToolMutationEffect(record)
 	if err != nil || !present {
 		return result, err
@@ -217,7 +222,7 @@ func appendAgentMutationEffect(result agent.ToolResult, record agenttool.Executi
 	return result, nil
 }
 
-func projectToolError(decision agenttool.Decision, args string, returned agent.ToolResult, err error, maxBytes int) (agent.ToolResult, agenttool.ExecutionRecord) {
+func projectToolError(decision agenttool.Decision, args string, returned agentschema.ToolResult, err error, maxBytes int) (agentschema.ToolResult, agenttool.ExecutionRecord) {
 	message, structured := producttools.FormatWorkspaceChangeError(decision.ToolName, err)
 	display := boundedToolErrorDiagnostic(err)
 	if structured {
@@ -227,14 +232,14 @@ func projectToolError(decision agenttool.Decision, args string, returned agent.T
 	} else {
 		message = fmt.Sprintf("[tool error] %v", err)
 	}
-	errorResult := agent.ToolErrorResult(strings.ToValidUTF8(message, "\uFFFD"), display)
+	errorResult := sdktool.ToolErrorResult(strings.ToValidUTF8(message, "\uFFFD"), display)
 	// Details is a terminal product receipt, not display content. Preserve a
 	// valid receipt even when the tool reports a transport/domain error after the
 	// workspace effect committed.
 	if len(returned.Details) != 0 {
 		errorResult.Details = append(errorResult.Details[:0], returned.Details...)
 	}
-	errorResult.Artifacts = append([]agent.ToolArtifactRef(nil), returned.Artifacts...)
+	errorResult.Artifacts = append([]agentschema.ToolArtifactRef(nil), returned.Artifacts...)
 	errorResult.ContextHints = returned.ContextHints
 	errorResult.Metadata.OriginalModelBytes = returned.Metadata.OriginalModelBytes
 	errorResult.Metadata.OriginalDisplayBytes = returned.Metadata.OriginalDisplayBytes
@@ -312,7 +317,7 @@ func (m *OrchestratorMiddleware) toolResultLimitBytes() int {
 	return toolresult.NormalizeLimitBytes(m.toolResultMaxBytes)
 }
 
-func (m *OrchestratorMiddleware) buildToolDecision(ctx context.Context, toolCtx *agent.ToolContext, args string) agenttool.Decision {
+func (m *OrchestratorMiddleware) buildToolDecision(ctx context.Context, toolCtx *agentmiddleware.ToolContext, args string) agenttool.Decision {
 	name := toolName(toolCtx)
 	manifest := toolresult.UnknownManifest(name)
 	declared := toolCtx != nil && toolCtx.Definition.Info != nil
@@ -327,7 +332,7 @@ func (m *OrchestratorMiddleware) buildToolDecision(ctx context.Context, toolCtx 
 		parentCallID = strings.TrimSpace(toolCtx.ParentCallID)
 	}
 	if executionID == "" {
-		executionID = agent.ToolExecutionID(ctx, providerCallID)
+		executionID = agentexecution.ToolExecutionID(ctx, providerCallID)
 	}
 	decision := agenttool.Decision{
 		ToolName: manifest.Name, ProviderCallID: providerCallID,
@@ -373,7 +378,7 @@ func (m *OrchestratorMiddleware) effectivePolicyKind() string {
 	return m.agentKind
 }
 
-func toolCallID(toolCtx *agent.ToolContext) string {
+func toolCallID(toolCtx *agentmiddleware.ToolContext) string {
 	if toolCtx == nil {
 		return ""
 	}

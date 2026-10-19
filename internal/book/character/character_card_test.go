@@ -1,9 +1,12 @@
 package character
 
 import (
+	"bytes"
 	"denova/internal/book/lore"
 	"encoding/base64"
 	"encoding/binary"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -184,7 +187,7 @@ func TestServiceImportTavernCharacterCardImportsPNGCoverOpeningsAndUserPlacehold
 	if result.UserCharacterName != "韩澈" {
 		t.Fatalf("用户角色名不符合预期: %#v", result)
 	}
-	cover, err := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(tavernCardCoverPath)))
+	cover, err := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(result.CoverPath)))
 	if err != nil {
 		t.Fatalf("读取封面失败: %v", err)
 	}
@@ -301,7 +304,7 @@ func TestTavernWorldbookIsNormalizedWithoutLoadingEngine(t *testing.T) {
 	if strings.Join(location.Keywords, ",") != "旧港,港口,雨夜" || strings.Contains(location.Content, "UpdateVariable") {
 		t.Fatalf("关键词应合并去重且运行块应被清洗: %#v", location)
 	}
-	if rumor.Enabled || rumor.LoadMode != lore.LoadModeAuto || rumor.Type != "other" || rumor.TypeSource != lore.TypeSourceHeuristic {
+	if rumor.Enabled || rumor.LoadMode != lore.LoadModeAuto || rumor.Type != "world" || rumor.TypeSource != lore.TypeSourceHeuristic {
 		t.Fatalf("无明确类型信号的禁用条目应保留为按需 other，等待后续整理: %#v", rumor)
 	}
 	if location.Provenance == nil || location.Provenance.SourceRecordID != "7" || location.Provenance.SourceHash == "" {
@@ -335,12 +338,12 @@ func TestLoreClassificationHeuristicRecognizesCommonWorldbookNames(t *testing.T)
 		"角色档案·戒律长老":               "character",
 		"地点：旧港":                   "location",
 		"宗门：青岚宗":                  "faction",
-		"力量体系：灵脉":                 "rule",
+		"力量体系：灵脉":                 "world",
 		"法宝：照夜镜":                  "item",
 		"世界观：黄昏纪元":                "world",
 		"Character Profile: Iris": "character",
 		"Location - Old Harbor":   "location",
-		"远方传闻":                    "other",
+		"远方传闻":                    "world",
 	}
 	for name, want := range tests {
 		got := lore.ClassifyItemHeuristic(lore.ClassificationInput{Name: name})
@@ -411,7 +414,7 @@ func TestCharacterCardImportDoesNotPersistLowConfidenceSemanticSuggestion(t *tes
 		t.Fatal(err)
 	}
 	for _, item := range items {
-		if item.Name == "沈凝" && (item.Type != "other" || item.TypeSource != lore.TypeSourceHeuristic) {
+		if item.Name == "沈凝" && (item.Type != "world" || item.TypeSource != lore.TypeSourceHeuristic) {
 			t.Fatalf("low-confidence semantic suggestion must not overwrite the heuristic result: %#v", item)
 		}
 	}
@@ -505,13 +508,75 @@ func hasCompatibilityField(fields []string, want string) bool {
 }
 
 func makeTestPNGTextChunk(keyword, text string) []byte {
-	var data []byte
-	data = append(data, pngSignature...)
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		panic(err)
+	}
+	data := encoded.Bytes()
+	data = data[:len(data)-12]
 	chunkData := append([]byte(keyword), 0)
 	chunkData = append(chunkData, []byte(text)...)
 	data = appendPNGChunk(data, "tEXt", chunkData)
 	data = appendPNGChunk(data, "IEND", nil)
 	return data
+}
+
+func TestImportedCardMaterialsStayIndependentAndRollback(t *testing.T) {
+	workspace := t.TempDir()
+	service := NewService(workspace)
+	store := lore.NewStore(workspace)
+	var paths []string
+	for _, name := range []string{"First", "Second"} {
+		data := makeTestPNGTextChunk("chara", base64.StdEncoding.EncodeToString([]byte(`{"name":"`+name+`","description":"Description","first_mes":"Opening"}`)))
+		result, err := service.ImportTavernCard(name+".png", data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		item, err := store.ReadAny(result.ItemIDs[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if item.Image == nil || item.Materials == nil || len(item.ResolvedMaterials) != 1 || item.Materials.CoverAssetID != item.ResolvedMaterials[0].ID {
+			t.Fatalf("missing material cover: %+v", item)
+		}
+		if strings.Contains(item.Content, "![") {
+			t.Fatalf("portrait leaked into text: %s", item.Content)
+		}
+		path := item.Image.ImagePath
+		if path == tavernCardCoverPath {
+			t.Fatal("lore must not share the mutable book cover")
+		}
+		paths = append(paths, path)
+		saved, err := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(path)))
+		if err != nil || !bytes.Equal(saved, data) {
+			t.Fatalf("material bytes: %v", err)
+		}
+		bookCover, err := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(tavernCardCoverPath)))
+		if err != nil || !bytes.Equal(bookCover, data) {
+			t.Fatalf("book cover bytes: %v", err)
+		}
+	}
+	if paths[0] == paths[1] {
+		t.Fatal("imports share the same material file")
+	}
+	first, err := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(paths[0])))
+	if err != nil || !bytes.Contains(first, []byte(base64.StdEncoding.EncodeToString([]byte(`{"name":"First","description":"Description","first_mes":"Opening"}`)))) {
+		t.Fatalf("first portrait was overwritten: %v", err)
+	}
+	snapshots, err := snapshotCharacterCardImportFiles(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid := appendPNGChunk(appendPNGChunk(append([]byte{}, pngSignature...), "tEXt", append([]byte("chara\x00"), []byte(base64.StdEncoding.EncodeToString([]byte(`{"name":"Invalid","first_mes":"Changed"}`)))...)), "IEND", nil)
+	if _, err := service.ImportTavernCard("invalid.png", invalid); err == nil {
+		t.Fatal("expected invalid image to fail")
+	}
+	for _, snapshot := range snapshots {
+		data, err := os.ReadFile(snapshot.path)
+		if err != nil || !bytes.Equal(data, snapshot.data) {
+			t.Fatalf("rollback did not restore %s: %v", snapshot.path, err)
+		}
+	}
 }
 
 func appendPNGChunk(dst []byte, chunkType string, chunkData []byte) []byte {

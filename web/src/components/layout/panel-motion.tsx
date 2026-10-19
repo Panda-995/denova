@@ -126,8 +126,6 @@ export function CollapsibleResizablePanel({
   const hasBeenVisibleRef = useRef(visible)
   const lastVisibleSizeRef = useRef<number | null>(null)
   const restorationKeyRef = useRef(restorationKey)
-  const hasCollapsedContent = collapsedChildren !== null && collapsedChildren !== undefined
-  const stableContentMinWidth = typeof panelProps.minSize === 'number' ? `${panelProps.minSize}px` : panelProps.minSize
   const handleResize = useCallback<NonNullable<PanelProps['onResize']>>((size, id, previousSize) => {
     onResize?.(size, id, previousSize)
     if (visible && Number.isFinite(size.inPixels) && size.inPixels > 0) {
@@ -182,14 +180,35 @@ export function CollapsibleResizablePanel({
   }, [initialExpandSize, panelRef, programmaticCollapseEnabled, restorationKey, visible])
 
   return (
-    <Panel
+    <PanelMotionPanel
       {...panelProps}
+      visible={visible}
+      side={side}
+      collapsedChildren={collapsedChildren}
+      contentClassName={contentClassName}
+      className={className}
       defaultSize={visible ? panelProps.defaultSize : collapsedSize}
       panelRef={panelRef}
       onResize={handleResize}
       collapsedSize={collapsedSize}
       collapsible={!visible || programmaticCollapseEnabled}
       disabled={!visible}
+    >
+      {children}
+    </PanelMotionPanel>
+  )
+}
+
+/** Presentation only: the containing Group owns all sizing and visibility constraints. */
+export function PanelMotionPanel({
+  visible, side, children, collapsedSize = '0px', collapsedChildren, className, contentClassName, ...panelProps
+}: PanelProps & Pick<CollapsibleResizablePanelProps, 'visible' | 'side' | 'collapsedChildren' | 'contentClassName'>) {
+  const hasCollapsedContent = collapsedChildren !== null && collapsedChildren !== undefined
+  const stableContentMinWidth = typeof panelProps.minSize === 'number' ? `${panelProps.minSize}px` : panelProps.minSize
+  return (
+    <Panel
+      {...panelProps}
+      collapsedSize={collapsedSize}
       aria-hidden={!visible && !hasCollapsedContent}
       inert={!visible && !hasCollapsedContent}
       data-nova-panel-motion="resizable"

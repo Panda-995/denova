@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-	"github.com/alfredxw/denova/agent/providers"
+	"github.com/alfredxw/denova/agent/model/providers"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestModelContextBatchPersistsWithoutAdvancingBranch(t *testing.T) {
@@ -425,7 +425,7 @@ func TestTurnAbsorbsMixedAgentContextKindsFromCanonicalBatches(t *testing.T) {
 	if _, err := store.CommitPlayerInput(story.ID, input); err != nil {
 		t.Fatal(err)
 	}
-	state := agent.UserMessage("current state")
+	state := agentschema.UserMessage("current state")
 	state.Extra = map[string]any{
 		"agent.context_state":             "v1",
 		"agent.context_state.operation":   "upsert",
@@ -436,8 +436,8 @@ func TestTurnAbsorbsMixedAgentContextKindsFromCanonicalBatches(t *testing.T) {
 		"agent.context_state.revision":    "revision-1",
 		"agent.context_state.fingerprint": strings.Repeat("a", 64),
 	}
-	completion := agent.UserMessage("child result")
-	completion.TaskCompletion = &agent.TaskCompletionMessageMeta{
+	completion := agentschema.UserMessage("child result")
+	completion.TaskCompletion = &agentschema.TaskCompletionMessageMeta{
 		CompletionID: "completion-mixed", Author: "researcher", Recipient: "parent",
 	}
 	batches := []struct {
@@ -492,9 +492,9 @@ func durableModelContextBatchFixtureForCall(callID, evidence string) []ModelCont
 		},
 		{
 			Role: "tool", ToolCallID: callID, ToolName: "web_fetch", Content: evidence,
-			ToolResult: &agent.ToolResultSummary{
-				Status: agent.ToolResultSuccess, ResultRetention: agent.ToolResultEagerCandidate,
-				Artifacts: []agent.ToolArtifactRef{{ReadablePath: ".denova/artifacts/game/fetch.txt", EstimatedBytes: 4096, Complete: true}},
+			ToolResult: &agentschema.ToolResultSummary{
+				Status: agentschema.ToolResultSuccess, ResultRetention: agentschema.ToolResultEagerCandidate,
+				Artifacts: []agentschema.ToolArtifactRef{{ReadablePath: ".denova/artifacts/game/fetch.txt", EstimatedBytes: 4096, Complete: true}},
 			},
 		},
 	}

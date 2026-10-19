@@ -13,32 +13,38 @@ import { CompactResourcePicker } from './CompactResourcePicker'
 import { useIsMobile } from '@/hooks/useIsMobile'
 
 export interface StoryPickerProps {
-  stories: StorySummary[]
+  stories: StoryPickerItem[]
   currentStoryId: string
   onSelect: (storyId: string) => void
   onCreate: () => void
   onDeleteStories: (storyIds: string[]) => void | Promise<void>
   onRenameStory?: (storyId: string, title: string) => void | Promise<void>
   layout?: 'inline' | 'sidebar'
+  /** Compact stage controls shorten the selected title and use an icon-only create action. */
+  variant?: 'default' | 'compact'
   hideCreate?: boolean
   onOpenHistory?: () => void
 }
 
-export function StoryPicker({ stories, currentStoryId, onSelect, onCreate, onDeleteStories, onRenameStory, layout = 'inline', hideCreate = false, onOpenHistory }: StoryPickerProps) {
+export type StoryPickerItem = Pick<StorySummary, 'id' | 'title' | 'updated_at'> & { turn_count?: number; title_source?: StorySummary['title_source']; gameName?: string }
+
+export function StoryPicker({ stories, currentStoryId, onSelect, onCreate, onDeleteStories, onRenameStory, layout = 'inline', variant = 'default', hideCreate = false, onOpenHistory }: StoryPickerProps) {
   const { t } = useTranslation()
   const isMobile = useIsMobile()
   const titleMenu = isMobile && layout === 'inline'
   const [selectingForDelete, setSelectingForDelete] = useState(false)
   const [deleteSelection, setDeleteSelection] = useState<Set<string>>(() => new Set())
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
-  const [renameStory, setRenameStory] = useState<StorySummary | null>(null)
+  const [renameStory, setRenameStory] = useState<StoryPickerItem | null>(null)
   const [renameTitle, setRenameTitle] = useState('')
   const [renameError, setRenameError] = useState('')
   const [renaming, setRenaming] = useState(false)
   const selectedStories = stories.filter((story) => deleteSelection.has(story.id))
   const currentStory = stories.find((story) => story.id === currentStoryId)
+  const titleCharacters = Array.from(currentStory?.title || '')
+  const triggerLabel = variant === 'compact' && titleCharacters.length > 6 ? `${titleCharacters.slice(0, 6).join('')}…` : undefined
   const allStoriesSelected = stories.length > 0 && selectedStories.length === stories.length
-  const createButton = hideCreate ? null : <Button type="button" variant="ghost" size="xs" className="nova-nav-item" aria-label={t('chat.new')} title={t('chat.new')} onClick={onCreate}><Plus data-icon="inline-start" /><span className="max-lg:sr-only">{t('chat.new')}</span></Button>
+  const createButton = hideCreate ? null : <Button type="button" variant="ghost" size={variant === 'compact' ? 'icon-sm' : 'xs'} className="nova-nav-item" aria-label={t('chat.new')} title={t('chat.new')} onClick={onCreate}><Plus data-icon={variant === 'compact' ? undefined : 'inline-start'} />{variant !== 'compact' && <span className="max-lg:sr-only">{t('chat.new')}</span>}</Button>
 
   const beginDeleteSelection = () => {
     const initialStoryId = stories.some((story) => story.id === currentStoryId) ? currentStoryId : stories[0]?.id
@@ -112,6 +118,7 @@ export function StoryPicker({ stories, currentStoryId, onSelect, onCreate, onDel
         placeholder={t('storyPicker.placeholder')}
         emptyLabel={t('storyPicker.empty')}
         layout={layout}
+        triggerLabel={triggerLabel}
         contentClassName="w-[min(calc(100vw-2rem),22rem)]"
         triggerClassName={titleMenu ? 'nova-mobile-story-title' : undefined}
         trailingAction={titleMenu ? null : createButton}
@@ -148,7 +155,7 @@ export function StoryPicker({ stories, currentStoryId, onSelect, onCreate, onDel
                 {selected ? <Check className="size-3.5 shrink-0 text-[var(--nova-text-faint)]" /> : null}
               </span>
               <span className="flex min-w-0 items-center gap-2 text-[11px] leading-4 text-[var(--nova-text-faint)]">
-                <span className="shrink-0">{t('storyPicker.turnCount', { count: story.turn_count })}</span>
+                <span className="min-w-0 truncate">{story.gameName ?? t('storyPicker.turnCount', { count: story.turn_count ?? 0 })}</span>
                 {lastTurnTime ? (
                   <>
                     <span aria-hidden="true">·</span>
@@ -160,7 +167,7 @@ export function StoryPicker({ stories, currentStoryId, onSelect, onCreate, onDel
           )
         }}
         renderFooter={(close) => selectingForDelete ? (
-          <div className="sticky bottom-0 mt-1 space-y-1 border-t border-[var(--nova-border)] bg-[var(--nova-surface-2)] pt-1">
+          <div className="mt-1 flex flex-col gap-1 border-t border-[var(--nova-border)] bg-[var(--nova-surface-2)] pt-1">
             <div className="flex items-center justify-between gap-2 px-2 py-0.5 text-[11px] text-[var(--nova-text-faint)]">
               <span>{t('storyPicker.selectedCount', { count: selectedStories.length })}</span>
               <Button
@@ -194,7 +201,7 @@ export function StoryPicker({ stories, currentStoryId, onSelect, onCreate, onDel
             </div>
           </div>
         ) : (
-          <div className="sticky bottom-0 mt-1 space-y-0.5 border-t border-[var(--nova-border)] bg-[var(--nova-surface-2)] pt-1">
+          <div className="mt-1 flex flex-col gap-0.5 border-t border-[var(--nova-border)] bg-[var(--nova-surface-2)] pt-1">
             {titleMenu && !hideCreate && <Button variant="ghost" className="w-full justify-start" onClick={() => { close(); onCreate() }}><Plus />{t('chat.new')}</Button>}
             {onOpenHistory && <Button variant="ghost" className="w-full justify-start" onClick={() => { close(); onOpenHistory() }} aria-label={t('storyStage.turnNavigator.label')}><History />{t('storyStage.mobile.history')}</Button>}
             {currentStory && onRenameStory ? (

@@ -83,7 +83,7 @@ func (s *Store) readStoryRecentLocked(storyID, branchID string) (StoryMeta, []St
 	if err != nil {
 		return StoryMeta{}, nil, err
 	}
-	loaded.records = boundStoryRecentCacheRecords(loaded.meta, branchID, loaded.records)
+	loaded.records = completeStoryRecentRecords(handle.projection, loaded.meta, branchID, loaded.records)
 	handle, err = s.openStoryJournalLocked(storyID)
 	if err != nil {
 		return StoryMeta{}, nil, err
@@ -96,6 +96,13 @@ func (s *Store) readStoryRecentLocked(storyID, branchID string) (StoryMeta, []St
 
 func cacheStoryRecentLoaded(handle *storyJournalHandle, branchID string, meta StoryMeta, records []StoryEventRecord) error {
 	if handle == nil || handle.journal == nil {
+		return nil
+	}
+	records = completeStoryRecentRecords(handle.projection, meta, branchID, records)
+	// An active input's complete context is recovery data. If it exceeds the
+	// resident cache, read it from the journal instead of caching a partial view.
+	if branch := handle.projection.Branches[branchID]; branch != nil && len(branch.PendingPlayerInputIDs) > 0 && len(records) > storyRecentCacheRecordLimit {
+		delete(handle.recent, branchID)
 		return nil
 	}
 	records = boundStoryRecentCacheRecords(meta, branchID, records)
@@ -145,9 +152,48 @@ func advanceStoryRecentCaches(handle *storyJournalHandle, cursor conversationjou
 				cached.records = append(cached.records, event)
 			}
 		}
+		cached.records = completeStoryRecentRecords(handle.projection, meta, branchID, cached.records)
+		if branch := handle.projection.Branches[branchID]; branch != nil && len(branch.PendingPlayerInputIDs) > 0 && len(cached.records) > storyRecentCacheRecordLimit {
+			delete(handle.recent, branchID)
+			continue
+		}
 		cached.records = boundStoryRecentCacheRecords(meta, branchID, cached.records)
 		handle.recent[branchID] = cached
 	}
+}
+
+// completeStoryRecentRecords bounds presentation data only when every active
+// input and its tool batches survive. Larger active context is read through the
+// journal and deliberately not installed in the resident cache.
+func completeStoryRecentRecords(projection *storyJournalProjection, meta StoryMeta, branchID string, records []StoryEventRecord) []StoryEventRecord {
+	bounded := boundStoryRecentCacheRecords(meta, branchID, records)
+	branch := projection.Branches[branchID]
+	if len(bounded) == len(records) || branch == nil || len(branch.PendingPlayerInputIDs) == 0 {
+		return bounded
+	}
+	pending := make(map[string]bool, len(branch.PendingPlayerInputIDs))
+	for _, id := range branch.PendingPlayerInputIDs {
+		pending[id] = true
+	}
+	kept := make(map[string]bool, len(bounded))
+	for _, record := range bounded {
+		kept[record.Envelope.ID] = true
+	}
+	for _, record := range records {
+		if kept[record.Envelope.ID] {
+			continue
+		}
+		if record.Envelope.Type == StoryEventTypePlayerInput && pending[record.Envelope.ID] {
+			return records
+		}
+		if record.Envelope.Type == StoryEventTypeModelContextBatch {
+			input, _ := record.Raw["player_input_id"].(string)
+			if pending[input] {
+				return records
+			}
+		}
+	}
+	return bounded
 }
 
 // boundStoryRecentCacheRecords keeps the bounded cache useful as a branch
@@ -170,9 +216,6 @@ func boundStoryRecentCacheRecords(meta StoryMeta, branchID string, records []Sto
 	}
 
 	_, activePath := eventPath(branch.Head, eventsByID(records))
-	if len(activePath) == 0 {
-		return append([]StoryEventRecord(nil), records[len(records)-storyRecentCacheRecordLimit:]...)
-	}
 	keep := make([]bool, len(records))
 	kept := 0
 
@@ -233,6 +276,10 @@ func (s *Store) storyBranchProjectionLocked(storyID, branchID string) (*storyBra
 }
 
 func (s *Store) readStoryHistoryPageLocked(storyID, branchID, beforeCursor string, limit int, repairTornTail bool) (loadedStoryHistoryPage, error) {
+	return s.readStoryHistoryForViewLocked(storyID, branchID, beforeCursor, limit, repairTornTail, storyHistoryModel)
+}
+
+func (s *Store) readStoryHistoryForViewLocked(storyID, branchID, beforeCursor string, limit int, repairTornTail bool, view storyHistoryView) (loadedStoryHistoryPage, error) {
 	release, err := s.acquireStoryReadLeaseLocked(storyID)
 	if err != nil {
 		return loadedStoryHistoryPage{}, err
@@ -278,6 +325,11 @@ func (s *Store) readStoryHistoryPageLocked(storyID, branchID, beforeCursor strin
 		targetID = cursor.TargetID
 	}
 
+	pageThrough := through
+	scanSize := storyHistoryScanTransactions
+	if view != storyHistoryModel {
+		scanSize = min(limit, storyHistoryScanTransactions)
+	}
 	pathNewestFirst := make([]locatedStoryRecord, 0, limit*2)
 	sideRecords := make([]locatedStoryRecord, 0, limit*2)
 	turnsFound := 0
@@ -285,15 +337,27 @@ func (s *Store) readStoryHistoryPageLocked(storyID, branchID, beforeCursor strin
 	var bytesRead int64
 	physicalSeen := make(map[conversationjournal.Cursor]bool)
 	transactionSeen := make(map[conversationjournal.Cursor]bool)
+	// Pending inputs can predate the display tail even before the first Turn.
+	// Read through their acceptance so all intervening tool batches remain
+	// available to canonical commit and cold recovery.
+	pendingInputs := make(map[string]bool)
+	if beforeCursor == "" {
+		for _, id := range projection.PendingPlayerInputIDs {
+			pendingInputs[id] = true
+		}
+	}
 	firstScan := true
-	for through > 0 && (firstScan || (nextTargetID != "" && turnsFound < limit)) {
+	versionBoundaryFound := false
+	// Include older rerolls of the first displayed turn, stopping at its parent.
+	// A root turn has no parent, so its versions can extend to the journal start.
+	for through > 0 && (firstScan || len(pendingInputs) > 0 || (nextTargetID != "" && turnsFound < limit) || (view == storyHistoryDisplay && !versionBoundaryFound && turnsFound > 0)) {
 		firstScan = false
 		after := conversationjournal.Cursor(0)
-		if through > storyHistoryScanTransactions {
-			after = through - storyHistoryScanTransactions
+		if through > conversationjournal.Cursor(scanSize) {
+			after = through - conversationjournal.Cursor(scanSize)
 		}
 		records, readErr := handle.journal.ReadRange(context.Background(), conversationjournal.Range{
-			After: after, Through: through, Limit: storyHistoryScanTransactions,
+			After: after, Through: through, Limit: scanSize,
 		})
 		if readErr != nil {
 			return loadedStoryHistoryPage{}, readErr
@@ -310,8 +374,14 @@ func (s *Store) readStoryHistoryPageLocked(storyID, branchID, beforeCursor strin
 		if decodeErr != nil {
 			return loadedStoryHistoryPage{}, decodeErr
 		}
+		if view != storyHistoryModel {
+			located = storyDisplayRecords(located)
+		}
 		byID := make(map[string]locatedStoryRecord, len(located))
 		for _, item := range located {
+			if item.record.Envelope.Type == StoryEventTypePlayerInput {
+				delete(pendingInputs, item.record.Envelope.ID)
+			}
 			if item.record.Envelope.ID != "" {
 				byID[item.record.Envelope.ID] = item
 			}
@@ -330,10 +400,20 @@ func (s *Store) readStoryHistoryPageLocked(storyID, branchID, beforeCursor strin
 				turnsFound++
 			}
 		}
+		if view == storyHistoryDisplay && turnsFound >= limit {
+			if _, found := byID[nextTargetID]; found {
+				versionBoundaryFound = true
+			}
+			// Usually only the immediate parent remains; do not read another page.
+			scanSize = 1
+		}
 		through = after
 		if after == 0 {
 			break
 		}
+	}
+	if len(pendingInputs) > 0 {
+		return loadedStoryHistoryPage{}, fmt.Errorf("pending player inputs are missing from the canonical journal")
 	}
 	if nextTargetID != "" && through == 0 && turnsFound < limit {
 		return loadedStoryHistoryPage{}, fmt.Errorf("故事分支父链不完整: missing=%s", nextTargetID)
@@ -366,15 +446,31 @@ func (s *Store) readStoryHistoryPageLocked(storyID, branchID, beforeCursor strin
 	} else {
 		snapshot.PendingModelContextBatches = filteredBatches
 	}
+	if view == storyHistoryDisplay {
+		for index := range snapshot.Turns {
+			turn := &snapshot.Turns[index]
+			if summarizeStoryExecution(turn) {
+				turn.ExecutionCursor, err = encodeStoryHistoryCursor(storyHistoryCursor{
+					Version: storyHistoryCursorVersion, Generation: handle.projection.Generation,
+					BranchID: branchID, Through: pageThrough, TargetID: turn.ID,
+				})
+				if err != nil {
+					return loadedStoryHistoryPage{}, err
+				}
+			}
+		}
+		if len(snapshot.Turns) > 0 {
+			snapshot.CurrentTurn = &snapshot.Turns[len(snapshot.Turns)-1]
+		}
+	}
 	turns := snapshot.Turns
 	hasMore := nextTargetID != ""
 	nextCursor := ""
 	if hasMore && len(pathNewestFirst) > 0 {
 		oldest := pathNewestFirst[len(pathNewestFirst)-1]
-		nextThrough := conversationjournal.Cursor(0)
-		if oldest.cursor > 1 {
-			nextThrough = oldest.cursor - 1
-		}
+		// Multiple turns may share a transaction; TargetID selects the next
+		// ancestor without skipping the remainder of that physical record.
+		nextThrough := oldest.cursor
 		nextCursor, err = encodeStoryHistoryCursor(storyHistoryCursor{
 			Version: storyHistoryCursorVersion, Generation: handle.projection.Generation,
 			BranchID: branchID, Through: nextThrough, TargetID: nextTargetID,
@@ -454,7 +550,7 @@ func storyHistoryProjectionRecords(pathNewestFirst, candidates []locatedStoryRec
 			// A bounded recent graph may include neighboring branches. Only the
 			// active ancestry contributes snapshot.Turns or model context.
 			include = record.Envelope.BranchID != branchID || versionKeys[turnVersionKey(branchID, parentIDFromRaw(record.Raw))]
-		case StoryEventTypeTurnNarrativeRevised, StoryEventTypeTurnDisplayAppended, StoryEventTypeTurnStateRevised:
+		case StoryEventTypeTurnBackgroundRevised, StoryEventTypeTurnNarrativeRevised, StoryEventTypeTurnDisplayAppended, StoryEventTypeTurnStateRevised:
 			include = pathIDs[storyRevisionTurnID(record)]
 		case StoryEventTypeHotChoices:
 			include = pathIDs[parentIDFromRaw(record.Raw)]
@@ -495,6 +591,10 @@ func storyHistoryProjectionRecords(pathNewestFirst, candidates []locatedStoryRec
 
 func storyRevisionTurnID(record StoryEventRecord) string {
 	switch record.Envelope.Type {
+	case StoryEventTypeTurnBackgroundRevised:
+		var event TurnBackgroundRevisedEvent
+		_ = mapToStruct(record.Raw, &event)
+		return event.TurnID
 	case StoryEventTypeTurnNarrativeRevised:
 		var event TurnNarrativeRevisedEvent
 		_ = mapToStruct(record.Raw, &event)
@@ -515,7 +615,7 @@ func storyRevisionTurnID(record StoryEventRecord) string {
 func isStoryHistorySideCandidate(eventType string) bool {
 	switch eventType {
 	case StoryEventTypeTurn, StoryEventTypePlayerInput, StoryEventTypeTurnInterrupted, StoryEventTypeModelContextBatch, StoryEventTypeModelContextProviderContinuation, StoryEventTypeProviderContinuation, StoryEventTypeHotChoices,
-		StoryEventTypeTurnNarrativeRevised, StoryEventTypeTurnDisplayAppended, StoryEventTypeTurnStateRevised:
+		StoryEventTypeTurnBackgroundRevised, StoryEventTypeTurnNarrativeRevised, StoryEventTypeTurnDisplayAppended, StoryEventTypeTurnStateRevised:
 		return true
 	default:
 		return false

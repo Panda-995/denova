@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Spinner } from '@/components/ui/spinner'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,6 +18,7 @@ interface ConfirmDialogProps {
   title: string
   description: ReactNode
   confirmLabel?: string
+  pendingLabel?: string
   /** danger 时确认按钮使用危险色，用于删除等不可逆操作 */
   tone?: 'default' | 'danger'
   /** 附加明细列表（如受影响的多个路径），仅在多于一条时展示 */
@@ -34,6 +36,7 @@ export function ConfirmDialog({
   title,
   description,
   confirmLabel,
+  pendingLabel,
   tone = 'default',
   details,
   detailContent,
@@ -86,12 +89,14 @@ export function ConfirmDialog({
           <AlertDialogAction
             variant={tone === 'danger' ? 'destructive' : 'default'}
             disabled={submitting}
+            aria-busy={submitting}
             onClick={(e) => {
               e.preventDefault()
               void handleConfirm()
             }}
           >
-            {confirmLabel ?? t('common.confirm')}
+            {submitting && <Spinner aria-hidden="true" />}
+            {submitting && pendingLabel ? pendingLabel : confirmLabel ?? t('common.confirm')}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

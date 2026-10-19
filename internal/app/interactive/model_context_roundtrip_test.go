@@ -2,18 +2,18 @@ package interactiveapp
 
 import (
 	"context"
-	"denova/internal/agents/toolresult"
 	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-	"github.com/alfredxw/denova/agent/providers"
-
-	agents "denova/internal/agents"
+	"denova/internal/agents"
 	agentrun "denova/internal/agents/run"
+	"denova/internal/agents/toolresult"
 	"denova/internal/interactive"
+
+	"github.com/alfredxw/denova/agent/model/providers"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestInteractiveProviderContinuationSurvivesTurnCommitAndReload(t *testing.T) {
@@ -97,6 +97,7 @@ func TestInteractiveProviderContinuationSurvivesTurnCommitAndReload(t *testing.T
 	if strings.Contains(string(publicJSON), "encrypted-state") || strings.Contains(string(publicJSON), "tool-encrypted-state") || strings.Contains(string(publicJSON), providers.ExtraKeyContinuation) {
 		t.Fatalf("opaque provider continuation leaked into public Game snapshot: %s", publicJSON)
 	}
+	assertGameCanonicalWindow(t, NewConversation(reloaded, "", workspace, story.ID, "main", "", 0, nil))
 }
 
 func TestInteractiveToolResultSummaryRoundTripsThroughStorySchema(t *testing.T) {
@@ -106,21 +107,21 @@ func TestInteractiveToolResultSummaryRoundTripsThroughStorySchema(t *testing.T) 
 		Name:       "read result",
 		ToolCallID: "call-read-1",
 		ToolName:   "read",
-		ToolResult: &agent.ToolResultSummary{
-			Status:           agent.ToolResultError,
-			SyntheticReason:  agent.ToolSyntheticEffectUnknown,
+		ToolResult: &agentschema.ToolResultSummary{
+			Status:           agentschema.ToolResultError,
+			SyntheticReason:  agentschema.ToolSyntheticEffectUnknown,
 			ModelTruncated:   true,
 			DisplayTruncated: true,
-			ResultRetention:  agent.ToolResultProtected,
-			ContextHints: &agent.ToolResultContextHints{
-				Recovery: agent.ToolResultRecoveryHint{
-					Kind: agent.ToolResultRecoveryRead, Reference: map[string]any{"path": "chapters/one.md", "start_line": float64(10)},
+			ResultRetention:  agentschema.ToolResultProtected,
+			ContextHints: &agentschema.ToolResultContextHints{
+				Recovery: agentschema.ToolResultRecoveryHint{
+					Kind: agentschema.ToolResultRecoveryRead, Reference: map[string]any{"path": "chapters/one.md", "start_line": float64(10)},
 					ArtifactPath: ".denova/artifacts/story/call-read-1.log", EstimatedBytes: 64_000, EstimatedTokens: 16_000,
 				},
-				ContextValue: agent.ToolResultContextDiscardable, SupersessionKey: "read:chapters/one.md",
+				ContextValue: agentschema.ToolResultContextDiscardable, SupersessionKey: "read:chapters/one.md",
 			},
-			ArtifactPersistence: &agent.ToolArtifactPersistence{Attempted: true, Complete: false, FailureReason: agent.ToolArtifactFailureWrite},
-			Artifacts: []agent.ToolArtifactRef{{
+			ArtifactPersistence: &agentschema.ToolArtifactPersistence{Attempted: true, Complete: false, FailureReason: agentschema.ToolArtifactFailureWrite},
+			Artifacts: []agentschema.ToolArtifactRef{{
 				ID: "artifact-1", ReadablePath: ".denova/artifacts/story/call-read-1.log", ContentType: "text/plain",
 				EstimatedBytes: 64_000, EstimatedTokens: 16_000, Complete: true,
 			}},
@@ -192,10 +193,10 @@ func TestInteractiveMultiToolBatchesRoundTripWithProviderLocalIDReuse(t *testing
 	}})
 	source := []*agents.Message{
 		first,
-		agents.ToolMessage(agent.TextToolResult("lore one"), "provider-local"),
-		agents.ToolMessage(agent.TextToolResult("history"), "parallel"),
+		agents.ToolMessage(agentschema.TextToolResult("lore one"), "provider-local"),
+		agents.ToolMessage(agentschema.TextToolResult("history"), "parallel"),
 		second,
-		agents.ToolMessage(agent.TextToolResult("lore two"), "provider-local"),
+		agents.ToolMessage(agentschema.TextToolResult("lore two"), "provider-local"),
 	}
 
 	stored := make([]interactive.ModelContextMessage, 0, len(source))
@@ -370,9 +371,6 @@ func TestInteractiveReplacementTurnReanchorsResolvedInputToReplacementSlot(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if projection.SourceTurnCount != 2 {
-		t.Fatalf("replacement compactable boundary = %d, want 2", projection.SourceTurnCount)
-	}
 	visibleText := joinedInteractiveMessageContent(projection.Messages)
 	baselineAt := strings.Index(visibleText, "baseline answer")
 	interruptedAt := strings.Index(visibleText, "interrupted replacement input")
@@ -380,7 +378,7 @@ func TestInteractiveReplacementTurnReanchorsResolvedInputToReplacementSlot(t *te
 	if baselineAt < 0 || interruptedAt < baselineAt || replacementAt < interruptedAt {
 		t.Fatalf("replacement projection order changed: %q", visibleText)
 	}
-	if sourceText := joinedInteractiveMessageContent(projection.SourceMessages); !strings.Contains(sourceText, "interrupted replacement input") || !strings.Contains(sourceText, "replacement answer") {
+	if sourceText := joinedInteractiveMessageContent(projection.Messages); !strings.Contains(sourceText, "interrupted replacement input") || !strings.Contains(sourceText, "replacement answer") {
 		t.Fatalf("replacement compaction source lost resolved context: %q", sourceText)
 	}
 }
@@ -414,10 +412,10 @@ func durableInteractiveToolBatchFixture() []*agents.Message {
 		ID: "call-fetch", Type: "function",
 		Function: agents.FunctionCall{Name: "web_fetch", Arguments: `{"url":"https://example.test/gate"}`},
 	}})
-	result := agents.ToolMessage(agent.TextToolResult("The gate was opened recently."), "call-fetch", agents.WithToolName("web_fetch"))
-	result.ToolResult = &agent.ToolResultSummary{
-		Status: agent.ToolResultSuccess, ResultRetention: agent.ToolResultEagerCandidate,
-		Artifacts: []agent.ToolArtifactRef{{ReadablePath: ".denova/artifacts/game/fetch.txt", EstimatedBytes: 4096, Complete: true}},
+	result := agents.ToolMessage(agentschema.TextToolResult("The gate was opened recently."), "call-fetch", agents.WithToolName("web_fetch"))
+	result.ToolResult = &agentschema.ToolResultSummary{
+		Status: agentschema.ToolResultSuccess, ResultRetention: agentschema.ToolResultEagerCandidate,
+		Artifacts: []agentschema.ToolArtifactRef{{ReadablePath: ".denova/artifacts/game/fetch.txt", EstimatedBytes: 4096, Complete: true}},
 	}
 	return []*agents.Message{assistant, result}
 }
@@ -431,4 +429,23 @@ func joinedInteractiveMessageContent(messages []*agents.Message) string {
 		}
 	}
 	return result.String()
+}
+
+func TestSettledContextWindowPreservesEarlierCyclesWithRepeatedToolIDs(t *testing.T) {
+	oldCall := agentschema.AssistantMessage("earlier unresolved tool prose", []agentschema.ToolCall{{ID: "reused", Type: "function", Function: agentschema.FunctionCall{Name: "read", Arguments: `{}`}}})
+	newCall := agentschema.AssistantMessage("current tool prose", []agentschema.ToolCall{{ID: "reused", Function: agentschema.FunctionCall{Name: "read", Arguments: `{}`}}})
+	messages := []*agentschema.Message{agentschema.UserMessage("earlier input"), oldCall, agentschema.ToolMessage(agentschema.TextToolResult("earlier result"), "reused"), agentschema.UserMessage("current input"), newCall, agentschema.ToolMessage(agentschema.TextToolResult("current result"), "reused"), agentschema.AssistantMessage("provider narrative", nil)}
+	projected, err := settledTurnContextWindow(messages, 3, "accepted narrative", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(projected[:4], messages[:4]) {
+		t.Fatal("settling one cycle changed earlier evidence")
+	}
+	if projected[4].Content != "" || projected[4].ToolCalls[0].Type != "function" || projected[5].Content != "current result" || projected[6].Content != "accepted narrative" {
+		t.Fatalf("incorrect settled window: %+v", projected)
+	}
+	if messages[4].Content != "current tool prose" {
+		t.Fatal("output projection mutated its input")
+	}
 }

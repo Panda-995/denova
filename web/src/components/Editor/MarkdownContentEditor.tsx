@@ -3,6 +3,8 @@ import { EditorContent, useEditor, type Editor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { TableKit } from '@tiptap/extension-table'
 import { Markdown } from '@tiptap/markdown'
+import type { Extensions } from '@tiptap/core'
+import { createMarkdownParser } from './markdownParser'
 
 import { isSaveShortcut } from '@/lib/keyboard'
 import { cn } from '@/lib/utils'
@@ -56,7 +58,11 @@ export interface MarkdownContentEditorProps {
   /** External library search query; all matches are decorated in either mode. */
   highlightQuery?: string
   onSaveShortcut?: () => void
+  autoFocus?: boolean
   review?: MarkdownContentEditorReview
+  /** Domain extensions must stay stable for the lifetime of this editor. */
+  extensions?: Extensions
+  readOnly?: boolean
   'aria-label'?: string
   className?: string
 }
@@ -73,7 +79,10 @@ export function MarkdownContentEditor({
   mode,
   highlightQuery,
   onSaveShortcut,
+  autoFocus = false,
   review,
+  extensions = [],
+  readOnly = false,
   className,
   'aria-label': ariaLabel,
 }: MarkdownContentEditorProps) {
@@ -113,15 +122,18 @@ export function MarkdownContentEditor({
   )
 
   const editor = useEditor({
+    editable: !readOnly,
+    autofocus: autoFocus ? 'end' : false,
     extensions: [
-      StarterKit.configure({ hardBreak: false }),
-      RawMarkdown,
+      StarterKit.configure({ hardBreak: false, trailingNode: { notAfter: ['rawMarkdown'] } }),
+      RawMarkdown.configure({ isSourceMode: () => modeRef.current === 'source' }),
       createIndentedHardBreakExtension(),
       searchExtension,
       workspaceImageExtension,
       reviewExtension,
       TableKit.configure({ table: { resizable: false } }),
-      Markdown.configure({ markedOptions: { gfm: true, breaks: true } }),
+      ...extensions,
+      Markdown.configure({ marked: createMarkdownParser(), markedOptions: { gfm: true, breaks: true } }),
     ],
     content: initialModeRef.current === 'source'
       ? createMarkdownSourceDocument(value)
@@ -129,7 +141,7 @@ export function MarkdownContentEditor({
     contentType: initialModeRef.current === 'source' ? 'json' : 'markdown',
     editorProps: {
       attributes: {
-        role: 'textbox',
+        role: readOnly ? 'document' : 'textbox',
         'aria-multiline': 'true',
         ...(ariaLabel ? { 'aria-label': ariaLabel } : {}),
       },

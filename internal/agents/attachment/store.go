@@ -16,7 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 const (
@@ -57,7 +57,7 @@ func StoryScope(storyID string) Scope     { return Scope{Kind: "story", ID: stor
 
 // Materialize writes deterministic per-command copies. A conflicting retry
 // cannot overwrite files referenced by the already accepted command.
-func Materialize(stateRoot string, scope Scope, commandID string, uploads []Upload) ([]agent.Attachment, error) {
+func Materialize(stateRoot string, scope Scope, commandID string, uploads []Upload) ([]agentschema.Attachment, error) {
 	stateRoot = strings.TrimSpace(stateRoot)
 	scope.Kind = strings.TrimSpace(scope.Kind)
 	scope.ID = strings.TrimSpace(scope.ID)
@@ -72,7 +72,7 @@ func Materialize(stateRoot string, scope Scope, commandID string, uploads []Uplo
 		return nil, fmt.Errorf("too many attachments: %d > %d", len(uploads), MaxFiles)
 	}
 	type decodedUpload struct {
-		attachment agent.Attachment
+		attachment agentschema.Attachment
 		data       []byte
 	}
 	decoded := make([]decodedUpload, 0, len(uploads))
@@ -98,7 +98,7 @@ func Materialize(stateRoot string, scope Scope, commandID string, uploads []Uplo
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create attachment directory: %w", err)
 	}
-	var result []agent.Attachment
+	var result []agentschema.Attachment
 	if dirCreated {
 		defer func() {
 			if result == nil {
@@ -106,7 +106,7 @@ func Materialize(stateRoot string, scope Scope, commandID string, uploads []Uplo
 			}
 		}()
 	}
-	result = make([]agent.Attachment, 0, len(decoded))
+	result = make([]agentschema.Attachment, 0, len(decoded))
 	for _, upload := range decoded {
 		attachment := upload.attachment
 		attachment.Path = relativeDir + "/" + attachment.ID + safeExtension(attachment.Name)
@@ -172,7 +172,7 @@ func ReadImage(stateRoot string, scope Scope, attachmentID string) (Image, error
 				return Image{}, fmt.Errorf("read attachment image: %w", err)
 			}
 			mediaType := http.DetectContentType(data)
-			if !agent.IsNativeImageMediaType(mediaType) {
+			if !agentschema.IsNativeImageMediaType(mediaType) {
 				return Image{}, ErrImagePreviewDisabled
 			}
 			digest := sha256.Sum256(data)
@@ -182,31 +182,31 @@ func ReadImage(stateRoot string, scope Scope, attachmentID string) (Image, error
 	return Image{}, ErrImageNotFound
 }
 
-func decodeUpload(upload Upload, commandID string, index int) (agent.Attachment, []byte, error) {
+func decodeUpload(upload Upload, commandID string, index int) (agentschema.Attachment, []byte, error) {
 	name := strings.TrimSpace(filepath.Base(strings.ReplaceAll(upload.Name, "\\", "/")))
 	if name == "" || name == "." || name == ".." || len([]byte(name)) > maxFilenameLen {
-		return agent.Attachment{}, nil, errors.New("invalid attachment filename")
+		return agentschema.Attachment{}, nil, errors.New("invalid attachment filename")
 	}
 	header, encoded, ok := strings.Cut(strings.TrimSpace(upload.DataURL), ",")
 	if !ok || !strings.HasPrefix(strings.ToLower(header), "data:") || !strings.HasSuffix(strings.ToLower(strings.TrimSpace(header)), ";base64") {
-		return agent.Attachment{}, nil, errors.New("attachment data must be a base64 data URL")
+		return agentschema.Attachment{}, nil, errors.New("attachment data must be a base64 data URL")
 	}
 	data, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return agent.Attachment{}, nil, errors.New("invalid base64 attachment data")
+		return agentschema.Attachment{}, nil, errors.New("invalid base64 attachment data")
 	}
 	if len(data) == 0 {
-		return agent.Attachment{}, nil, errors.New("attachment is empty")
+		return agentschema.Attachment{}, nil, errors.New("attachment is empty")
 	}
 	if len(data) > MaxFileBytes {
-		return agent.Attachment{}, nil, fmt.Errorf("attachment exceeds limit of %d bytes", MaxFileBytes)
+		return agentschema.Attachment{}, nil, fmt.Errorf("attachment exceeds limit of %d bytes", MaxFileBytes)
 	}
 	mediaType := strings.TrimSpace(upload.MediaType)
 	if parsed, _, err := mime.ParseMediaType(strings.TrimSuffix(strings.TrimPrefix(header, "data:"), ";base64")); err == nil && parsed != "" {
 		mediaType = parsed
 	}
 	detectedType := http.DetectContentType(data)
-	if agent.IsNativeImageMediaType(mediaType) {
+	if agentschema.IsNativeImageMediaType(mediaType) {
 		// Native image inputs must reflect the bytes the provider will receive;
 		// never trust a transport MIME claim for arbitrary content.
 		mediaType = detectedType
@@ -221,7 +221,7 @@ func decodeUpload(upload Upload, commandID string, index int) (agent.Attachment,
 	_, _ = digest.Write(data)
 	id := "att_" + hex.EncodeToString(digest.Sum(nil))[:32]
 	contentDigest := sha256.Sum256(data)
-	return agent.Attachment{
+	return agentschema.Attachment{
 		ID:        id,
 		Name:      name,
 		MediaType: mediaType,

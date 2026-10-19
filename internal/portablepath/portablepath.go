@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -85,14 +84,34 @@ func FoldKey(component string) string {
 	return fold.String(norm.NFC.String(component))
 }
 
-// CheckNoCollision rejects a new relative path when a case-sensitive host
-// already contains a sibling that would alias it on another target platform.
+// CheckDirectory checks one root without enumerating its contents.
+func CheckDirectory(root string) error {
+	info, err := os.Lstat(root)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("portable tree root must be a regular directory: %s", root)
+	}
+	return nil
+}
+
+// CheckNoCollision checks only the requested path and its siblings. Parents
+// must be ordinary directories. Callers may rename or remove a symlink leaf
+// itself without following it; reads and writes use CheckPath instead.
 func CheckNoCollision(root, relative string) error {
 	if err := Validate(relative); err != nil {
 		return err
 	}
+	if err := CheckDirectory(root); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
 	current := filepath.Clean(root)
-	for _, component := range strings.Split(relative, "/") {
+	components := strings.Split(relative, "/")
+	for index, component := range components {
 		entries, err := os.ReadDir(current)
 		if os.IsNotExist(err) {
 			return nil
@@ -110,6 +129,9 @@ func CheckNoCollision(root, relative string) error {
 				return fmt.Errorf("portable filename collision between %q and %q", matched, entry.Name())
 			}
 			matched = entry.Name()
+			if index < len(components)-1 && !entry.IsDir() {
+				return fmt.Errorf("portable path parent is not a directory: %s", filepath.Join(current, entry.Name()))
+			}
 		}
 		if matched == "" {
 			return nil
@@ -122,14 +144,29 @@ func CheckNoCollision(root, relative string) error {
 	return nil
 }
 
-// PreflightTree validates an existing movable tree without changing it.
-func PreflightTree(root string) error {
-	info, err := os.Lstat(root)
+// CheckPath validates an existing or new operation target without walking its
+// descendants. Existing leaves must be ordinary directories or regular files.
+func CheckPath(root, relative string) error {
+	if err := CheckNoCollision(root, relative); err != nil {
+		return err
+	}
+	info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(relative)))
+	if os.IsNotExist(err) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return fmt.Errorf("portable tree root must be a regular directory: %s", root)
+	if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
+		return fmt.Errorf("portable path contains a symbolic link or special file: %s", relative)
+	}
+	return nil
+}
+
+// PreflightTree validates an existing movable tree without changing it.
+func PreflightTree(root string) error {
+	if err := CheckDirectory(root); err != nil {
+		return err
 	}
 	return preflightDirectory(root, "")
 }
@@ -152,16 +189,16 @@ func preflightDirectory(current, relative string) error {
 		seen[key] = name
 		relativePath := name
 		if relative != "" {
-			relativePath = path.Join(relative, name)
+			relativePath = relative + "/" + name
 		}
-		if err := Validate(relativePath); err != nil {
-			return fmt.Errorf("portable preflight %s: %w", filepath.Join(current, name), err)
+		// Every ancestor component has already passed validation. Only the
+		// combined path length remains to be checked for this child.
+		if len(relativePath) > MaxRelativePathBytes {
+			return fmt.Errorf("portable preflight %s: path exceeds %d bytes", filepath.Join(current, name), MaxRelativePathBytes)
 		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
+		// ReadDir supplies entry types, resolving them itself on filesystems
+		// without that information. Avoid a second lstat for each entry.
+		if entry.Type()&os.ModeSymlink != 0 {
 			return fmt.Errorf("portable preflight rejects symbolic links: %s", filepath.Join(current, name))
 		}
 		if entry.IsDir() {
@@ -170,7 +207,7 @@ func preflightDirectory(current, relative string) error {
 			}
 			continue
 		}
-		if !info.Mode().IsRegular() {
+		if !entry.Type().IsRegular() {
 			return fmt.Errorf("portable preflight rejects non-regular entries: %s", filepath.Join(current, name))
 		}
 	}

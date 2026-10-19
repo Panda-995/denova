@@ -1,3 +1,4 @@
+import type { AgentPageContext } from '@/lib/api-client/types'
 import {
   analyzeChatContext,
   answerSessionAsk,
@@ -44,10 +45,10 @@ export interface AgentChatClient {
   fixedSessionId?: string
   getSessions: () => Promise<SessionSummary[]>
   getMessagesPage: (sessionId?: string, options?: { limit?: number; before?: string }) => Promise<SessionMessagesPage>
-  getActiveChatTask: (sessionId: string) => Promise<ActiveChatTask>
-  recoverChatAgentRuntime: (action: AgentRuntimeRecoveryAction, sessionId: string) => Promise<AgentRuntimeRecoveryReceipt>
+  getActiveChatTask: (sessionId: string, signal?: AbortSignal) => Promise<ActiveChatTask>
+  recoverChatAgentRuntime: (action: AgentRuntimeRecoveryAction, sessionId: string, signal?: AbortSignal) => Promise<AgentRuntimeRecoveryReceipt>
   submitChatCommand: (
-    type: AgentCommandDelivery | 'abort',
+    type: AgentCommandDelivery | 'abort' | 'suspend',
     commandId: string,
     targetOperationId: string,
     sessionId: string,
@@ -74,14 +75,15 @@ export interface AgentChatClient {
     ideContext?: IDEContext,
     imagePresetId?: string,
     tellerId?: string,
+    pageContext?: AgentPageContext,
   ) => Promise<ContextAnalysis>
   createSession: (title?: string, customAgentId?: string) => Promise<SessionSummary>
   switchSession: (id: string) => Promise<SessionSummary>
   renameSession: (id: string, title: string) => Promise<void>
   deleteSession: (id: string) => Promise<SessionSummary>
   answerSessionAsk: (sessionId: string, askId: string, answers: AgentAskAnswer[]) => Promise<AgentAskResolution>
-  cancelSessionAsk: (sessionId: string, askId: string) => Promise<AgentAskResolution>
-  removeContextCompaction: () => Promise<boolean>
+  cancelSessionAsk: (sessionId: string, askId: string, reason?: string) => Promise<AgentAskResolution>
+  removeContextCompaction: (() => Promise<boolean>) | null
 }
 
 /** Default foreground Writing client. Kept as one stable object for hook dependencies. */
@@ -135,7 +137,7 @@ export function createProjectAgentChatClient(projectId: string, sessionId: strin
       const data = await requestJSON<{
         messages?: SessionMessagesPage['messages']
         page?: { next_before?: string; has_more?: boolean; total?: number }
-      }>(`${basePath}/session/messages?${query.toString()}`)
+      }>(`${basePath}/session/messages?${query.toString()}`, { timeoutMs: 15_000 })
       return {
         messages: data.messages || [],
         nextBefore: data.page?.next_before || '0',
@@ -143,9 +145,10 @@ export function createProjectAgentChatClient(projectId: string, sessionId: strin
         total: data.page?.total || 0,
       }
     },
-    getActiveChatTask: () => requestJSON(`${basePath}/chat/active?${new URLSearchParams(scope).toString()}`),
-    recoverChatAgentRuntime: (action) =>
+    getActiveChatTask: (_sessionId, signal) => requestJSON(`${basePath}/chat/active?${new URLSearchParams(scope).toString()}`, { signal, timeoutMs: 15_000 }),
+    recoverChatAgentRuntime: (action, _sessionId, signal) =>
       requestJSON(`${basePath}/chat/recovery`, {
+        signal, timeoutMs: 15_000,
         method: 'POST',
         headers: jsonHeaders,
         body: JSON.stringify({ ...scope, action }),
@@ -195,6 +198,7 @@ export function createProjectAgentChatClient(projectId: string, sessionId: strin
       ideContext,
       imagePresetId,
       tellerId,
+      pageContext,
     ) =>
       requestJSON(`${basePath}/chat/context-analysis`, {
         method: 'POST',
@@ -216,6 +220,7 @@ export function createProjectAgentChatClient(projectId: string, sessionId: strin
           writing_skill: writingSkill || undefined,
           image_preset_id: imagePresetId || undefined,
           teller_id: tellerId || undefined,
+          page_context: pageContext,
         }),
       }),
     createSession: unsupportedSessionMutation,
@@ -238,15 +243,15 @@ export function createProjectAgentChatClient(projectId: string, sessionId: strin
         headers: jsonHeaders,
         body: JSON.stringify({ ...scope, answers }),
       }),
-    cancelSessionAsk: (_requestedSessionId, askId) =>
+    cancelSessionAsk: (_requestedSessionId, askId, reason = 'user_cancelled') =>
       requestJSON(`${basePath}/session/asks/${encodeURIComponent(askId)}/cancel`, {
         method: 'POST',
         headers: jsonHeaders,
-        body: JSON.stringify({ ...scope, reason: 'user_cancelled' }),
+        body: JSON.stringify({ ...scope, reason }),
       }),
-    // AgentChat currently exposes automatic compaction only. Returning false keeps the
-    // analysis intact without accidentally removing foreground Writing compaction state.
-    removeContextCompaction: async () => false,
+    // Provider compaction cannot be removed through Native checkpoint controls.
+    // Never target a different foreground conversation as a fallback.
+    removeContextCompaction: null,
   }
 }
 

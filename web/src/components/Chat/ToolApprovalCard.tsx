@@ -1,4 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useVirtualizedMessageState } from './VirtualizedMessageState'
+import { errorMessage } from '@/lib/error-diagnostics'
+import { InlineErrorNotice } from '@/components/common/inline-error-notice'
+import { useLayoutEffect, useRef } from 'react'
 import { Check, Loader2, ShieldAlert, ShieldCheck, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { AgentAskResolution } from '@/lib/api'
@@ -22,23 +25,20 @@ export function ToolApprovalPanel({ message, onResolve, embedded = false, onLayo
   const { t } = useTranslation()
   const interaction = message.ask
   const approval = interaction?.approval
-  const [localResolution, setLocalResolution] = useState<AgentAskResolution | null>(null)
-  const [submitting, setSubmitting] = useState<ApprovalOption | null>(null)
-  const [error, setError] = useState('')
+  const slot = `approval:${interaction?.id}:${interaction?.status}`
+  const [localResolution, setLocalResolution] = useVirtualizedMessageState<AgentAskResolution | null>(`${slot}:resolution`, null)
+  const [submitting, setSubmitting] = useVirtualizedMessageState<ApprovalOption | null>(`${slot}:submitting`, null)
+  const [error, setError] = useVirtualizedMessageState(`${slot}:error`, '')
+  const [anchored, setAnchored] = useVirtualizedMessageState('approval-anchored', '')
   const panelRef = useRef<HTMLElement | null>(null)
-
-  useEffect(() => {
-    setLocalResolution(null)
-    setSubmitting(null)
-    setError('')
-  }, [interaction?.id])
 
   useLayoutEffect(() => {
     const status = localResolution?.status || interaction?.status
-    if (interaction?.kind === 'tool_approval' && interaction.approval && status === 'pending' && panelRef.current) {
+    if (interaction?.kind === 'tool_approval' && interaction.approval && status === 'pending' && panelRef.current && anchored !== interaction.id) {
+      setAnchored(interaction.id)
       onLayoutChange?.(panelRef.current)
     }
-  }, [interaction?.approval, interaction?.id, interaction?.kind, interaction?.status, localResolution?.status, onLayoutChange])
+  }, [anchored, setAnchored, interaction?.approval, interaction?.id, interaction?.kind, interaction?.status, localResolution?.status, onLayoutChange])
 
   if (!interaction || interaction.kind !== 'tool_approval' || !approval) return null
   const status = localResolution?.status || interaction.status
@@ -79,8 +79,8 @@ export function ToolApprovalPanel({ message, onResolve, embedded = false, onLayo
           console.warn('[tool-approval] Failed to refresh settings after saving a workspace rule', reason)
         })
       }
-    } catch {
-      setError(t('agentApproval.approval.submitFailed'))
+    } catch (error) {
+      setError(errorMessage(error, t('agentApproval.approval.submitFailed')))
     } finally {
       setSubmitting(null)
     }
@@ -130,7 +130,7 @@ export function ToolApprovalPanel({ message, onResolve, embedded = false, onLayo
         )}
       </div>
 
-      {error && <p role="alert" className="m-0 text-[11px] text-[var(--nova-danger)]">{error}</p>}
+      {error && <InlineErrorNotice message={error} />}
       {pending && (
         <div className="flex flex-wrap justify-end gap-2">
           <Button type="button" size="sm" variant="outline" disabled={!onResolve || Boolean(submitting)} onClick={() => void resolve('deny')}>

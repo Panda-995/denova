@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"time"
 
 	"denova/internal/localfs"
 )
@@ -18,11 +19,12 @@ import (
 // Journal is a concurrency-safe handle to one canonical conversation file.
 // Independent handles rendezvous through the same cross-process file lease.
 type Journal struct {
-	path      string
-	indexPath string
-	identity  Identity
-	reducer   Reducer
-	options   Options
+	path        string
+	indexPath   string
+	currentOnly bool
+	identity    Identity
+	reducer     Reducer
+	options     Options
 
 	mu                  sync.Mutex
 	head                Head
@@ -38,11 +40,23 @@ type Journal struct {
 	stats               ReplayStats
 	closed              bool
 	projectionInvalid   bool
+	backupUpgrades      map[string]bool
 }
 
 // Open restores a reducer from the sidecar and replays only the unindexed
 // canonical tail. A missing or invalid sidecar triggers one streaming rebuild.
 func Open(ctx context.Context, path string, identity Identity, reducer Reducer, options Options) (*Journal, error) {
+	return open(ctx, path, identity, reducer, options, false)
+}
+
+// OpenCurrent observes the bounded current-state checkpoint and tail. It has
+// no append capability and never replaces the full historical query index.
+func OpenCurrent(ctx context.Context, path string, identity Identity, reducer Reducer) (*Journal, error) {
+	return open(ctx, path, identity, reducer, Options{}, true)
+}
+
+func open(ctx context.Context, path string, identity Identity, reducer Reducer, options Options, currentOnly bool) (*Journal, error) {
+	started := time.Now()
 	if err := validateIdentity(identity); err != nil {
 		return nil, err
 	}
@@ -53,7 +67,10 @@ func Open(ctx context.Context, path string, identity Identity, reducer Reducer, 
 		ctx = context.Background()
 	}
 	release, err := localfs.AcquireLease(ctx, path+".domain.lock")
+	leaseWait := time.Since(started)
 	if err != nil {
+		slog.WarnContext(ctx, "[conversation-journal] recovery lease failed",
+			"path", path, "current_only", currentOnly, "lease_wait_ms", leaseWait.Milliseconds(), "error", err)
 		return nil, fmt.Errorf("acquire conversation journal open lease: %w", err)
 	}
 	defer release()
@@ -62,9 +79,21 @@ func Open(ctx context.Context, path string, identity Identity, reducer Reducer, 
 		path: path, indexPath: sidecarPath(path), identity: identity,
 		reducer: reducer, options: options.normalized(),
 	}
+	journal.currentOnly = currentOnly
+	if currentOnly {
+		journal.indexPath = currentSidecarPath(path)
+	}
 	journal.mu.Lock()
 	err = journal.loadLocked(ctx)
 	journal.mu.Unlock()
+	if err != nil || time.Since(started) >= time.Second {
+		slog.WarnContext(ctx, "[conversation-journal] recovery",
+			"path", path, "current_only", currentOnly,
+			"lease_wait_ms", leaseWait.Milliseconds(),
+			"index_loaded", journal.stats.IndexLoaded, "index_rebuilt", journal.stats.IndexRebuilt,
+			"bytes_read", journal.stats.BytesRead, "transactions_read", journal.stats.TransactionsRead,
+			"duration_ms", time.Since(started).Milliseconds(), "error", err)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +297,6 @@ func (journal *Journal) applyLineLocked(line []byte, offset int64, length int, n
 	}
 	location := Location{
 		Cursor: nextCursor, Offset: offset, Length: length,
-		PreviousRecordSHA256: previousSHA,
 	}
 	for index, payload := range payloads {
 		record := Record{

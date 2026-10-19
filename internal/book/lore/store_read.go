@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 )
 
 func (s *Store) Read(id string) (Item, error) {
@@ -38,33 +37,6 @@ func (s *Store) ReadAny(id string) (Item, error) {
 		if item.ID == id {
 			return item, nil
 		}
-	}
-	return Item{}, fmt.Errorf("资料不存在: %s", id)
-}
-
-func (s *Store) SetImage(id string, image *Image) (Item, error) {
-	id = normalizeLoreID(id)
-	if id == "" {
-		return Item{}, errors.New("资料 ID 不能为空")
-	}
-	s.mutationMu.Lock()
-	defer s.mutationMu.Unlock()
-
-	collection, err := s.loadOrCreate()
-	if err != nil {
-		return Item{}, err
-	}
-	for i := range collection.Items {
-		if collection.Items[i].ID != id {
-			continue
-		}
-		collection.Items[i].Image = normalizeLoreItemImage(image)
-		collection.Items[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-		collection.Items[i] = normalizeLoreItem(collection.Items[i])
-		if err := s.save(collection); err != nil {
-			return Item{}, err
-		}
-		return collection.Items[i], nil
 	}
 	return Item{}, fmt.Errorf("资料不存在: %s", id)
 }
@@ -170,7 +142,7 @@ func (s *Store) Search(query, itemType string, limit int) ([]Item, error) {
 }
 
 func (s *Store) SearchIndexMarkdown(options IndexOptions) (string, error) {
-	items, err := s.List()
+	items, _, err := s.indexQueryItems(options)
 	if err != nil {
 		return "", err
 	}
@@ -182,7 +154,7 @@ func (s *Store) SearchIndexMarkdown(options IndexOptions) (string, error) {
 }
 
 // ResidentIndexMarkdown returns a bounded discovery index containing only
-// enabled resident lore. Bodies stay behind read_lore_items so specialized
+// enabled resident lore. Bodies stay behind query_lore_items so specialized
 // agents can review relevant rules without injecting the complete library.
 func (s *Store) ResidentIndexMarkdown(maxBytes int) (string, error) {
 	items, err := s.List()
@@ -252,28 +224,9 @@ func (s *Store) IndexMarkdown() (string, error) {
 }
 
 func (s *Store) ProgressiveContextMarkdown() (string, error) {
-	resident, err := s.ResidentContextMarkdown()
+	collection, err := s.loadOrCreate()
 	if err != nil {
 		return "", err
 	}
-	catalog, err := s.NameCatalogMarkdown(NameCatalogOptions{
-		MaxBytes:        IndexDefaultMaxBytes,
-		ExcludeResident: true,
-		OmitWhenEmpty:   true,
-	})
-	if err != nil {
-		return "", err
-	}
-	var sb strings.Builder
-	if resident != "" {
-		sb.WriteString("## Resident Lore\n\n")
-		sb.WriteString(resident)
-		sb.WriteString("\n\n")
-	}
-	if catalog != "" {
-		fmt.Fprintf(&sb, "## On-demand Lore Name Catalog (source: %s, max 64 KiB)\n\n", ItemsRelativePath)
-		sb.WriteString(strings.TrimSpace(strings.TrimPrefix(catalog, "# Lore Name Catalog")))
-		sb.WriteString("\n\n")
-	}
-	return strings.TrimSpace(sb.String()), nil
+	return renderIndexGuide(collection)
 }

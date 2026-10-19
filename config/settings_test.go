@@ -9,21 +9,12 @@ import (
 	"strings"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-	"github.com/alfredxw/denova/agent/providers"
+	"github.com/alfredxw/denova/agent/model/providers"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 func TestDefaultSettingsValues(t *testing.T) {
 	s := DefaultSettings()
-	if s.OpenAIBaseURL != "https://api.deepseek.com" {
-		t.Fatalf("BaseURL: %s", s.OpenAIBaseURL)
-	}
-	if s.OpenAIModel != "deepseek-v4-pro" {
-		t.Fatalf("Model: %s", s.OpenAIModel)
-	}
-	if s.OpenAIContextWindowTokens == nil || *s.OpenAIContextWindowTokens != DefaultContextWindowTokens {
-		t.Fatalf("OpenAIContextWindowTokens default")
-	}
 	if s.AutoSaveEnabled == nil || *s.AutoSaveEnabled != true {
 		t.Fatalf("AutoSaveEnabled default")
 	}
@@ -68,8 +59,8 @@ func TestDefaultSettingsValues(t *testing.T) {
 	if s.InteractiveStageLineHeight == nil || *s.InteractiveStageLineHeight != 1.78 {
 		t.Fatalf("InteractiveStageLineHeight default")
 	}
-	if s.IDEStoryTellerID != "rhythm" || s.InteractiveStoryTellerID != "rhythm" {
-		t.Fatalf("narrative style defaults: writing=%q game=%q", s.IDEStoryTellerID, s.InteractiveStoryTellerID)
+	if s.IDEStoryTellerID != "rhythm" {
+		t.Fatalf("writing narrative style default: %q", s.IDEStoryTellerID)
 	}
 	if s.ChapterFilenameFormat != "ch{order:05}-{chapter}-{title}.md" {
 		t.Fatalf("ChapterFilenameFormat default: %s", s.ChapterFilenameFormat)
@@ -116,10 +107,10 @@ func TestDefaultSettingsValues(t *testing.T) {
 	if s.UpdateCheckEnabled == nil || *s.UpdateCheckEnabled != true {
 		t.Fatalf("UpdateCheckEnabled default")
 	}
-	if s.BackendPort == nil || *s.BackendPort != 8080 {
+	if s.BackendPort == nil || *s.BackendPort != 7789 {
 		t.Fatalf("BackendPort default")
 	}
-	if s.FrontendPort == nil || *s.FrontendPort != 5173 {
+	if s.FrontendPort == nil || *s.FrontendPort != 7788 {
 		t.Fatalf("FrontendPort default")
 	}
 	if s.AllowLANAccess == nil || *s.AllowLANAccess {
@@ -166,8 +157,8 @@ func TestMergeOverridesNonZero(t *testing.T) {
 		UpdateCheckEnabled:         boolPtr(true),
 		ChapterFilenameFormat:      "old-chapter",
 		VolumeDirFormat:            "old-volume",
-		BackendPort:                intPtr(8080),
-		FrontendPort:               intPtr(5173),
+		BackendPort:                intPtr(7789),
+		FrontendPort:               intPtr(7788),
 		AllowLANAccess:             boolPtr(false),
 		WritingSkillDefault:        "novel-standard",
 		IDEImagePresetID:           "realistic",
@@ -369,7 +360,7 @@ func TestReadSettingsFileMissingReturnsZero(t *testing.T) {
 func TestWriteThenReadSettings(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "config.toml")
-	in := Settings{ModelProfiles: []ModelProfileSettings{{ID: "default", EndpointID: "default", Model: "abc"}}, AutoSaveEnabled: boolPtr(false), Language: "en-US"}
+	in := Settings{ModelProfiles: []ModelProfileSettings{{ID: "default", EndpointID: "default", Model: "abc"}}, AutoSaveEnabled: boolPtr(false), Language: "en-US", InteractiveStageTextMaxWidth: intPtr(1120)}
 	if err := WriteSettingsFile(p, in); err != nil {
 		t.Fatal(err)
 	}
@@ -385,6 +376,9 @@ func TestWriteThenReadSettings(t *testing.T) {
 	}
 	if out.Language != "en-US" {
 		t.Fatalf("language")
+	}
+	if effective := Merge(DefaultSettings(), out); effective.InteractiveStageTextMaxWidth == nil || *effective.InteractiveStageTextMaxWidth != 1120 {
+		t.Fatal("saved stage text width must override the default after reload")
 	}
 }
 
@@ -627,9 +621,10 @@ func TestLoadLayeredKeepsGeneralSettingsUserScopedAndAppliesWorkspaceAgentOverri
 		t.Fatal(err)
 	}
 
-	user := Settings{OpenAIModel: "user-model", MaxIteration: intPtr(20)}
+	user := Settings{OpenAIModel: "user-model", MaxIteration: intPtr(20), InteractiveStageCharacterLayout: "left"}
 	wsCfg := Settings{
-		OpenAIModel: "ws-model",
+		OpenAIModel:                     "ws-model",
+		InteractiveStageCharacterLayout: "right",
 		AgentTools: AgentToolSettings{
 			IDE: AgentToolOverride{AgentToolShell: false},
 		},
@@ -656,6 +651,9 @@ func TestLoadLayeredKeepsGeneralSettingsUserScopedAndAppliesWorkspaceAgentOverri
 	}
 	if layered.Workspace.OpenAIModel != "" {
 		t.Fatalf("workspace general setting should be filtered: %s", layered.Workspace.OpenAIModel)
+	}
+	if layered.Effective.InteractiveStageCharacterLayout != "left" || layered.Workspace.InteractiveStageCharacterLayout != "" {
+		t.Fatalf("character layout must remain user-scoped: effective=%q workspace=%q", layered.Effective.InteractiveStageCharacterLayout, layered.Workspace.InteractiveStageCharacterLayout)
 	}
 	if modelFromProfiles(layered.Inherited.User.ModelProfiles, "default") == "user-model" {
 		t.Fatalf("user inheritance must exclude the user layer")
@@ -707,13 +705,13 @@ func TestLoadLayeredPublishesResolvedAgentToolCatalogAndManifests(t *testing.T) 
 		t.Fatalf("resolved shell tools = %#v, want [%s]", shell.ToolNames, wantShell)
 	}
 	delegation, found := resolvedManifestCapability(ide, AgentToolDelegation)
-	if !found || strings.Join(delegation.ToolNames, ",") != "task,task_wait" {
+	if !found || strings.Join(delegation.ToolNames, ",") != "send,await,list_agents" {
 		t.Fatalf("resolved delegation tools = %#v", delegation)
 	}
-	waitDescriptor, found := delegation.ToolDescriptors["task_wait"]
-	if !found || waitDescriptor.Execution != agent.ToolExecutionInteractiveWait ||
-		waitDescriptor.Steering != agent.SteeringInterruptibleWait ||
-		waitDescriptor.Recovery != agent.ToolRecoveryReadOnly {
+	waitDescriptor, found := delegation.ToolDescriptors["await"]
+	if !found || waitDescriptor.Execution != agenttool.ToolExecutionInteractiveWait ||
+		waitDescriptor.Steering != agenttool.SteeringInterruptibleWait ||
+		waitDescriptor.Recovery != agenttool.ToolRecoveryReadOnly {
 		t.Fatalf("resolved task_wait descriptor = %#v", waitDescriptor)
 	}
 	for _, kind := range []string{AgentKindVersionSummary, AgentKindToolAgent} {
@@ -802,13 +800,15 @@ func modelFromProfiles(profiles []ModelProfileSettings, id string) string {
 
 func TestPrepareWorkspaceAgentSettingsForWritePreservesLegacyGeneralValues(t *testing.T) {
 	existing := Settings{
-		OpenAIModel: "legacy-workspace-model",
+		OpenAIModel:                     "legacy-workspace-model",
+		InteractiveStageCharacterLayout: "right",
 		AgentTools: AgentToolSettings{
 			IDE: AgentToolOverride{AgentToolShell: true},
 		},
 	}
 	incoming := Settings{
-		OpenAIModel: "ignored-new-model",
+		OpenAIModel:                     "ignored-new-model",
+		InteractiveStageCharacterLayout: "left",
 		AgentModels: AgentModelSettings{
 			IDE: AgentModelOverride{ProfileID: "ignored-workspace-profile"},
 		},
@@ -820,6 +820,9 @@ func TestPrepareWorkspaceAgentSettingsForWritePreservesLegacyGeneralValues(t *te
 	prepared := PrepareWorkspaceAgentSettingsForWrite(existing, incoming)
 	if prepared.OpenAIModel != "legacy-workspace-model" {
 		t.Fatalf("legacy general value should remain reversible on disk: %q", prepared.OpenAIModel)
+	}
+	if prepared.InteractiveStageCharacterLayout != "right" {
+		t.Fatalf("inactive workspace character layout should remain unchanged on disk: %q", prepared.InteractiveStageCharacterLayout)
 	}
 	if prepared.AgentModels.IDE.ProfileID != "" {
 		t.Fatalf("workspace model selection must remain user-scoped: %#v", prepared.AgentModels)

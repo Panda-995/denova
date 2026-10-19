@@ -2,11 +2,14 @@ package agentchat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	agentconversation "denova/internal/agents/conversation"
 	"denova/internal/agents/conversationconfig"
@@ -14,9 +17,13 @@ import (
 	projectdomain "denova/internal/project"
 )
 
-// ProjectSessionsLimit bounds metadata work when the complete user library is
-// shown. A running conversation is always retained outside the recent window.
+// ProjectSessionsLimit bounds the returned recent-session window. Running
+// conversations are always retained outside that window.
 const ProjectSessionsLimit = 50
+
+func (service *Service) CreateDirectoryProject(request projectdomain.CreateDirectoryRequest) (projectdomain.Record, error) {
+	return service.registry.CreateDirectory(request)
+}
 
 // AddProject registers a directory without changing the foreground Writing
 // workspace. Existing project identity and custom naming are preserved.
@@ -57,15 +64,20 @@ func (service *Service) ReorderProjects(ids []string) error {
 	return service.registry.Reorder(ids)
 }
 
-func (service *Service) Projects() []Project {
+func (service *Service) Projects(projectID string) []Project {
 	if service == nil || service.registry == nil {
 		return nil
+	}
+	if err := service.registry.DiscoverBooks(); err != nil {
+		slog.Error("Discover Projects failed", "error", err)
+		return []Project{}
 	}
 	startedAt := time.Now()
 	currentWorkspace := ""
 	if service.host != nil {
 		currentWorkspace = service.host.CurrentWorkspace()
 	}
+	currentWorkspaceKey := canonicalWorkspaceKey(currentWorkspace)
 	records, err := service.registry.List(false)
 	if err != nil {
 		slog.ErrorContext(context.Background(), fmt.Sprintf("[app/agentchat] list projects failed err=%v", err))
@@ -74,10 +86,13 @@ func (service *Service) Projects() []Project {
 	runningBindings := service.runningBindingKeys()
 	projects := make([]Project, 0, len(records))
 	for _, record := range records {
+		if projectID != "" && record.ID != projectID {
+			continue
+		}
 		project := Project{
 			ID: record.ID, Type: record.Type, Path: record.WorkspacePath,
 			Name: record.Name, Status: record.Status,
-			Current: record.Type == projectdomain.TypeBook && canonicalWorkspaceKey(record.WorkspacePath) == canonicalWorkspaceKey(currentWorkspace),
+			Current: record.Type == projectdomain.TypeBook && canonicalWorkspaceKey(record.WorkspacePath) == currentWorkspaceKey,
 		}
 		layout, layoutErr := service.registry.Layout(record)
 		if layoutErr != nil {
@@ -140,17 +155,24 @@ func sessionFromMeta(meta session.SessionMeta, projectID string, runningBindings
 	}
 }
 
-func (service *Service) History(query HistoryQuery) HistoryPage {
+func (service *Service) History(ctx context.Context, query HistoryQuery) (HistoryPage, error) {
 	page := HistoryPage{Items: []HistoryItem{}, Offset: max(query.Offset, 0)}
 	if service == nil || service.registry == nil || query.Limit <= 0 {
-		return page
+		return page, nil
 	}
 	startedAt := time.Now()
 	normalizedQuery := strings.ToLower(strings.TrimSpace(query.Search))
 	projectID := strings.TrimSpace(query.ProjectID)
 	runningBindings := service.runningBindingKeys()
 	items := make([]HistoryItem, 0)
-	records, _ := service.registry.List(false)
+	var records []projectdomain.Record
+	if projectID != "" {
+		if record, err := service.registry.Get(projectID); err == nil && record.Status != projectdomain.StatusArchived {
+			records = []projectdomain.Record{record}
+		}
+	} else {
+		records, _ = service.registry.List(false)
+	}
 	for _, record := range records {
 		if projectID != "" && record.ID != projectID {
 			continue
@@ -165,16 +187,49 @@ func (service *Service) History(query HistoryQuery) HistoryPage {
 			continue
 		}
 		projectSearchText := strings.ToLower(record.Name + " " + record.WorkspacePath)
-		for _, meta := range metas {
-			if normalizedQuery != "" {
-				sessionSearchText := strings.ToLower(meta.Title + " " + meta.ID)
-				if !strings.Contains(sessionSearchText, normalizedQuery) && !strings.Contains(projectSearchText, normalizedQuery) {
+		bodyMatches := make([]string, len(metas))
+		searchBody := make([]bool, len(metas))
+		if normalizedQuery != "" && !strings.Contains(projectSearchText, normalizedQuery) {
+			store, err := service.projectSessionStore(record.ID, layout.SessionsDir(), false)
+			if err != nil {
+				return HistoryPage{}, err
+			}
+			group, searchContext := errgroup.WithContext(ctx)
+			// Independent journals can be read concurrently, with a fixed I/O
+			// budget rather than one goroutine per saved conversation.
+			group.SetLimit(8)
+			for index, meta := range metas {
+				if strings.Contains(strings.ToLower(meta.Title+" "+meta.ID), normalizedQuery) {
 					continue
 				}
+				searchBody[index] = true
+				group.Go(func() (err error) {
+					defer func() {
+						if recovered := recover(); recovered != nil {
+							err = fmt.Errorf("history search panic for %s: %v", meta.ID, recovered)
+							slog.ErrorContext(searchContext, "History search failed", "session_id", meta.ID, "err", err)
+						}
+					}()
+					bodyMatches[index], err = store.SearchHistoryContent(searchContext, meta.ID, normalizedQuery)
+					return err
+				})
+			}
+			if err := group.Wait(); err != nil {
+				return HistoryPage{}, err
+			}
+		}
+		for index, meta := range metas {
+			if err := ctx.Err(); err != nil {
+				return HistoryPage{}, err
+			}
+			excerpt := bodyMatches[index]
+			if searchBody[index] && excerpt == "" {
+				continue
 			}
 			items = append(items, HistoryItem{
 				ProjectID: record.ID, ProjectName: record.Name,
 				Session: sessionFromMeta(meta, record.ID, runningBindings),
+				Excerpt: excerpt,
 			})
 		}
 	}
@@ -189,7 +244,7 @@ func (service *Service) History(query HistoryQuery) HistoryPage {
 	})
 	page.Total = len(items)
 	if page.Offset >= page.Total {
-		return page
+		return page, nil
 	}
 	end := min(page.Offset+query.Limit, page.Total)
 	page.Items = append(page.Items, items[page.Offset:end]...)
@@ -198,7 +253,7 @@ func (service *Service) History(query HistoryQuery) HistoryPage {
 		"[app/agentchat] searched conversation history query_length=%d total=%d offset=%d returned=%d duration=%s",
 		len([]rune(normalizedQuery)), page.Total, page.Offset, len(page.Items), time.Since(startedAt),
 	))
-	return page
+	return page, nil
 }
 
 func (service *Service) readProjectSessions(projectID, sessionsDir string) ([]session.SessionMeta, error) {
@@ -216,7 +271,6 @@ func (service *Service) readProjectSessions(projectID, sessionsDir string) ([]se
 			visible = append(visible, meta)
 		}
 	}
-	sort.SliceStable(visible, func(i, j int) bool { return visible[i].UpdatedAt.After(visible[j].UpdatedAt) })
 	return visible, nil
 }
 
@@ -271,6 +325,9 @@ func (service *Service) RenameSession(projectID, sessionID, title string) error 
 // DeleteSession refuses to remove a running conversation and never re-points
 // the foreground Writing Session.
 func (service *Service) DeleteSession(projectID, sessionID string) error {
+	service.admission.Lock()
+	defer service.admission.Unlock()
+	ctx := context.Background()
 	binding, err := service.ResolveBinding(Binding{ProjectID: projectID, SessionID: sessionID})
 	if err != nil {
 		return err
@@ -278,16 +335,32 @@ func (service *Service) DeleteSession(projectID, sessionID string) error {
 	if err := service.requireIdle(binding); err != nil {
 		return err
 	}
-	project, err := service.projectRuntime(context.Background(), binding.ProjectID)
+	project, err := service.projectRuntime(ctx, binding.ProjectID)
 	if err != nil {
 		return err
 	}
-	if err := project.executionRuntime.DeleteProjectSessionBindings(context.Background(), binding.ProjectID, binding.SessionID); err != nil {
+	if err := project.store.CheckDelete(binding.SessionID); err != nil {
 		return err
 	}
-	if err := project.store.Delete(binding.SessionID); err != nil {
+	roots, err := project.executionRuntime.ProjectSessionBindings(ctx, binding.ProjectID, binding.SessionID)
+	if err != nil {
 		return err
+	}
+	if err := project.executionRuntime.CloseProjectSessionBindings(ctx, binding.ProjectID, binding.SessionID); err != nil {
+		return err
+	}
+	// The product journal is the deletion commit point. Never tombstone embedded
+	// Agent state or remove children before this durable conversation is removed.
+	err = project.store.Delete(binding.SessionID)
+	if err != nil && !errors.Is(err, session.ErrDeletionCleanup) {
+		return err
+	}
+	for _, root := range roots {
+		err = errors.Join(err, project.executionRuntime.DeleteSessionChildren(ctx, root))
 	}
 	service.starts.ReleaseScope(binding.ProjectID, binding.SessionID)
+	if err != nil {
+		slog.ErrorContext(ctx, "[app/agentchat] conversation deleted with cleanup errors", "project_id", binding.ProjectID, "session_id", binding.SessionID, "error", err)
+	}
 	return nil
 }

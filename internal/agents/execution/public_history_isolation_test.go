@@ -13,25 +13,25 @@ import (
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
 
-	agent "github.com/alfredxw/denova/agent"
+	"github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
 )
 
 type invalidHistoryConversation struct {
 	agentchat.Conversation
-	messages []*agent.Message
+	messages []*agentschema.Message
 }
 
-func (conversation invalidHistoryConversation) CanonicalMessages(context.Context) ([]*agent.Message, error) {
+func (conversation invalidHistoryConversation) CanonicalMessages(context.Context) ([]*agentschema.Message, error) {
 	return conversation.messages, nil
 }
 
 func TestInvalidHistoryIsolatesAdmissionToSessionOrBranch(t *testing.T) {
 	for _, kind := range []string{agentrun.AgentKindIDE, agentrun.AgentKindInteractiveStory} {
 		t.Run(kind, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
+			ctx := t.Context()
 			runtime := NewEphemeralRuntime()
-			t.Cleanup(func() { _ = runtime.Close(context.Background()) })
 			store, err := session.NewStore(t.TempDir())
 			if err != nil {
 				t.Fatal(err)
@@ -49,27 +49,30 @@ func TestInvalidHistoryIsolatesAdmissionToSessionOrBranch(t *testing.T) {
 				AgentKind: kind, ProjectID: "history-project", Workspace: t.TempDir(),
 				SessionID: broken.ID, RootAgentName: "root",
 			}
+			// Drain the runtime and close its journal before TempDir cleanup.
+			t.Cleanup(func() { _ = store.Close() })
+			t.Cleanup(func() { _ = runtime.Close(context.Background()) })
 			if kind == agentrun.AgentKindInteractiveStory {
 				options.SessionID = ""
 				options.StoryID, options.BranchID = "same-story", "broken-branch"
 			}
-			messages := make([]*agent.Message, 0, 397)
+			messages := make([]*agentschema.Message, 0, 397)
 			for range 394 {
-				messages = append(messages, agent.UserMessage("earlier history"))
+				messages = append(messages, agentschema.UserMessage("earlier history"))
 			}
 			messages = append(messages,
-				agent.AssistantMessage("", []agent.ToolCall{
-					{ID: "read-a", Function: agent.FunctionCall{Name: "read", Arguments: `{}`}},
-					{ID: "read-b", Function: agent.FunctionCall{Name: "read", Arguments: `{}`}},
+				agentschema.AssistantMessage("", []agentschema.ToolCall{
+					{ID: "read-a", Function: agentschema.FunctionCall{Name: "read", Arguments: `{}`}},
+					{ID: "read-b", Function: agentschema.FunctionCall{Name: "read", Arguments: `{}`}},
 				}),
-				agent.ToolMessage(agent.TextToolResult("result a"), "read-a"),
-				agent.UserMessage("continue"),
+				agentschema.ToolMessage(agentschema.TextToolResult("result a"), "read-a"),
+				agentschema.UserMessage("continue"),
 			)
 			original := clonePublicBackendMessages(messages)
 			cycle := Cycle{
 				Definition: agent.Definition{
 					Name: "root", Model: model,
-					ModelIdentity: agent.CapabilityIdentity{Kind: "model.history-isolation", Version: 1},
+					ModelIdentity: agentschema.CapabilityIdentity{Kind: "model.history-isolation", Version: 1},
 				},
 				Conversation: invalidHistoryConversation{
 					Conversation: agentconversation.NewSessionConversationForAgent(broken, nil, kind),
@@ -79,12 +82,12 @@ func TestInvalidHistoryIsolatesAdmissionToSessionOrBranch(t *testing.T) {
 			}
 			for range 2 {
 				operation, err := runtime.Start(ctx, StartRequest{Cycle: cycle})
-				if operation != nil || !errors.Is(err, agent.ErrInvalidCanonicalMessages) ||
+				if operation != nil || !errors.Is(err, agentcanonical.ErrInvalidCanonicalMessages) ||
 					!strings.Contains(err.Error(), "message 396 splits an incomplete tool-result batch") {
 					t.Fatalf("invalid history admission operation=%v error=%v", operation, err)
 				}
 			}
-			if _, err := runtime.Inspect(ctx, cycle); !errors.Is(err, agent.ErrInvalidCanonicalMessages) {
+			if _, err := runtime.Inspect(ctx, cycle); !errors.Is(err, agentcanonical.ErrInvalidCanonicalMessages) {
 				t.Fatalf("invalid history inspection error=%v", err)
 			}
 			if !reflect.DeepEqual(messages, original) || len(model.inputs) != 0 ||
@@ -102,7 +105,10 @@ func TestInvalidHistoryIsolatesAdmissionToSessionOrBranch(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unrelated conversation could not start: %v", err)
 			}
-			if outcome := operation.Wait(ctx); outcome.Status != agentrun.OutcomeCompleted {
+			waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			outcome := operation.Wait(waitCtx)
+			cancel()
+			if outcome.Status != agentrun.OutcomeCompleted {
 				t.Fatalf("unrelated conversation did not complete: %+v", outcome)
 			}
 			// Replacing the failed projection with valid canonical history must
@@ -114,7 +120,10 @@ func TestInvalidHistoryIsolatesAdmissionToSessionOrBranch(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed identity remained poisoned: %v", err)
 			}
-			if outcome := operation.Wait(ctx); outcome.Status != agentrun.OutcomeCompleted {
+			waitCtx, cancel = context.WithTimeout(ctx, 5*time.Second)
+			outcome = operation.Wait(waitCtx)
+			cancel()
+			if outcome.Status != agentrun.OutcomeCompleted {
 				t.Fatalf("recovered identity did not complete: %+v", outcome)
 			}
 		})

@@ -1,6 +1,7 @@
 package versions
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -35,7 +36,7 @@ func TestVersionsIgnoreActiveJournalLeases(t *testing.T) {
 			}
 		})
 	}
-	status, err := service.Status(settings)
+	status, err := service.Status(context.Background(), settings)
 	if err != nil {
 		t.Fatalf("status with active journal leases: %v", err)
 	}
@@ -57,7 +58,7 @@ func TestVersionsIgnoreActiveJournalLeases(t *testing.T) {
 	if got := sortedVersionFilePaths(files); !reflect.DeepEqual(got, visible) {
 		t.Fatalf("committed paths = %v, want %v", got, visible)
 	}
-	status, err = service.Status(settings)
+	status, err = service.Status(context.Background(), settings)
 	if err != nil || !status.Clean {
 		t.Fatalf("unchanged journal leases must not dirty status: status=%#v err=%v", status, err)
 	}

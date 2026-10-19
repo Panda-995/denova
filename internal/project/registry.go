@@ -13,8 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	workspacelayout "denova/internal/workspace"
 )
 
 const registryVersion = 5
@@ -36,12 +34,13 @@ type registryData struct {
 // Filesystem availability is projected at read time rather than persisted as
 // an event, so moving a directory never destroys its user-owned state.
 type Registry struct {
-	mu                     sync.Mutex
-	storeMu                sync.Mutex
-	storeMigrationComplete bool
-	path                   string
-	legacyBooksPath        string
-	denovaDir              string
+	mu              sync.Mutex
+	storeMu         sync.Mutex
+	path            string
+	legacyBooksPath string
+	denovaDir       string
+	readCache       *registryReadCache
+	preparedStores  map[string]preparedProjectStore // Guarded by storeMu; successful migrations only.
 }
 
 func NewRegistry(denovaDir string) *Registry {
@@ -61,7 +60,7 @@ func NewRegistry(denovaDir string) *Registry {
 func (registry *Registry) List(includeArchived bool) ([]Record, error) {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	data, changed, err := registry.loadAndDiscoverLocked()
+	data, changed, err := registry.loadOrMigrateLocked()
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +78,7 @@ func (registry *Registry) Get(id string) (Record, error) {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	data, changed, err := registry.loadAndDiscoverLocked()
+	data, changed, err := registry.loadOrMigrateLocked()
 	if err != nil {
 		return Record{}, err
 	}
@@ -149,7 +148,7 @@ func (registry *Registry) FindByPath(path string, includeArchived bool) (Record,
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	data, changed, err := registry.loadAndDiscoverLocked()
+	data, changed, err := registry.loadOrMigrateLocked()
 	if err != nil {
 		return Record{}, false, err
 	}
@@ -176,7 +175,7 @@ func (registry *Registry) Add(path string, kind Type, name string) (Record, erro
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	data, _, err := registry.loadAndDiscoverLocked()
+	data, _, err := registry.loadOrMigrateLocked()
 	if err != nil {
 		return Record{}, err
 	}
@@ -224,7 +223,7 @@ func (registry *Registry) EnsureBook(path string) (Record, error) {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	data, changed, err := registry.loadAndDiscoverLocked()
+	data, changed, err := registry.loadOrMigrateLocked()
 	if err != nil {
 		return Record{}, err
 	}
@@ -266,7 +265,7 @@ func (registry *Registry) EnsureAgents(path string) (Record, error) {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	data, _, err := registry.loadAndDiscoverLocked()
+	data, _, err := registry.loadOrMigrateLocked()
 	if err != nil {
 		return Record{}, err
 	}
@@ -344,7 +343,7 @@ func (registry *Registry) TouchBook(path string) (Record, error) {
 func (registry *Registry) CurrentBookPath() string {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	data, changed, err := registry.loadAndDiscoverLocked()
+	data, changed, err := registry.loadOrMigrateLocked()
 	if err != nil {
 		return ""
 	}
@@ -398,7 +397,7 @@ func (registry *Registry) Relink(id, path string) (Record, error) {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	data, _, err := registry.loadAndDiscoverLocked()
+	data, _, err := registry.loadOrMigrateLocked()
 	if err != nil {
 		return Record{}, err
 	}
@@ -433,7 +432,7 @@ func (registry *Registry) Relink(id, path string) (Record, error) {
 func (registry *Registry) Reorder(ids []string) error {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	data, _, err := registry.loadAndDiscoverLocked()
+	data, _, err := registry.loadOrMigrateLocked()
 	if err != nil {
 		return err
 	}
@@ -465,7 +464,7 @@ func (registry *Registry) Reorder(ids []string) error {
 func (registry *Registry) SortMode() SortMode {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	data, changed, err := registry.loadAndDiscoverLocked()
+	data, changed, err := registry.loadOrMigrateLocked()
 	if err != nil {
 		return SortRecent
 	}
@@ -483,7 +482,7 @@ func (registry *Registry) SetSortMode(mode SortMode) error {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	data, _, err := registry.loadAndDiscoverLocked()
+	data, _, err := registry.loadOrMigrateLocked()
 	if err != nil {
 		return err
 	}
@@ -502,7 +501,7 @@ func (registry *Registry) updateRecord(id string, mutate func(*Record, time.Time
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	data, _, err := registry.loadAndDiscoverLocked()
+	data, _, err := registry.loadOrMigrateLocked()
 	if err != nil {
 		return Record{}, err
 	}
@@ -525,13 +524,23 @@ func (registry *Registry) updateRecord(id string, mutate func(*Record, time.Time
 	return Record{}, fmt.Errorf("%w: %s", ErrNotFound, id)
 }
 
-func (registry *Registry) loadAndDiscoverLocked() (registryData, bool, error) {
+// DiscoverBooks refreshes directory-backed Book discovery explicitly. Ordinary
+// Registry reads use persisted identity and do not inspect unrelated content.
+func (registry *Registry) DiscoverBooks() error {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
 	data, migrated, err := registry.loadOrMigrateLocked()
 	if err != nil {
-		return registryData{}, false, err
+		return err
 	}
 	discovered, err := registry.discoverBooksLocked(&data)
-	return data, migrated || discovered, err
+	if err != nil {
+		return err
+	}
+	if migrated || discovered {
+		return registry.saveLocked(data)
+	}
+	return nil
 }
 
 func (registry *Registry) loadLocked() (registryData, error) {
@@ -647,6 +656,7 @@ func (registry *Registry) saveLocked(data registryData) error {
 		return err
 	}
 	removeTemp = false
+	registry.readCache = &registryReadCache{raw: append(raw, '\n'), data: cloneRegistryData(data)}
 	return nil
 }
 
@@ -867,18 +877,4 @@ func isUserDataDirectory(name string) bool {
 	default:
 		return strings.HasPrefix(name, ".")
 	}
-}
-
-func isBookWorkspace(path string) bool {
-	markers := []string{
-		filepath.Join(path, workspacelayout.DataDirName), filepath.Join(path, workspacelayout.LegacyDataDirName),
-		filepath.Join(path, "book.json"), filepath.Join(path, "ideas.md"), filepath.Join(path, "brainstorm.md"),
-		filepath.Join(path, "chapters"), filepath.Join(path, "setting"),
-	}
-	for _, marker := range markers {
-		if _, err := os.Stat(marker); err == nil {
-			return true
-		}
-	}
-	return false
 }

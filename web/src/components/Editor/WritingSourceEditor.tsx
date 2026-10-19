@@ -21,6 +21,7 @@ import {
 } from './useEditorDraftPersistence'
 
 interface WritingSourceEditorProps {
+  active?: boolean
   projectId: string
   workspace: string
   fileTree: readonly ProjectFileExplorerNode[]
@@ -37,6 +38,7 @@ interface WritingSourceEditorProps {
 
 /** Monaco source editor that shares Writing's autosave, flush, and conflict semantics. */
 export function WritingSourceEditor({
+  active = true,
   projectId,
   workspace,
   fileTree,
@@ -88,6 +90,7 @@ export function WritingSourceEditor({
     keepLocalVersion,
     loadExternalVersion,
   } = useEditorDraftPersistence({
+    active,
     workspace: projectId,
     fileName: document.path,
     content: document.content ?? '',

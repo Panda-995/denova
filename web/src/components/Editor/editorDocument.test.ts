@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   ParsedMarkdownDocumentCache,
+  countTextCharacters,
   createWorkspaceImageExtension,
   insertPastedWorkspaceMarkdownImage,
   placeEditorCaretAtClick,
@@ -11,6 +12,18 @@ import {
   replaceEditorDocumentWithFreshState,
   resetEditorStateHistory,
 } from './editorDocument'
+
+describe('countTextCharacters', () => {
+  it.each([
+    ['中文 English', 9],
+    [' \t\r\n\u00a0\u3000', 0],
+    ['😀汉字👩‍💻', 6],
+    ['e\u0301', 2],
+    ['\ud800a\udc00', 3],
+  ])('counts visible Unicode code points in %j', (text, expected) => {
+    expect(countTextCharacters(text)).toBe(expected)
+  })
+})
 
 describe('ParsedMarkdownDocumentCache', () => {
   it('reuses only an exact source match and evicts the least recently used entry', () => {

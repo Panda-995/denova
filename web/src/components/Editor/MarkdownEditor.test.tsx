@@ -159,7 +159,7 @@ vi.mock('@tiptap/extension-placeholder', () => ({ default: { configure: () => ({
 vi.mock('@tiptap/extension-image', () => ({ default: { extend: () => ({ configure: () => ({}) }) } }))
 vi.mock('@tiptap/extension-table', () => ({ TableKit: { configure: vi.fn((options) => ({ name: 'tableKit', options })) } }))
 vi.mock('@tiptap/markdown', () => ({ Markdown: { configure: () => ({}) } }))
-vi.mock('sonner', () => ({ toast: toastMock }))
+vi.mock('@/lib/toast', () => ({ toast: toastMock }))
 vi.mock('@/lib/api-client/workspace', () => ({
   MISSING_WORKSPACE_REVISION: 'missing',
 }))
@@ -278,7 +278,7 @@ describe('MarkdownEditor', () => {
     expect(screen.queryByText('与全局外观设置共享，修改后自动保存')).not.toBeInTheDocument()
     expect(screen.getByText('思源宋体阅读')).toBeInTheDocument()
     expect(screen.getByText('默认')).toBeInTheDocument()
-    const readingFontSize = screen.getByRole('group', { name: '阅读内容大小' })
+    const readingFontSize = screen.getByRole('radiogroup', { name: '阅读内容大小' })
     expect(within(readingFontSize).getAllByRole('radio')).toHaveLength(7)
     expect(within(readingFontSize).getByRole('radio', { name: '默认，第 4 档，共 7 档' })).toBeChecked()
     fireEvent.click(within(readingFontSize).getByRole('radio', { name: '大，第 5 档，共 7 档' }))
@@ -1102,6 +1102,22 @@ describe('MarkdownEditor', () => {
 
     expect(onSave).toHaveBeenCalledWith('chapters/ch01.md', '修改后\n', '')
     expect(toastMock.success).not.toHaveBeenCalled()
+  })
+
+  it('releases navigation ownership while hidden and does not replay another tab save on activation', async () => {
+    const onSave = vi.fn(async () => true)
+    const onFlushHandlerChange = vi.fn()
+    const props = { fileName: 'chapters/ch01.md', content: 'Initial', onSave, onFlushHandlerChange, autoSaveEnabled: false }
+    const { rerender } = render(<MarkdownEditor {...props} active saveSignal={0} />)
+    expect(onFlushHandlerChange).toHaveBeenLastCalledWith(expect.any(Function))
+    rerender(<MarkdownEditor {...props} active={false} saveSignal={1} />)
+    expect(onFlushHandlerChange).toHaveBeenLastCalledWith(null)
+    expect(onSave).not.toHaveBeenCalled()
+    rerender(<MarkdownEditor {...props} active saveSignal={1} />)
+    expect(onFlushHandlerChange).toHaveBeenLastCalledWith(expect.any(Function))
+    expect(onSave).not.toHaveBeenCalled()
+    rerender(<MarkdownEditor {...props} active saveSignal={2} />)
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
   })
 
   it('关闭自动保存后用户修改不会自动写入文件', () => {

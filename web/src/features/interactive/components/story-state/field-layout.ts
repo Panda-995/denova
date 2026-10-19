@@ -19,8 +19,8 @@ export interface StateFieldLayout {
 /** Strings at or above this length render as block paragraphs by default. */
 const LONG_TEXT_THRESHOLD = 24
 
-export function resolveStateFieldLayout(field: ActorStateField | undefined, value: unknown): StateFieldLayout {
-  const renderer = resolveStateFieldRenderer(field, value)
+export function resolveStateFieldLayout(field: ActorStateField | undefined, value: unknown, capacity?: unknown): StateFieldLayout {
+  const renderer = resolveStateFieldRenderer(field, value, capacity)
   const declaredGroup = typeof field?.group === 'string' ? field.group.trim() : ''
   if (declaredGroup) {
     return { renderer, group: declaredGroup, customGroup: true }
@@ -36,7 +36,8 @@ export function resolveStateFieldLayout(field: ActorStateField | undefined, valu
   }
 }
 
-function resolveStateFieldRenderer(field: ActorStateField | undefined, value: unknown): StateFieldRenderer {
+function resolveStateFieldRenderer(field: ActorStateField | undefined, value: unknown, capacity?: unknown): StateFieldRenderer {
+  if (field?.type === 'number' && field.max_field && typeof value === 'number' && typeof capacity === 'number') return 'stat'
   const display = field?.display
   if (display === 'inline' || display === 'block' || display === 'list') return display
   if (display === 'stat') return isBoundedNumberField(field, value) ? 'stat' : 'inline'

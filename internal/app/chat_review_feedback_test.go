@@ -2,18 +2,16 @@ package app
 
 import (
 	"context"
-	agentchat "denova/internal/agents/chat"
-	agentconversation "denova/internal/agents/conversation"
-	agentexecution "denova/internal/agents/execution"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-
-	agents "denova/internal/agents"
+	"denova/internal/agents"
+	agentchat "denova/internal/agents/chat"
+	agentconversation "denova/internal/agents/conversation"
+	agentexecution "denova/internal/agents/execution"
 	agentreview "denova/internal/agents/review"
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
@@ -22,6 +20,8 @@ import (
 	workspacelayout "denova/internal/workspace"
 	workspacechange "denova/internal/workspace/change"
 	"denova/internal/workspace/documentreview"
+
+	agentmodel "github.com/alfredxw/denova/agent/model"
 )
 
 func bookReviewRuntime(workspace string, sess *session.Session) ideChatRuntime {
@@ -498,11 +498,11 @@ func TestCommittedReviewFeedbackPersistsWithUserMessageAndDisappearsAfterReload(
 
 type reviewFeedbackCommitChatModel struct{}
 
-func (*reviewFeedbackCommitChatModel) Generate(context.Context, []*agents.Message, ...agent.ModelOption) (*agents.Message, error) {
+func (*reviewFeedbackCommitChatModel) Generate(context.Context, []*agents.Message, ...agentmodel.ModelOption) (*agents.Message, error) {
 	return agents.AssistantMessage("Acknowledged.", nil), nil
 }
 
-func (*reviewFeedbackCommitChatModel) Stream(context.Context, []*agents.Message, ...agent.ModelOption) (*agents.StreamReader[*agents.Message], error) {
+func (*reviewFeedbackCommitChatModel) Stream(context.Context, []*agents.Message, ...agentmodel.ModelOption) (*agents.StreamReader[*agents.Message], error) {
 	return agents.StreamReaderFromArray([]*agents.Message{agents.AssistantMessage("Acknowledged.", nil)}), nil
 }
 

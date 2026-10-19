@@ -1,4 +1,4 @@
-import type { ModelEndpointSettings, ModelProfileSettings } from './types'
+import type { ModelEndpointSettings, ModelProfileSettings, Settings } from './types'
 
 export const DEFAULT_MODEL_PROFILE_ID = 'default'
 export const DEFAULT_MODEL_ENDPOINT_ID = 'default'
@@ -10,11 +10,13 @@ export const MODEL_PROVIDER_OPENAI_COMPATIBLE = 'openai-compatible'
 export const MODEL_PROTOCOL_CHAT_COMPLETIONS = 'openai-chat-completions'
 export const MODEL_PROTOCOL_RESPONSES = 'openai-responses'
 export const MODEL_PROTOCOL_ANTHROPIC_MESSAGES = 'anthropic-messages'
+export const MODEL_PROTOCOL_GOOGLE_GENERATIVE_AI = 'google-generative-ai'
 
 export const FALLBACK_MODEL_PROTOCOLS = [
   MODEL_PROTOCOL_CHAT_COMPLETIONS,
   MODEL_PROTOCOL_RESPONSES,
   MODEL_PROTOCOL_ANTHROPIC_MESSAGES,
+  MODEL_PROTOCOL_GOOGLE_GENERATIVE_AI,
 ]
 
 export function modelEndpointID(endpoint?: ModelEndpointSettings): string {
@@ -79,8 +81,7 @@ export function modelEndpointsWithDefault(settings?: {
     .map((endpoint) => ({ ...endpoint, id: modelEndpointID(endpoint) }))
     .filter((endpoint) => endpoint.id)
   if (endpoints.some((endpoint) => endpoint.id === DEFAULT_MODEL_ENDPOINT_ID)) return endpoints
-  const selectedDefaultID = settings?.agent_models?.default?.profile_id?.trim() || DEFAULT_MODEL_PROFILE_ID
-  if (endpoints.length === 0 || selectedDefaultID === DEFAULT_MODEL_PROFILE_ID) {
+  if (settings?.openai_api_key?.trim() || settings?.openai_base_url?.trim()) {
     return [defaultModelEndpointFromSettings(settings), ...endpoints]
   }
   return endpoints
@@ -96,9 +97,16 @@ export function modelProfilesWithDefault(settings?: {
     .map((profile) => ({ ...profile, id: modelProfileID(profile) }))
     .filter((profile) => profile.id)
   if (profiles.some((profile) => profile.id === DEFAULT_MODEL_PROFILE_ID)) return profiles
-  const selectedDefaultID = settings?.agent_models?.default?.profile_id?.trim() || DEFAULT_MODEL_PROFILE_ID
-  if (profiles.length === 0 || selectedDefaultID === DEFAULT_MODEL_PROFILE_ID) {
+  if (settings?.openai_model?.trim()) {
     return [defaultModelProfileFromSettings(settings), ...profiles]
   }
   return profiles
+}
+
+/** Pickers hide disabled models and connections without altering saved selections. */
+export function selectableModelProfiles(settings?: Settings): ModelProfileSettings[] {
+  const disabledEndpoints = new Set(modelEndpointsWithDefault(settings)
+    .filter((endpoint) => endpoint.enabled === false).map(modelEndpointID))
+  return modelProfilesWithDefault(settings).filter((profile) =>
+    profile.enabled !== false && !disabledEndpoints.has(profile.endpoint_id?.trim() || ''))
 }

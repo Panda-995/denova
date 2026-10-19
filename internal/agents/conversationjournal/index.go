@@ -2,20 +2,19 @@ package conversationjournal
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"denova/internal/localfs"
 )
 
-type indexBody struct {
+type indexFile struct {
 	Version             int             `json:"version"`
 	Identity            Identity        `json:"identity"`
 	VerifiedBytes       int64           `json:"verified_bytes"`
@@ -30,11 +29,6 @@ type indexBody struct {
 	Projection          json.RawMessage `json:"projection"`
 }
 
-type indexFile struct {
-	indexBody
-	Checksum string `json:"checksum"`
-}
-
 func sidecarPath(journalPath string) string {
 	if strings.EqualFold(filepath.Ext(journalPath), ".jsonl") {
 		return strings.TrimSuffix(journalPath, filepath.Ext(journalPath)) + ".idx.json"
@@ -42,30 +36,7 @@ func sidecarPath(journalPath string) string {
 	return journalPath + ".idx.json"
 }
 
-func encodeIndex(body indexBody) ([]byte, error) {
-	bodyJSON, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	digest := sha256.Sum256(bodyJSON)
-	return json.MarshalIndent(indexFile{indexBody: body, Checksum: hex.EncodeToString(digest[:])}, "", "  ")
-}
-
-func decodeIndex(data []byte) (indexBody, error) {
-	var decoded indexFile
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return indexBody{}, err
-	}
-	bodyJSON, err := json.Marshal(decoded.indexBody)
-	if err != nil {
-		return indexBody{}, err
-	}
-	digest := sha256.Sum256(bodyJSON)
-	if decoded.Version != indexVersion || decoded.Checksum != hex.EncodeToString(digest[:]) {
-		return indexBody{}, fmt.Errorf("conversation journal index version or checksum mismatch")
-	}
-	return decoded.indexBody, nil
-}
+func currentSidecarPath(path string) string { return sidecarPath(path) + ".current" }
 
 func writeAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -104,6 +75,10 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 
 func removeIndex(path string) error {
 	err := os.Remove(sidecarPath(path))
+	currentErr := os.Remove(currentSidecarPath(path))
+	if currentErr != nil && !errors.Is(currentErr, os.ErrNotExist) {
+		return currentErr
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -115,9 +90,12 @@ func (journal *Journal) restoreIndexLocked() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	body, err := decodeIndex(data)
-	if err != nil {
+	var body indexFile
+	if err := json.Unmarshal(data, &body); err != nil {
 		return false, err
+	}
+	if body.Version != indexVersion {
+		return false, fmt.Errorf("conversation journal index version mismatch")
 	}
 	if body.Identity != journal.identity {
 		return false, fmt.Errorf("conversation journal index identity mismatch")
@@ -175,7 +153,7 @@ func (journal *Journal) persistIndexLocked() error {
 	} else if journal.head.Cursor > 0 {
 		return fmt.Errorf("conversation journal index is missing its tail locator")
 	}
-	body := indexBody{
+	body := indexFile{
 		Version: indexVersion, Identity: journal.identity,
 		VerifiedBytes: journal.validOffset, Cursor: journal.head.Cursor,
 		TransactionCount: journal.head.TransactionCount, Tail: tail,
@@ -186,12 +164,33 @@ func (journal *Journal) persistIndexLocked() error {
 		Recent:              append([]Location(nil), journal.recent...),
 		Projection:          append(json.RawMessage(nil), projection...),
 	}
-	data, err := encodeIndex(body)
+	if journal.currentOnly {
+		body.Sparse = journal.currentReadAnchors()
+	}
+	data, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
 	if err := writeAtomic(journal.indexPath, data, 0o600); err != nil {
 		return err
+	}
+	if !journal.currentOnly {
+		if reducer, ok := journal.reducer.(interface {
+			CurrentCheckpoint() (json.RawMessage, error)
+		}); ok {
+			current, err := reducer.CurrentCheckpoint()
+			if err != nil {
+				return err
+			}
+			body.Projection, body.Sparse = current, journal.currentReadAnchors()
+			data, err := json.Marshal(body)
+			if err != nil {
+				return err
+			}
+			if err := writeAtomic(currentSidecarPath(journal.path), data, 0o600); err != nil {
+				return err
+			}
+		}
 	}
 	journal.dirtyTransactions = 0
 	journal.indexDirty = false
@@ -229,4 +228,30 @@ func locationSHA256(path string, location Location) (string, error) {
 		return "", err
 	}
 	return recordSHA256(data), nil
+}
+
+func (journal *Journal) currentReadAnchors() []Location {
+	reducer, ok := journal.reducer.(interface{ CurrentReadCursors() []Cursor })
+	if !ok {
+		return nil
+	}
+	seen := make(map[Cursor]Location)
+	for _, cursor := range reducer.CurrentReadCursors() {
+		var anchor Location
+		for _, candidates := range [][]Location{journal.sparse, journal.recent} {
+			index := sort.Search(len(candidates), func(i int) bool { return candidates[i].Cursor > cursor }) - 1
+			if index >= 0 && candidates[index].Cursor > anchor.Cursor {
+				anchor = candidates[index]
+			}
+		}
+		if anchor.Cursor != 0 {
+			seen[anchor.Cursor] = anchor
+		}
+	}
+	result := make([]Location, 0, len(seen))
+	for _, anchor := range seen {
+		result = append(result, anchor)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Cursor < result[j].Cursor })
+	return result
 }

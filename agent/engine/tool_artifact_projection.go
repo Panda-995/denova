@@ -1,0 +1,69 @@
+package engine
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
+)
+
+// projectToolArtifactPaths resolves portable artifact references only on the
+// detached provider request. Canonical loop state keeps owner-relative paths.
+func projectToolArtifactPaths(ctx context.Context, storage agenttool.ToolArtifactStorage, messages []*agentschema.Message) ([]*agentschema.Message, error) {
+	result := agentschema.CloneMessages(messages)
+	resolver, hasResolver := storage.(agenttool.ToolArtifactPathResolver)
+	for _, message := range result {
+		if message == nil {
+			continue
+		}
+		if message.Role == agentschema.ToolRole {
+			for index := range message.Attachments {
+				if !hasResolver {
+					return nil, fmt.Errorf("tool image requires artifact path resolution")
+				}
+				attachment := &message.Attachments[index]
+				resolved, err := resolver.ResolveToolArtifactPath(ctx, attachment.Path)
+				if err != nil {
+					return nil, fmt.Errorf("resolve tool image %q: %w", attachment.Name, err)
+				}
+				attachment.RuntimePath = resolved
+			}
+		}
+		if !hasResolver || message.ToolResult == nil {
+			continue
+		}
+		paths := make(map[string]string)
+		for index := range message.ToolResult.Artifacts {
+			stored := strings.TrimSpace(message.ToolResult.Artifacts[index].ReadablePath)
+			if stored == "" {
+				continue
+			}
+			resolved, err := resolver.ResolveToolArtifactPath(ctx, stored)
+			if err != nil {
+				return nil, fmt.Errorf("resolve tool artifact %q: %w", message.ToolResult.Artifacts[index].ID, err)
+			}
+			paths[stored] = resolved
+			message.ToolResult.Artifacts[index].ReadablePath = resolved
+		}
+		if len(paths) == 0 {
+			continue
+		}
+		message.Content = replaceProjectedArtifactPaths(message.Content, paths)
+		if hints := message.ToolResult.ContextHints; hints != nil {
+			hints.Recovery.ArtifactPath = replaceProjectedArtifactPaths(hints.Recovery.ArtifactPath, paths)
+		}
+		if receipt := message.ToolResult.ProtectedReceipt; receipt != nil {
+			receipt.Outcome = replaceProjectedArtifactPaths(receipt.Outcome, paths)
+		}
+	}
+	return result, nil
+}
+
+func replaceProjectedArtifactPaths(value string, paths map[string]string) string {
+	for stored, resolved := range paths {
+		value = strings.ReplaceAll(value, stored, resolved)
+	}
+	return value
+}

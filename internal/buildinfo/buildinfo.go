@@ -4,4 +4,7 @@ package buildinfo
 // treating themselves as installable release binaries.
 var Version = "dev"
 
+// DevelopmentVersion is the public capability target of this source tree.
+const DevelopmentVersion = "0.6.1"
+
 const Repository = "alfredxw/denova"

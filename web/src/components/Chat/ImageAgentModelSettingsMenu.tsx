@@ -22,7 +22,7 @@ import {
   DEFAULT_MODEL_PROFILE_ID,
   modelProfileID,
   modelProfileLabel,
-  modelProfilesWithDefault,
+  selectableModelProfiles,
 } from '@/features/settings/model-profiles'
 import type { LayeredSettings, Settings } from '@/features/settings/types'
 import { customAgentsForRuntime } from '@/features/agents/CustomAgentSelect'
@@ -282,7 +282,7 @@ function buildLanguageModelOptions(
   t: (key: string, options?: Record<string, unknown>) => string,
 ): ModelMenuOption[] {
   if (!settings) return []
-  const options = modelProfilesWithDefault(settings.effective).map((profile) => {
+  const options = selectableModelProfiles(settings.effective).map((profile) => {
     const id = modelProfileID(profile)
     const label = modelProfileLabel(profile) || id
     return {
@@ -294,7 +294,7 @@ function buildLanguageModelOptions(
       meta: profile.model?.trim(),
     }
   }).filter((option) => Boolean(option.id))
-  return includeCurrentOption(options, resolveImageAgentLanguageModelID(settings))
+  return options
 }
 
 function buildImageModelOptions(

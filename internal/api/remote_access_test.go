@@ -23,7 +23,7 @@ func testRemoteAccess(t *testing.T) (*remoteAccessGate, *hertzserver.Hertz, *con
 		t.Fatal(err)
 	}
 	access := &config.RemoteAccessConfig{DataDir: t.TempDir(), AllowLANAccess: true, Username: "reader", PasswordHash: hash}
-	gate := newRemoteAccessGate(func() config.RemoteAccessConfig { return *access }, "8080")
+	gate := newRemoteAccessGate(func() config.RemoteAccessConfig { return *access }, "7789")
 	h := hertzserver.Default()
 	h.Use(gate.middleware)
 	gate.registerRoutes(h)
@@ -105,7 +105,7 @@ func TestRemoteAccessPairingAndCredentialChanges(t *testing.T) {
 	if res := remoteRequest(h, "POST", "/api/auth/link", "", gate.cookieName+"="+token); res.Code != 403 {
 		t.Fatalf("authenticated remote link request: %d", res.Code)
 	}
-	link := ut.PerformRequest(h.Engine, "POST", "http://localhost:8080/api/auth/link", nil)
+	link := ut.PerformRequest(h.Engine, "POST", "http://localhost:7789/api/auth/link", nil)
 	var result struct {
 		URL string `json:"url"`
 	}
@@ -142,7 +142,7 @@ func TestRemoteAccessPairingAndCredentialChanges(t *testing.T) {
 func TestRemoteAccessOriginAndHTTPSCookie(t *testing.T) {
 	_, h, _ := testRemoteAccess(t)
 	for _, path := range []string{"/api/auth/login", "/api/auth/pair", "/api/auth/logout", "/api/private"} {
-		res := remoteRequest(h, "POST", path, "{}", "", ut.Header{Key: "Origin", Value: "http://attacker.test"}, ut.Header{Key: "Host", Value: "192.168.1.9:8080"})
+		res := remoteRequest(h, "POST", path, "{}", "", ut.Header{Key: "Origin", Value: "http://attacker.test"}, ut.Header{Key: "Host", Value: "192.168.1.9:7789"})
 		if res.Code != 403 {
 			t.Fatalf("cross-origin %s: %d", path, res.Code)
 		}

@@ -23,7 +23,8 @@ func TestModelFacingSourceRejectsBilingualSplitLiterals(t *testing.T) {
 	}
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", ".."))
 	paths := []string{
-		"agent/permission.go",
+		"agent/tool/permission",
+		"agent/engine/permission.go",
 		"internal/agents/prompts",
 		"internal/agents/chat/context.go",
 		"internal/agents/chat/explicit_skills.go",

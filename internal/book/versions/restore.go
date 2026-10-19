@@ -1,6 +1,7 @@
 package versions
 
 import (
+	"context"
 	cryptorand "crypto/rand"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 
+	"denova/internal/assetstore"
 	"denova/internal/localfs"
 )
 
@@ -48,8 +50,14 @@ func (p restorePlanner) PlanLocked(id string, paths []string, settings VersionAu
 	if err != nil {
 		return VersionRestorePlan{}, err
 	}
+	if scope == VersionRestoreScopePaths {
+		normalizedPaths, err = s.loreRestorePaths(version.ID, normalizedPaths)
+		if err != nil {
+			return VersionRestorePlan{}, err
+		}
+	}
 	settings = normalizeVersionAutoSettings(settings)
-	status, err := s.statusLocked(settings)
+	status, err := s.statusLocked(context.Background(), settings)
 	if err != nil {
 		return VersionRestorePlan{}, err
 	}
@@ -65,8 +73,18 @@ func (p restorePlanner) PlanLocked(id string, paths []string, settings VersionAu
 			planPaths = append(planPaths, change.Path)
 		}
 	}
+	retainedMedia := []string{}
+	filtered := changes[:0]
+	for _, change := range changes {
+		if change.MissingInVersion && assetstore.IsRetained(change.Path) {
+			retainedMedia = append(retainedMedia, change.Path)
+		} else {
+			filtered = append(filtered, change)
+		}
+	}
+	changes = filtered
 	warnings := []string{}
-	if len(changes) == 0 {
+	if len(changes) == 0 && len(retainedMedia) == 0 {
 		warnings = append(warnings, "目标版本与当前工作区一致，无需恢复")
 	}
 	if scope == VersionRestoreScopePaths {
@@ -87,6 +105,7 @@ func (p restorePlanner) PlanLocked(id string, paths []string, settings VersionAu
 		CurrentDirty:     !status.Clean,
 		BackupMessage:    backupMessage,
 		Warnings:         warnings,
+		RetainedMedia:    retainedMedia,
 	}, nil
 }
 
@@ -114,7 +133,10 @@ func (p restorePlanner) ApplyLocked(id string, paths []string, settings VersionA
 		return VersionRestoreResult{}, err
 	}
 
-	nextStatus, statusErr := s.statusLocked(settings)
+	if err := assetstore.MigrateRestored(s.workspace, s.repository); err != nil {
+		return VersionRestoreResult{}, fmt.Errorf("migrate restored creative assets: %w", err)
+	}
+	nextStatus, statusErr := s.statusLocked(context.Background(), settings)
 	target := plan.Target
 	restoredPaths := make([]string, 0, len(plan.Changes))
 	for _, change := range plan.Changes {
@@ -253,6 +275,9 @@ func (s *Service) restorePathsFromCommit(id string, paths []string) error {
 			return fmt.Errorf("恢复路径 %s 的父目录无效: %w", rel, err)
 		}
 		entry := selectiveRestoreEntry{path: rel}
+		if _, ok := target[rel]; !ok && assetstore.IsRetained(rel) {
+			continue
+		}
 		if _, ok := target[rel]; ok {
 			entry.targetExists = true
 			entry.targetData, err = s.readCommitFile(id, rel)
@@ -275,6 +300,12 @@ func (s *Service) restorePathsFromCommit(id string, paths []string) error {
 		case errors.Is(statErr, os.ErrNotExist):
 		default:
 			return statErr
+		}
+		if assetstore.IsMetadata(rel) && entry.targetExists && entry.beforeExists {
+			entry.targetData, err = assetstore.MergeMetadata(entry.targetData, entry.beforeData)
+			if err != nil {
+				return err
+			}
 		}
 		plan = append(plan, entry)
 	}
@@ -411,6 +442,9 @@ func (s *Service) removeVisibleFilesAbsentFromCommit(id string) error {
 		return err
 	}
 	for _, file := range files {
+		if assetstore.IsRetained(file.Path) {
+			continue
+		}
 		if _, ok := target[file.Path]; ok {
 			continue
 		}

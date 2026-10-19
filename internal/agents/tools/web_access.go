@@ -7,10 +7,12 @@ import (
 	"strings"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
 	"denova/internal/webaccess"
+
+	agentexecution "github.com/alfredxw/denova/agent/engine/execution"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 const (
@@ -70,7 +72,7 @@ func (client *invocationWebAccessClient) runtimeClient(ctx context.Context) (man
 	if client == nil || client.factory == nil {
 		return nil, errors.New("web access client is not configured")
 	}
-	return agent.InvocationResource(ctx, webAccessInvocationResourceKey, func(context.Context) (managedWebAccessClient, func(context.Context) error, error) {
+	return agentexecution.InvocationResource(ctx, webAccessInvocationResourceKey, func(context.Context) (managedWebAccessClient, func(context.Context) error, error) {
 		created, err := client.factory()
 		if err != nil {
 			return nil, nil, err
@@ -100,15 +102,15 @@ func resolveWebAccessClientConfig(cfg *config.Config) webaccess.Config {
 	}
 }
 
-func newWebSearchTool(client webSearchClient, capability string) (agent.ToolDefinition, error) {
+func newWebSearchTool(client webSearchClient, capability string) (agenttool.ToolDefinition, error) {
 	if client == nil {
-		return agent.ToolDefinition{}, errors.New("web_search client is nil")
+		return agenttool.ToolDefinition{}, errors.New("web_search client is nil")
 	}
 	capability = strings.TrimSpace(capability)
 	if capability == "" {
-		return agent.ToolDefinition{}, errors.New("web_search capability is required")
+		return agenttool.ToolDefinition{}, errors.New("web_search capability is required")
 	}
-	searchTool, err := agent.InferTool[webSearchToolInput, webaccess.SearchResponse](
+	searchTool, err := agenttool.InferTool[webSearchToolInput, webaccess.SearchResponse](
 		"web_search",
 		webSearchToolDescription,
 		func(ctx context.Context, input webSearchToolInput) (webaccess.SearchResponse, error) {
@@ -123,27 +125,27 @@ func newWebSearchTool(client webSearchClient, capability string) (agent.ToolDefi
 		},
 	)
 	if err != nil {
-		return agent.ToolDefinition{}, fmt.Errorf("create web_search tool: %w", err)
+		return agenttool.ToolDefinition{}, fmt.Errorf("create web_search tool: %w", err)
 	}
-	searchDescriptor := boundedReadDescriptor(ToolSourceWeb, capability, agent.ToolResultRecoveryRerun)
-	searchDescriptor.Steering = agent.SteeringInterruptibleWait
-	searchDescriptor.Presentation = agent.UniformToolPresentation(agent.ToolPresentationSearch)
+	searchDescriptor := boundedReadDescriptor(ToolSourceWeb, capability, agentschema.ToolResultRecoveryRerun)
+	searchDescriptor.Steering = agenttool.SteeringInterruptibleWait
+	searchDescriptor.Presentation = agenttool.UniformToolPresentation(agenttool.ToolPresentationSearch)
 	definedSearchTool, err := defineTool(searchTool, searchDescriptor)
 	if err != nil {
-		return agent.ToolDefinition{}, err
+		return agenttool.ToolDefinition{}, err
 	}
 	return definedSearchTool, nil
 }
 
-func newWebFetchTool(client webFetchClient, capability string) (agent.ToolDefinition, error) {
+func newWebFetchTool(client webFetchClient, capability string) (agenttool.ToolDefinition, error) {
 	if client == nil {
-		return agent.ToolDefinition{}, errors.New("web_fetch client is nil")
+		return agenttool.ToolDefinition{}, errors.New("web_fetch client is nil")
 	}
 	capability = strings.TrimSpace(capability)
 	if capability == "" {
-		return agent.ToolDefinition{}, errors.New("web_fetch capability is required")
+		return agenttool.ToolDefinition{}, errors.New("web_fetch capability is required")
 	}
-	fetchTool, err := agent.InferTool[webFetchToolInput, webaccess.FetchResponse](
+	fetchTool, err := agenttool.InferTool[webFetchToolInput, webaccess.FetchResponse](
 		webFetchToolName,
 		webFetchToolDescription,
 		func(ctx context.Context, input webFetchToolInput) (webaccess.FetchResponse, error) {
@@ -158,19 +160,19 @@ func newWebFetchTool(client webFetchClient, capability string) (agent.ToolDefini
 		},
 	)
 	if err != nil {
-		return agent.ToolDefinition{}, fmt.Errorf("create web_fetch tool: %w", err)
+		return agenttool.ToolDefinition{}, fmt.Errorf("create web_fetch tool: %w", err)
 	}
-	fetchDescriptor := boundedReadDescriptor(ToolSourceWeb, capability, agent.ToolResultRecoveryRefetch)
+	fetchDescriptor := boundedReadDescriptor(ToolSourceWeb, capability, agentschema.ToolResultRecoveryRefetch)
 	// A fetched page can be large and is always reproducible from its bounded
 	// URL/range arguments. Keep it rich through the current run, while allowing
 	// the shared pressure planner to replace only exceptionally large, settled
 	// results at the next turn boundary.
-	fetchDescriptor.ResultRetention = agent.ToolResultEagerCandidate
-	fetchDescriptor.Steering = agent.SteeringInterruptibleWait
-	fetchDescriptor.Presentation = agent.UniformToolPresentation(agent.ToolPresentationWeb)
+	fetchDescriptor.ResultRetention = agentschema.ToolResultEagerCandidate
+	fetchDescriptor.Steering = agenttool.SteeringInterruptibleWait
+	fetchDescriptor.Presentation = agenttool.UniformToolPresentation(agenttool.ToolPresentationWeb)
 	definedFetchTool, err := defineTool(fetchTool, fetchDescriptor)
 	if err != nil {
-		return agent.ToolDefinition{}, err
+		return agenttool.ToolDefinition{}, err
 	}
 	return definedFetchTool, nil
 }

@@ -10,11 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	reviewapp "denova/internal/app/review"
 	"denova/internal/book"
-	booklore "denova/internal/book/lore"
 	projectdomain "denova/internal/project"
-	"denova/internal/workspace/documentreview"
 )
 
 var ErrBookProjectRequired = errors.New("project is not a Book")
@@ -100,74 +97,10 @@ func (service *Service) SetChapterConfirmed(projectID, path string, confirmed bo
 	return runtime.files.SetChapterConfirmed(path, confirmed)
 }
 
-func (service *Service) LoreItems(projectID string) ([]booklore.Item, error) {
-	store, err := service.loreStore(projectID)
-	if err != nil {
-		return nil, err
-	}
-	return store.ListAll()
-}
-
-func (service *Service) CreateLoreItem(projectID string, input booklore.ItemInput) (booklore.Item, error) {
-	store, err := service.loreStore(projectID)
-	if err != nil {
-		return booklore.Item{}, err
-	}
-	return store.Create(input)
-}
-
-func (service *Service) UpdateLoreItem(projectID, id string, input booklore.ItemInput) (booklore.Item, error) {
-	store, err := service.loreStore(projectID)
-	if err != nil {
-		return booklore.Item{}, err
-	}
-	return store.Update(id, input)
-}
-
-func (service *Service) DeleteLoreItem(projectID, id string) error {
-	store, err := service.loreStore(projectID)
-	if err != nil {
-		return err
-	}
-	return store.Delete(id)
-}
-
-// WithDocumentReview resolves the review ledger and target snapshots from the
-// same Book runtime, so comments can never bind to a different foreground Book.
-func (service *Service) WithDocumentReview(
-	projectID string,
-	action func(*documentreview.Service, documentreview.SnapshotResolver) error,
-) (string, error) {
-	if action == nil {
-		return "", errors.New("document review action is nil")
-	}
-	runtime, err := service.resolve(projectID)
-	if err != nil {
-		return "", err
-	}
-	reviews, err := documentreview.ForWorkspaceAt(runtime.layout.ContentRoot, runtime.layout.StoreRoot)
-	if err != nil {
-		return "", err
-	}
-	resolver := reviewapp.NewTargetResolver(runtime.layout.ContentRoot, runtime.files)
-	if err := action(reviews, resolver); err != nil {
-		return "", err
-	}
-	return runtime.layout.ContentRoot, nil
-}
-
 type runtime struct {
 	record projectdomain.Record
 	layout projectdomain.Layout
 	files  *book.Service
-}
-
-func (service *Service) loreStore(projectID string) (*booklore.Store, error) {
-	runtime, err := service.resolve(projectID)
-	if err != nil {
-		return nil, err
-	}
-	return booklore.NewStore(runtime.layout.ContentRoot), nil
 }
 
 func (service *Service) resolve(projectID string) (runtime, error) {

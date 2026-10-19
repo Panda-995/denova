@@ -110,7 +110,7 @@ export function CharacterCardImportDialog({
                   {preview.opening_truncated_count > 0 && <span>{t('importCard.openingTruncatedCount', { count: preview.opening_truncated_count })}</span>}
                   {preview.removed_runtime_entry_count > 0 && <span>{t('importCard.removedRuntimeCount', { count: preview.removed_runtime_entry_count })}</span>}
                   {preview.sanitized_mixed_entry_count > 0 && <span>{t('importCard.sanitizedMixedCount', { count: preview.sanitized_mixed_entry_count })}</span>}
-                  {preview.will_import_cover && <span>{t('importCard.willImportCover')}</span>}
+                  {preview.will_import_cover && <span>{t(targetMode === 'new_book' ? 'importCard.willImportBookAndLoreCover' : 'importCard.willImportLoreCover')}</span>}
                   {preview.user_placeholder_found && <span>{t('importCard.willImportUser')}</span>}
                   {preview.tags?.map((tag) => (
                     <span key={tag} className="rounded border border-[var(--nova-border)] bg-[var(--nova-surface-2)] px-1.5 text-[var(--nova-text-muted)]">{tag}</span>
@@ -232,7 +232,7 @@ export function CharacterCardImportDialog({
   )
 }
 
-function CompatibilityReport({ preview }: { preview: CharacterCardPreview }) {
+export function CompatibilityReport({ preview }: { preview: Pick<CharacterCardPreview, 'compatibility'> }) {
   const { t } = useTranslation()
   const groups = [
     { key: 'capabilities', fields: preview.compatibility?.capabilities || [] },

@@ -48,7 +48,18 @@ func (s *InteractiveAppService) InteractiveStories() (interactive.Index, error) 
 	if store == nil {
 		return interactive.Index{}, ErrNoWorkspace
 	}
-	return store.Index()
+	index, err := store.Index()
+	if err != nil {
+		return interactive.Index{}, err
+	}
+	visible := make([]interactive.StorySummary, 0, len(index.Stories))
+	for _, story := range index.Stories {
+		if !story.Preview {
+			visible = append(visible, story)
+		}
+	}
+	index.Stories = visible
+	return index, nil
 }
 
 func (a *App) SelectInteractiveStory(storyID string) error {
@@ -85,7 +96,12 @@ func (s *InteractiveAppService) CreateInteractiveStoryContext(ctx context.Contex
 	if store == nil {
 		return interactive.StorySummary{}, ErrNoWorkspace
 	}
+	projectStoreDir := s.cfg().ProjectStoreDir
 	var err error
+	req, err = s.withGameCreationDefaults(req)
+	if err != nil {
+		return interactive.StorySummary{}, err
+	}
 	req.Protagonist, err = s.resolveStoryProtagonist(ctx, req.Protagonist)
 	if err != nil {
 		return interactive.StorySummary{}, err
@@ -142,6 +158,7 @@ func (s *InteractiveAppService) CreateInteractiveStoryContext(ctx context.Contex
 	if err != nil {
 		return interactive.StorySummary{}, err
 	}
+	rememberGameCreation(ctx, projectStoreDir, story, req.RuntimeConfig.CustomAgentID)
 	return story, nil
 }
 
@@ -186,6 +203,9 @@ func (s *InteractiveAppService) withStoryCreationDefaults(req interactive.Create
 	refs := interactive.DefaultStoryDirectorModuleRefs()
 	if req.ModuleRefs != nil {
 		refs = interactive.NormalizeStoryDirectorModuleRefs(*req.ModuleRefs)
+	}
+	if req.StoryTellerID != "" && (req.ModuleRefs == nil || req.ModuleRefs.NarrativeStyleID == "" && !req.ModuleRefs.NarrativeStyleDisabled) {
+		refs.NarrativeStyleID = strings.TrimSpace(req.StoryTellerID)
 	}
 	runtime := interactive.DefaultStoryDirector()
 	runtime.ModuleRefs = refs
@@ -402,7 +422,7 @@ func (s *InteractiveAppService) InteractiveSnapshot(storyID, branchID string) (i
 	if store == nil {
 		return interactive.Snapshot{}, ErrNoWorkspace
 	}
-	snapshot, err := store.Snapshot(storyID, branchID)
+	snapshot, err := store.DisplaySnapshot(storyID, branchID)
 	if err != nil {
 		return interactive.Snapshot{}, err
 	}
@@ -453,7 +473,7 @@ func (s *InteractiveAppService) InteractiveHistoryPage(storyID, branchID, before
 	if store == nil {
 		return interactive.StoryHistoryPage{}, ErrNoWorkspace
 	}
-	page, err := store.ReadHistoryPage(storyID, branchID, beforeCursor, limit)
+	page, err := store.ReadDisplayHistoryPage(storyID, branchID, beforeCursor, limit)
 	if err != nil {
 		return interactive.StoryHistoryPage{}, err
 	}
@@ -461,6 +481,14 @@ func (s *InteractiveAppService) InteractiveHistoryPage(storyID, branchID, before
 		page.Turns[index].Attachments = attachmentDescriptors(page.Turns[index].Attachments)
 	}
 	return page, nil
+}
+
+func (a *App) InteractiveExecutionDetails(storyID, branchID, cursor string) (interactive.StoryExecutionDetails, error) {
+	store := a.interactiveService().store()
+	if store == nil {
+		return interactive.StoryExecutionDetails{}, ErrNoWorkspace
+	}
+	return store.ReadExecutionDetails(storyID, branchID, cursor)
 }
 
 func (a *App) RerollInteractiveRuleResolution(storyID, resolutionID string, req interactive.RuleResolutionRerollRequest) (interactive.RuleResolution, error) {

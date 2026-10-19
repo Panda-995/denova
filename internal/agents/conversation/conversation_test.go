@@ -4,11 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
 	agentcontext "denova/internal/agents/context"
 	"denova/internal/agents/session"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestSessionConversationKeepsRichRawHistoryForAgentOwnedMaintenance(t *testing.T) {
@@ -21,10 +21,10 @@ func TestSessionConversationKeepsRichRawHistoryForAgentOwnedMaintenance(t *testi
 		t.Fatal(err)
 	}
 	for i := 1; i <= 4; i++ {
-		if err := sess.Append(agent.UserMessage("user " + string(rune('0'+i)))); err != nil {
+		if err := sess.Append(agentschema.UserMessage("user " + string(rune('0'+i)))); err != nil {
 			t.Fatal(err)
 		}
-		if err := sess.Append(agent.AssistantMessage("assistant "+string(rune('0'+i)), nil)); err != nil {
+		if err := sess.Append(agentschema.AssistantMessage("assistant "+string(rune('0'+i)), nil)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -90,10 +90,10 @@ func TestSessionConversationPrependsDynamicContextInsideFinalUserMessageOnly(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.UserMessage("旧用户请求")); err != nil {
+	if err := sess.Append(agentschema.UserMessage("旧用户请求")); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.AssistantMessage("旧助手回复", nil)); err != nil {
+	if err := sess.Append(agentschema.AssistantMessage("旧助手回复", nil)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -138,10 +138,10 @@ func TestSessionConversationPrependsStableContextBeforeHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.UserMessage("旧用户请求")); err != nil {
+	if err := sess.Append(agentschema.UserMessage("旧用户请求")); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.AssistantMessage("旧助手回复", nil)); err != nil {
+	if err := sess.Append(agentschema.AssistantMessage("旧助手回复", nil)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -188,7 +188,7 @@ func TestWorkspaceRuntimeContextUsesReplaceableStablePrefix(t *testing.T) {
 		t.Fatalf("runtime fragments = %#v", fragments)
 	}
 	fragment := fragments[0]
-	if fragment.Stability != agent.ContextStablePrefix || fragment.Placement != agentcontext.PlacementLeadingMessage || fragment.StateID != "" {
+	if fragment.Stability != agentschema.ContextStablePrefix || fragment.Placement != agentcontext.PlacementLeadingMessage || fragment.StateID != "" {
 		t.Fatalf("stable workspace fragment = %#v", fragment)
 	}
 }
@@ -202,11 +202,11 @@ func TestSessionConversationKeepsStableContextBeforeAgentTranscript(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, message := range []*agent.Message{
-		agent.UserMessage(strings.Repeat("第一轮旧用户请求 ", 700)),
-		agent.AssistantMessage(strings.Repeat("第一轮旧助手回复 ", 700), nil),
-		agent.UserMessage("第二轮旧用户请求"),
-		agent.AssistantMessage("第二轮旧助手回复", nil),
+	for _, message := range []*agentschema.Message{
+		agentschema.UserMessage(strings.Repeat("第一轮旧用户请求 ", 700)),
+		agentschema.AssistantMessage(strings.Repeat("第一轮旧助手回复 ", 700), nil),
+		agentschema.UserMessage("第二轮旧用户请求"),
+		agentschema.AssistantMessage("第二轮旧助手回复", nil),
 	} {
 		if err := sess.Append(message); err != nil {
 			t.Fatal(err)
@@ -230,7 +230,7 @@ func TestSessionConversationKeepsStableContextBeforeAgentTranscript(t *testing.T
 	}
 }
 
-func messageContents(messages []*agent.Message) []string {
+func messageContents(messages []*agentschema.Message) []string {
 	contents := make([]string, 0, len(messages))
 	for _, msg := range messages {
 		if msg == nil {

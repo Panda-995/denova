@@ -10,6 +10,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
+	"denova/internal/api/sse"
 	"denova/internal/workspace/filewatch"
 )
 
@@ -29,13 +30,8 @@ func (h *Handlers) HandleProjectFileEvents(ctx context.Context, c *app.RequestCo
 	}
 	projectID := scope.ProjectID
 	workspace := scope.ContentRoot
-	c.Response.Header.Set("Content-Type", "text/event-stream")
-	c.Response.Header.Set("Cache-Control", "no-cache")
-	c.Response.Header.Set("Connection", "keep-alive")
 	c.Response.Header.Set("X-Accel-Buffering", "no")
-	c.Response.ImmediateHeaderFlush = true
-
-	reader, writer := io.Pipe()
+	writer := sse.NewSubscriptionStream(ctx, c, unsubscribe)
 	go func() {
 		heartbeat := time.NewTicker(workspaceEventHeartbeatInterval)
 		defer func() {
@@ -43,7 +39,6 @@ func (h *Handlers) HandleProjectFileEvents(ctx context.Context, c *app.RequestCo
 			if recovered := recover(); recovered != nil {
 				slog.ErrorContext(ctx, fmt.Sprintf("[filewatch-sse] stream panic recovered project_id=%q workspace=%q err=%v", projectID, workspace, recovered))
 			}
-			unsubscribe()
 			_ = writer.Close()
 		}()
 		slog.InfoContext(ctx, fmt.Sprintf("[filewatch-sse] stream connected project_id=%q workspace=%q", projectID, workspace))
@@ -65,7 +60,6 @@ func (h *Handlers) HandleProjectFileEvents(ctx context.Context, c *app.RequestCo
 			}
 		}
 	}()
-	c.Response.SetBodyStream(reader, -1)
 }
 
 func writeProjectFileEvent(writer io.Writer, event filewatch.Event) error {

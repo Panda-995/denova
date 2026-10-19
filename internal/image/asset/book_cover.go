@@ -3,9 +3,6 @@ package asset
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	imagepkg "image"
 	_ "image/jpeg"
@@ -16,6 +13,7 @@ import (
 	"time"
 
 	"denova/config"
+	"denova/internal/assetstore"
 	"denova/internal/book"
 	imagegen "denova/internal/image/generation"
 
@@ -24,7 +22,7 @@ import (
 
 const (
 	CoverResultSchema  = "book_cover.v1"
-	CoverPath          = "assets/image/cover.png"
+	CoverPath          = assetstore.CoverPath
 	defaultCoverSize   = "1728x2304"
 	defaultCoverFormat = "png"
 )
@@ -36,10 +34,10 @@ type Generator interface {
 type Service struct {
 	generator Generator
 	now       func() time.Time
-	suffix    func() string
 }
 
 type CoverGenerateRequest struct {
+	Provenance  ProvenanceStorage
 	Title       string
 	Description string
 	// Prompt is a complete provider prompt. When set, no cover template or
@@ -60,7 +58,7 @@ type CoverResult struct {
 	Schema         string `json:"schema"`
 	CoverPath      string `json:"cover_path"`
 	SourcePath     string `json:"source_path"`
-	MetaPath       string `json:"meta_path"`
+	MetaPath       string `json:"meta_path,omitempty"`
 	BackupPath     string `json:"backup_path,omitempty"`
 	CoverUpdatedAt string `json:"cover_updated_at"`
 	ImagePresetID  string `json:"image_preset_id,omitempty"`
@@ -77,31 +75,6 @@ type CoverResult struct {
 	SizeBytes     int    `json:"size_bytes,omitempty"`
 }
 
-type coverMeta struct {
-	Schema         string `json:"schema"`
-	Source         string `json:"source"`
-	Title          string `json:"title"`
-	Description    string `json:"description,omitempty"`
-	Instruction    string `json:"instruction,omitempty"`
-	ImagePresetID  string `json:"image_preset_id,omitempty"`
-	Prompt         string `json:"prompt"`
-	RevisedPrompt  string `json:"revised_prompt,omitempty"`
-	CoverPath      string `json:"cover_path"`
-	SourcePath     string `json:"source_path"`
-	MetaPath       string `json:"meta_path"`
-	BackupPath     string `json:"backup_path,omitempty"`
-	ProfileID      string `json:"profile_id"`
-	Provider       string `json:"provider"`
-	Model          string `json:"model"`
-	Size           string `json:"size,omitempty"`
-	Quality        string `json:"quality,omitempty"`
-	OutputFormat   string `json:"output_format,omitempty"`
-	MIMEType       string `json:"mime_type,omitempty"`
-	SizeBytes      int    `json:"size_bytes,omitempty"`
-	CoverUpdatedAt string `json:"cover_updated_at"`
-	CreatedAt      string `json:"created_at"`
-}
-
 func NewService() *Service {
 	return NewServiceWithGenerator(imagegen.NewService())
 }
@@ -110,7 +83,6 @@ func NewServiceWithGenerator(generator Generator) *Service {
 	return &Service{
 		generator: generator,
 		now:       time.Now,
-		suffix:    randomSuffix,
 	}
 }
 
@@ -155,7 +127,7 @@ func (s *Service) GenerateCover(ctx context.Context, cfg *config.Config, bookSer
 	}
 
 	createdAt := s.now().UTC()
-	sourcePath, metaPath := newCoverRunPaths(createdAt, s.suffix(), "cover", ext)
+	sourcePath := assetstore.NewPath(assetstore.Covers, ext)
 
 	displayData := image.Data
 	if ext != defaultCoverFormat {
@@ -169,29 +141,12 @@ func (s *Service) GenerateCover(ctx context.Context, cfg *config.Config, bookSer
 		}
 		displayData = converted.Bytes()
 	}
-	if err := bookService.WriteBinaryFile(sourcePath, image.Data); err != nil {
-		return CoverResult{}, fmt.Errorf("保存封面原图失败: %w", err)
-	}
-
-	backupPath, err := backupExistingCover(bookService, createdAt, defaultCoverFormat)
-	if err != nil {
-		return CoverResult{}, err
-	}
-	if err := bookService.WriteBinaryFile(CoverPath, displayData); err != nil {
-		return CoverResult{}, fmt.Errorf("写入展示封面失败: %w", err)
-	}
-	coverUpdatedAt := createdAt.Format(time.RFC3339Nano)
-	if info, statErr := os.Stat(filepath.Join(bookService.Workspace(), filepath.FromSlash(CoverPath))); statErr == nil {
-		coverUpdatedAt = info.ModTime().UTC().Format(time.RFC3339Nano)
-	}
 
 	result := CoverResult{
 		Schema:         CoverResultSchema,
 		CoverPath:      CoverPath,
 		SourcePath:     sourcePath,
-		MetaPath:       metaPath,
-		BackupPath:     backupPath,
-		CoverUpdatedAt: coverUpdatedAt,
+		CoverUpdatedAt: createdAt.Format(time.RFC3339Nano),
 		ImagePresetID:  strings.TrimSpace(request.ImagePresetID),
 		ProfileID:      generated.ProfileID,
 		Provider:       generated.Provider,
@@ -204,37 +159,31 @@ func (s *Service) GenerateCover(ctx context.Context, cfg *config.Config, bookSer
 		MIMEType:       image.MIMEType,
 		SizeBytes:      len(image.Data),
 	}
-	meta := coverMeta{
-		Schema:         CoverResultSchema,
-		Source:         "book_cover_generate",
-		Title:          trimRunes(request.Title, 200),
-		Description:    trimRunes(request.Description, 2000),
-		Instruction:    trimRunes(request.Instruction, 1000),
-		ImagePresetID:  result.ImagePresetID,
-		Prompt:         prompt,
-		RevisedPrompt:  result.RevisedPrompt,
-		CoverPath:      result.CoverPath,
-		SourcePath:     result.SourcePath,
-		MetaPath:       result.MetaPath,
-		BackupPath:     result.BackupPath,
-		ProfileID:      result.ProfileID,
-		Provider:       result.Provider,
-		Model:          result.Model,
-		Size:           result.Size,
-		Quality:        result.Quality,
-		OutputFormat:   result.OutputFormat,
-		MIMEType:       result.MIMEType,
-		SizeBytes:      result.SizeBytes,
-		CoverUpdatedAt: result.CoverUpdatedAt,
-		CreatedAt:      result.CreatedAt,
-	}
-	data, err := json.MarshalIndent(meta, "", "  ")
+	saved, err := request.Provenance.file(sourcePath, image.Data, generationMeta{
+		Prompt: prompt, RevisedPrompt: result.RevisedPrompt, ImagePresetID: result.ImagePresetID,
+		ProfileID: result.ProfileID, Provider: result.Provider, Model: result.Model,
+		Size: result.Size, Quality: result.Quality, OutputFormat: result.OutputFormat, CreatedAt: result.CreatedAt,
+	})
 	if err != nil {
 		return CoverResult{}, err
 	}
-	if err := bookService.WriteFile(metaPath, string(data)+"\n"); err != nil {
-		return CoverResult{}, fmt.Errorf("保存封面元数据失败: %w", err)
+	if err := assetstore.Save(ctx, bookService.Workspace(), saved); err != nil {
+		return CoverResult{}, fmt.Errorf("save book cover source: %w", err)
 	}
+	if saved.Generation != nil {
+		result.MetaPath = assetstore.MetaPath(sourcePath)
+	}
+	result.BackupPath, err = backupExistingCover(bookService)
+	if err != nil {
+		return CoverResult{}, err
+	}
+	if err := bookService.WriteBinaryFile(CoverPath, displayData); err != nil {
+		return CoverResult{}, fmt.Errorf("write display cover: %w", err)
+	}
+	if info, statErr := os.Stat(filepath.Join(bookService.Workspace(), filepath.FromSlash(CoverPath))); statErr == nil {
+		result.CoverUpdatedAt = info.ModTime().UTC().Format(time.RFC3339Nano)
+	}
+
 	return result, nil
 }
 
@@ -264,12 +213,12 @@ func (s *Service) UploadCover(bookService *book.Service, request CoverUploadRequ
 	}
 
 	createdAt := s.now().UTC()
-	sourcePath, metaPath := newCoverRunPaths(createdAt, s.suffix(), "upload", sourceExt)
-	if err := bookService.WriteBinaryFile(sourcePath, request.Data); err != nil {
-		return CoverResult{}, fmt.Errorf("保存上传封面原图失败: %w", err)
+	sourcePath := assetstore.NewPath(assetstore.Covers, sourceExt)
+	if err := assetstore.Save(context.Background(), bookService.Workspace(), assetstore.File{Path: sourcePath, Data: request.Data}); err != nil {
+		return CoverResult{}, fmt.Errorf("save uploaded cover source: %w", err)
 	}
 
-	backupPath, err := backupExistingCover(bookService, createdAt, defaultCoverFormat)
+	backupPath, err := backupExistingCover(bookService)
 	if err != nil {
 		return CoverResult{}, err
 	}
@@ -285,7 +234,6 @@ func (s *Service) UploadCover(bookService *book.Service, request CoverUploadRequ
 		Schema:         CoverResultSchema,
 		CoverPath:      CoverPath,
 		SourcePath:     sourcePath,
-		MetaPath:       metaPath,
 		BackupPath:     backupPath,
 		CoverUpdatedAt: coverUpdatedAt,
 		ProfileID:      "manual",
@@ -295,30 +243,6 @@ func (s *Service) UploadCover(bookService *book.Service, request CoverUploadRequ
 		CreatedAt:      createdAt.Format(time.RFC3339),
 		MIMEType:       "image/png",
 		SizeBytes:      pngData.Len(),
-	}
-	meta := coverMeta{
-		Schema:         CoverResultSchema,
-		Source:         "book_cover_upload",
-		Prompt:         "",
-		CoverPath:      result.CoverPath,
-		SourcePath:     result.SourcePath,
-		MetaPath:       result.MetaPath,
-		BackupPath:     result.BackupPath,
-		ProfileID:      result.ProfileID,
-		Provider:       result.Provider,
-		Model:          result.Model,
-		OutputFormat:   result.OutputFormat,
-		MIMEType:       result.MIMEType,
-		SizeBytes:      result.SizeBytes,
-		CoverUpdatedAt: result.CoverUpdatedAt,
-		CreatedAt:      result.CreatedAt,
-	}
-	data, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return CoverResult{}, err
-	}
-	if err := bookService.WriteFile(metaPath, string(data)+"\n"); err != nil {
-		return CoverResult{}, fmt.Errorf("保存封面元数据失败: %w", err)
 	}
 	return result, nil
 }
@@ -357,19 +281,7 @@ func BuildCoverPrompt(request CoverGenerateRequest) string {
 	return strings.TrimSpace(sb.String())
 }
 
-func newCoverRunPaths(createdAt time.Time, suffix, name, ext string) (string, string) {
-	dir := filepath.ToSlash(filepath.Join(
-		"assets",
-		"image",
-		"covers",
-		fmt.Sprintf("%s-%s", createdAt.Format("20060102-150405"), suffix),
-	))
-	sourcePath := filepath.ToSlash(filepath.Join(dir, name+"."+ext))
-	metaPath := filepath.ToSlash(filepath.Join(dir, "meta.json"))
-	return sourcePath, metaPath
-}
-
-func backupExistingCover(bookService *book.Service, createdAt time.Time, ext string) (string, error) {
+func backupExistingCover(bookService *book.Service) (string, error) {
 	absCover, err := book.SafePath(bookService.Workspace(), CoverPath)
 	if err != nil {
 		return "", err
@@ -384,15 +296,9 @@ func backupExistingCover(bookService *book.Service, createdAt time.Time, ext str
 	if len(data) == 0 {
 		return "", nil
 	}
-	backupPath := filepath.ToSlash(filepath.Join(
-		"assets",
-		"image",
-		"covers",
-		"backups",
-		fmt.Sprintf("%s-previous.%s", createdAt.Format("20060102-150405"), ext),
-	))
-	if err := bookService.WriteBinaryFile(backupPath, data); err != nil {
-		return "", fmt.Errorf("备份旧封面失败: %w", err)
+	backupPath := assetstore.NewPath(assetstore.Covers, defaultCoverFormat)
+	if err := assetstore.Save(context.Background(), bookService.Workspace(), assetstore.File{Path: backupPath, Data: data}); err != nil {
+		return "", fmt.Errorf("backup previous cover: %w", err)
 	}
 	return backupPath, nil
 }
@@ -429,12 +335,4 @@ func trimRunes(value string, max int) string {
 		return value
 	}
 	return string(runes[:max])
-}
-
-func randomSuffix() string {
-	var buf [4]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(buf[:])
 }

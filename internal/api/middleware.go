@@ -16,9 +16,9 @@ import (
 func corsMiddleware(ctx context.Context, c *app.RequestContext) {
 	origin := string(c.Request.Header.Peek("Origin"))
 	allowedOrigins := []string{
-		"http://localhost:5173",
+		"http://localhost:7788",
 		"http://localhost:3000",
-		"http://127.0.0.1:5173",
+		"http://127.0.0.1:7788",
 		"http://127.0.0.1:3000",
 	}
 

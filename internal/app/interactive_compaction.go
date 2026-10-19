@@ -7,8 +7,11 @@ import (
 
 	agentcompaction "denova/internal/agents/context/compaction"
 	agentstructural "denova/internal/agents/context/structural"
+	agentexecution "denova/internal/agents/execution"
 	agentrun "denova/internal/agents/run"
+	agentruntime "denova/internal/agents/runtime"
 	compactionapp "denova/internal/app/compaction"
+	interactiveapp "denova/internal/app/interactive"
 )
 
 func (s *InteractiveAppService) executeInteractiveContextCompaction(
@@ -47,14 +50,34 @@ func (s *InteractiveAppService) executeInteractiveContextCompaction(
 	if err != nil {
 		return agentcompaction.Result{}, err
 	}
-	result, err := fence.chat.ExecuteStructuralOperation(ctx, agentstructural.Spec{
+	prepared, err := s.prepareInteractiveAgentCycle(ctx, interactiveAgentCycleRequest{StoryID: storyID, BranchID: branchID})
+	if err != nil {
+		return agentcompaction.Result{}, err
+	}
+	s.app.mu.RLock()
+	err = fence.validateLocked(s.app)
+	s.app.mu.RUnlock()
+	if err != nil {
+		return agentcompaction.Result{}, err
+	}
+	if prepared.externalAssembly != nil {
+		state, err := agentruntime.GameState(prepared.options(""), prepared.store)
+		if err != nil {
+			return agentcompaction.Result{}, err
+		}
+		control, err := s.app.AgentEngines().ExternalControl(prepared.options(""), state)
+		if err != nil {
+			return agentcompaction.Result{}, err
+		}
+		return control.Maintain(ctx, commandID, func() (agentcompaction.Result, error) {
+			return interactiveapp.CompactExternal(ctx, interactiveapp.ExternalTurnConfig{Conversation: prepared.conversation, Request: prepared.request, Config: prepared.runtimeCfg, Assembly: *prepared.externalAssembly, BookService: prepared.bookService, Runtime: s.app.AgentEngines().ExternalRuntime(prepared.runtimeCfg), PrepareHistory: state.PrepareExternalHistory})
+		})
+	}
+	cycle := agentexecution.Cycle{Definition: prepared.definition, Conversation: prepared.conversation, BookService: prepared.bookService, Request: prepared.request, Options: prepared.options("")}
+	result, err := fence.chat.ExecuteStructuralOperation(ctx, cycle, agentstructural.Spec{
 		CommandID: commandID,
 		Action:    agentstructural.Compact,
 		Ref:       agentrun.ContextCompactionRef{Force: true},
-		Options: agentrun.Options{
-			AgentKind: agentrun.AgentKindInteractiveStory, ProjectID: fence.projectID, Workspace: fence.workspace,
-			StoryID: storyID, BranchID: branchID, Mode: "interactive",
-		},
 	})
 	if err != nil {
 		return result.Compaction, err
@@ -64,7 +87,7 @@ func (s *InteractiveAppService) executeInteractiveContextCompaction(
 	}
 	slog.InfoContext(ctx, "[interactive-agent] manual Agent Session compaction completed",
 		"workspace", fence.workspace, "story_id", storyID, "branch_id", branchID,
-		"revision", result.Compaction.Epoch, "source_messages", result.Compaction.SourceMessageCount,
+		"revision", result.Compaction.Revision, "source_messages", result.Compaction.SourceMessageCount,
 	)
 	return result.Compaction, nil
 }
@@ -105,13 +128,34 @@ func (s *InteractiveAppService) executeInteractiveContextCompactionRemoval(
 	if err != nil {
 		return false, err
 	}
-	result, err := fence.chat.ExecuteStructuralOperation(ctx, agentstructural.Spec{
+	cycle, err := s.prepareInteractiveStructuralCycle(ctx, fence, storyID, branchID)
+	if err != nil {
+		return false, err
+	}
+	result, err := fence.chat.ExecuteStructuralOperation(ctx, cycle, agentstructural.Spec{
 		CommandID: commandID,
 		Action:    agentstructural.Remove,
-		Options: agentrun.Options{
-			AgentKind: agentrun.AgentKindInteractiveStory, ProjectID: fence.projectID, Workspace: fence.workspace,
-			StoryID: storyID, BranchID: branchID, Mode: "interactive",
-		},
 	})
 	return result.Removed, err
+}
+
+func (s *InteractiveAppService) prepareInteractiveStructuralCycle(ctx context.Context, fence interactiveStructuralFence, storyID, branchID string) (agentexecution.Cycle, error) {
+	cycle, err := s.prepareInteractiveAgentCycle(ctx, interactiveAgentCycleRequest{StoryID: storyID, BranchID: branchID})
+	if err != nil {
+		return agentexecution.Cycle{}, err
+	}
+	s.app.mu.RLock()
+	err = fence.validateLocked(s.app)
+	s.app.mu.RUnlock()
+	if err != nil {
+		return agentexecution.Cycle{}, err
+	}
+	if cycle.runtimeCfg.ProjectID != fence.projectID || cycle.workspace != fence.workspace ||
+		cycle.storyID != storyID || cycle.branchID != branchID || cycle.executionRuntime != fence.chat {
+		return agentexecution.Cycle{}, ErrAgentContextChanged
+	}
+	return agentexecution.Cycle{
+		Definition: cycle.definition, Conversation: cycle.conversation, BookService: cycle.bookService,
+		Request: cycle.request, Options: cycle.options(""),
+	}, nil
 }

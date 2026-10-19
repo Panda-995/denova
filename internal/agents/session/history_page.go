@@ -2,12 +2,15 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/internal/agents/conversationjournal"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
+
+var errHistoryWindowComplete = errors.New("history window complete")
 
 // HistoryPage is a bounded chronological slice of the UI transcript. Before
 // is a stable logical position: the next request supplies NextBefore.
@@ -36,6 +39,12 @@ func (s *Session) ReadHistoryPage(ctx context.Context, before, limit int) (Histo
 	if err := s.refreshCanonicalTailLocked(); err != nil {
 		return HistoryPage{}, fmt.Errorf("refresh session history page: %w", err)
 	}
+	return s.readHistoryPageLocked(ctx, before, limit)
+}
+
+// The caller owns the projection. Search opens a read snapshot without
+// materializing an execution Session or replaying its model context.
+func (s *Session) readHistoryPageLocked(ctx context.Context, before, limit int) (HistoryPage, error) {
 	if s.journal == nil || s.projection == nil {
 		return HistoryPage{}, fmt.Errorf("session history index is unavailable")
 	}
@@ -48,56 +57,51 @@ func (s *Session) ReadHistoryPage(ctx context.Context, before, limit int) (Histo
 	if requestedStart == end {
 		return HistoryPage{Entries: []HistoryEntry{}, NextBefore: requestedStart, HasMore: requestedStart > 0, Total: total}, nil
 	}
-	anchor := historyAnchor{Before: 0, Cursor: 1}
-	for _, candidate := range s.projection.HistoryAnchors {
-		if candidate.Before > requestedStart {
-			break
-		}
-		anchor = candidate
-	}
-	through := s.journal.Head().Cursor
-	lookahead := end + sessionHistoryAnchorEvery
-	for _, candidate := range s.projection.HistoryAnchors {
-		if candidate.Before >= lookahead && candidate.Cursor > anchor.Cursor {
-			through = candidate.Cursor - 1
-			break
-		}
-	}
-	records, err := s.journal.ReadRange(ctx, conversationjournal.Range{After: anchor.Cursor - 1, Through: through})
-	if err != nil {
-		return HistoryPage{}, fmt.Errorf("read session history range: %w", err)
-	}
+	anchors := s.projection.HistoryAnchors
+	anchorIndex := requestedStart / sessionHistoryAnchorEvery
+	anchor := anchors[anchorIndex]
+	anchorEnd := (end-1)/sessionHistoryAnchorEvery + 1
 	temporary := &Session{
 		ID: s.ID, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt,
 		title: s.title, journalIncarnation: s.journalIncarnation,
 		partialMaterialization: true,
-		messages:               make([]*agent.Message, 0), records: make([]historyRecord, 0),
+		messages:               make([]*agentschema.Message, 0), records: make([]historyRecord, 0),
 	}
-	for _, record := range records {
-		if err := appendConversationRecord(temporary, record); err != nil {
-			return HistoryPage{}, fmt.Errorf("project session history cursor %d: %w", record.Location.Cursor, err)
+	projection := historyPageProjection{
+		rows: temporary, position: anchorIndex * sessionHistoryAnchorEvery, hidden: make(map[hiddenHistoryRecord]bool),
+		start: requestedStart, end: end, maxRows: max(limit, 2*sessionHistoryAnchorEvery),
+	}
+	for _, block := range anchors[anchorIndex:anchorEnd] {
+		for _, hidden := range block.Hidden {
+			projection.hidden[hidden] = true
 		}
 	}
-	entries := temporary.History()
-	// The row limit is a paging target, not permission to split one Agent
-	// turn. Display progress and tool events can make a single turn much larger
-	// than the target, so align the page to the latest user/clear boundary at
-	// or before it. The sparse anchor bounds the extra scan for normal turns
-	// while still restoring an unusually large turn as one coherent unit.
-	start := anchor.Before
-	boundaryLimit := min(len(entries)-1, requestedStart-anchor.Before)
-	for index := 0; index <= boundaryLimit; index++ {
-		entry := entries[index]
-		if entry.Role == string(agent.User) || entry.Type == historyTypeClear {
-			start = anchor.Before + index
+	err := s.journal.VisitFrom(ctx, anchor.Location, s.journal.Head().Cursor, func(record conversationjournal.Record) error {
+		if err := projection.apply(record); err != nil {
+			return err
 		}
+		if projection.position >= end {
+			return errHistoryWindowComplete
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errHistoryWindowComplete) {
+		return HistoryPage{}, fmt.Errorf("project session history range: %w", err)
 	}
-	from := max(0, start-anchor.Before)
-	to := min(len(entries), end-anchor.Before)
-	if from > to {
-		from = to
+	if err := s.patchHistoryPage(ctx, &projection); err != nil {
+		return HistoryPage{}, fmt.Errorf("patch session history page: %w", err)
 	}
-	pageEntries := append([]HistoryEntry(nil), entries[from:to]...)
+	pageEntries := temporary.History()
+	start := end
+	if len(projection.positions) > 0 {
+		start = projection.positions[0]
+	}
+	if err := applyJournalAskAnswers(pageEntries, &s.projection.AgentSessions, s.journal); err != nil {
+		return HistoryPage{}, err
+	}
+	if err := s.applyExternalHistoryOutcomesLocked(ctx, pageEntries); err != nil {
+		return HistoryPage{}, err
+	}
 	return HistoryPage{Entries: pageEntries, NextBefore: start, HasMore: start > 0, Total: total}, nil
 }
 

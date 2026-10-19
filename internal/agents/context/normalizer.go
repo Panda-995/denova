@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 // ErrInvalidModelContextProtocol means the final provider-neutral transcript
@@ -34,7 +35,7 @@ type contextToolResultOccurrence struct {
 // results are cloned byte-for-byte. Ambiguous pairs are removed as one unit;
 // only a unique valid call with no result receives the existing deterministic
 // effect_unknown completion.
-func NormalizeModelContextMessages(messages []*agent.Message) ([]*agent.Message, error) {
+func NormalizeModelContextMessages(messages []*agentschema.Message) ([]*agentschema.Message, error) {
 	if len(messages) == 0 {
 		return messages, nil
 	}
@@ -46,7 +47,7 @@ func NormalizeModelContextMessages(messages []*agent.Message) ([]*agent.Message,
 		if message == nil {
 			continue
 		}
-		if message.Role == agent.Assistant {
+		if message.Role == agentschema.Assistant {
 			for callIndex, call := range message.ToolCalls {
 				key := strings.TrimSpace(call.ID)
 				if key == "" {
@@ -60,7 +61,7 @@ func NormalizeModelContextMessages(messages []*agent.Message) ([]*agent.Message,
 				})
 			}
 		}
-		if message.Role == agent.ToolRole {
+		if message.Role == agentschema.ToolRole {
 			key := strings.TrimSpace(message.ToolCallID)
 			if key == "" {
 				continue
@@ -80,7 +81,7 @@ func NormalizeModelContextMessages(messages []*agent.Message) ([]*agent.Message,
 
 	keptCalls := make(map[int]map[int]bool)
 	keptResults := make(map[int]bool)
-	normalizedCalls := make(map[int]map[int]agent.ToolCall)
+	normalizedCalls := make(map[int]map[int]agentschema.ToolCall)
 	for batchKey, calls := range callOccurrences {
 		if len(calls) != 1 {
 			continue
@@ -98,7 +99,7 @@ func NormalizeModelContextMessages(messages []*agent.Message) ([]*agent.Message,
 			if !result.canonicalID || result.ownerIndex != call.messageIndex {
 				continue
 			}
-			normalized, err := agent.NormalizeToolCallForModelContext(
+			normalized, err := agenttool.NormalizeToolCallForModelContext(
 				messages[call.messageIndex].ToolCalls[call.callIndex],
 				messages[result.messageIndex].ToolResult,
 			)
@@ -107,20 +108,20 @@ func NormalizeModelContextMessages(messages []*agent.Message) ([]*agent.Message,
 			}
 			rememberContextToolCall(keptCalls, call)
 			if normalizedCalls[call.messageIndex] == nil {
-				normalizedCalls[call.messageIndex] = make(map[int]agent.ToolCall)
+				normalizedCalls[call.messageIndex] = make(map[int]agentschema.ToolCall)
 			}
 			normalizedCalls[call.messageIndex][call.callIndex] = normalized
 			keptResults[result.messageIndex] = true
 		}
 	}
 
-	normalized := make([]*agent.Message, 0, len(messages))
+	normalized := make([]*agentschema.Message, 0, len(messages))
 	for messageIndex, message := range messages {
 		if message == nil {
 			continue
 		}
 		switch message.Role {
-		case agent.ToolRole:
+		case agentschema.ToolRole:
 			if !keptResults[messageIndex] {
 				continue
 			}
@@ -128,14 +129,14 @@ func NormalizeModelContextMessages(messages []*agent.Message) ([]*agent.Message,
 			// A result cannot itself introduce another call half.
 			next.ToolCalls = nil
 			normalized = append(normalized, next)
-		case agent.Assistant:
+		case agentschema.Assistant:
 			next := message.Clone()
 			hadToolCalls := len(next.ToolCalls) > 0
 			next.ToolCallID = ""
 			next.ToolName = ""
 			next.ToolResult = nil
 			if hadToolCalls {
-				calls := make([]agent.ToolCall, 0, len(next.ToolCalls))
+				calls := make([]agentschema.ToolCall, 0, len(next.ToolCalls))
 				for callIndex, call := range next.ToolCalls {
 					if keptCalls[messageIndex][callIndex] {
 						if normalized, ok := normalizedCalls[messageIndex][callIndex]; ok {
@@ -173,17 +174,17 @@ func NormalizeModelContextMessages(messages []*agent.Message) ([]*agent.Message,
 // one assistant response at a time. Provider call IDs are not globally unique
 // across a transcript, so a later reused ID must not suppress a missing-result
 // repair in the current batch.
-func completeUnknownContextToolBatches(messages []*agent.Message) []*agent.Message {
-	completed := make([]*agent.Message, 0, len(messages))
+func completeUnknownContextToolBatches(messages []*agentschema.Message) []*agentschema.Message {
+	completed := make([]*agentschema.Message, 0, len(messages))
 	for index := 0; index < len(messages); {
 		message := messages[index]
-		if message == nil || message.Role != agent.Assistant || len(message.ToolCalls) == 0 {
+		if message == nil || message.Role != agentschema.Assistant || len(message.ToolCalls) == 0 {
 			completed = append(completed, message)
 			index++
 			continue
 		}
 		end := index + 1
-		for end < len(messages) && messages[end] != nil && messages[end].Role == agent.ToolRole {
+		for end < len(messages) && messages[end] != nil && messages[end].Role == agentschema.ToolRole {
 			end++
 		}
 		completed = append(completed, completeUnknownToolResults(messages[index:end])...)
@@ -192,7 +193,7 @@ func completeUnknownContextToolBatches(messages []*agent.Message) []*agent.Messa
 	return completed
 }
 
-func contextToolResultOwners(messages []*agent.Message) map[int]int {
+func contextToolResultOwners(messages []*agentschema.Message) map[int]int {
 	owners := make(map[int]int)
 	owner := -1
 	for index, message := range messages {
@@ -200,12 +201,12 @@ func contextToolResultOwners(messages []*agent.Message) map[int]int {
 			continue
 		}
 		switch message.Role {
-		case agent.Assistant:
+		case agentschema.Assistant:
 			owner = -1
 			if len(message.ToolCalls) > 0 {
 				owner = index
 			}
-		case agent.ToolRole:
+		case agentschema.ToolRole:
 			if owner >= 0 {
 				owners[index] = owner
 			}
@@ -218,8 +219,8 @@ func contextToolResultOwners(messages []*agent.Message) map[int]int {
 
 // ValidToolCall reports whether a provider-neutral call has a canonical
 // identity, supported type, and one complete JSON object for arguments.
-func ValidToolCall(call agent.ToolCall) bool {
-	_, err := agent.NormalizeToolCallForModelContext(call, nil)
+func ValidToolCall(call agentschema.ToolCall) bool {
+	_, err := agenttool.NormalizeToolCallForModelContext(call, nil)
 	return err == nil
 }
 
@@ -232,7 +233,7 @@ func rememberContextToolCall(kept map[int]map[int]bool, call contextToolCallOccu
 
 // AssistantHasIndependentContent reports whether removing malformed tool
 // halves would still leave a meaningful assistant message.
-func AssistantHasIndependentContent(message *agent.Message) bool {
+func AssistantHasIndependentContent(message *agentschema.Message) bool {
 	if message == nil {
 		return false
 	}
@@ -240,14 +241,14 @@ func AssistantHasIndependentContent(message *agent.Message) bool {
 		len(message.MultiContent) > 0 || len(message.AssistantGenMultiContent) > 0
 }
 
-func validateNormalizedModelContext(messages []*agent.Message) error {
+func validateNormalizedModelContext(messages []*agentschema.Message) error {
 	pending := make(map[string]bool)
 	for index, message := range messages {
 		if message == nil {
 			return modelContextProtocolError("message %d is nil", index)
 		}
 		switch message.Role {
-		case agent.Assistant:
+		case agentschema.Assistant:
 			if len(pending) > 0 {
 				return modelContextProtocolError("message %d starts before the previous tool batch is complete", index)
 			}
@@ -263,7 +264,7 @@ func validateNormalizedModelContext(messages []*agent.Message) error {
 				}
 				pending[call.ID] = true
 			}
-		case agent.ToolRole:
+		case agentschema.ToolRole:
 			if len(message.ToolCalls) > 0 {
 				return modelContextProtocolError("tool result message %d contains nested tool calls", index)
 			}
@@ -272,7 +273,7 @@ func validateNormalizedModelContext(messages []*agent.Message) error {
 				return modelContextProtocolError("tool result message %d is orphaned or duplicated", index)
 			}
 			delete(pending, callID)
-		case agent.System, agent.User, agent.RoleType("developer"):
+		case agentschema.System, agentschema.User, agentschema.RoleType("developer"):
 			if len(pending) > 0 {
 				return modelContextProtocolError("message %d interrupts an incomplete tool batch", index)
 			}
@@ -296,14 +297,14 @@ func modelContextProtocolError(format string, args ...any) error {
 // ValidateToolArgumentsJSON accepts only one complete JSON object. Model
 // context repair and live tool execution share this exact structural rule.
 func ValidateToolArgumentsJSON(arguments string) error {
-	return agent.ValidateToolArgumentsJSON(arguments)
+	return agenttool.ValidateToolArgumentsJSON(arguments)
 }
 
-func completeUnknownToolResults(messages []*agent.Message) []*agent.Message {
+func completeUnknownToolResults(messages []*agentschema.Message) []*agentschema.Message {
 	if len(messages) == 0 {
 		return messages
 	}
-	completed := make([]*agent.Message, 0, len(messages))
+	completed := make([]*agentschema.Message, 0, len(messages))
 	for index := 0; index < len(messages); {
 		message := messages[index]
 		if message == nil {
@@ -311,13 +312,13 @@ func completeUnknownToolResults(messages []*agent.Message) []*agent.Message {
 			continue
 		}
 		completed = append(completed, message)
-		if message.Role != agent.Assistant || len(message.ToolCalls) == 0 {
+		if message.Role != agentschema.Assistant || len(message.ToolCalls) == 0 {
 			index++
 			continue
 		}
 
 		batchEnd := index + 1
-		for batchEnd < len(messages) && messages[batchEnd] != nil && messages[batchEnd].Role == agent.ToolRole {
+		for batchEnd < len(messages) && messages[batchEnd] != nil && messages[batchEnd].Role == agentschema.ToolRole {
 			batchEnd++
 		}
 		callCounts := make(map[string]int, len(message.ToolCalls))
@@ -340,10 +341,10 @@ func completeUnknownToolResults(messages []*agent.Message) []*agent.Message {
 			if !ValidToolCall(call) || callCounts[callID] != 1 || resultCounts[callID] != 0 {
 				continue
 			}
-			completed = append(completed, agent.ToolMessage(
-				agent.SyntheticToolResult(agent.ToolResultError, agent.ToolSyntheticEffectUnknown, agent.UnknownToolEffectResult),
+			completed = append(completed, agentschema.ToolMessage(
+				agenttool.SyntheticToolResult(agentschema.ToolResultError, agentschema.ToolSyntheticEffectUnknown, agenttool.UnknownToolEffectResult),
 				callID,
-				agent.WithToolName(call.Function.Name),
+				agentschema.WithToolName(call.Function.Name),
 			))
 		}
 		for resultIndex := index + 1; resultIndex < batchEnd; resultIndex++ {
@@ -359,5 +360,5 @@ func completeUnknownToolResults(messages []*agent.Message) []*agent.Message {
 // IsUnknownToolEffectResult identifies the deterministic recovery projection
 // used when a durable tool start has no matching completion.
 func IsUnknownToolEffectResult(content string) bool {
-	return strings.TrimSpace(content) == agent.UnknownToolEffectResult
+	return strings.TrimSpace(content) == agenttool.UnknownToolEffectResult
 }

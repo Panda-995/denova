@@ -2,29 +2,30 @@ package toolresult_test
 
 import (
 	"context"
-	agentcontext "denova/internal/agents/context"
-	agentconversation "denova/internal/agents/conversation"
-	agentrun "denova/internal/agents/run"
-	"denova/internal/agents/toolresult"
 	"encoding/json"
 	"strings"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
+	agentcontext "denova/internal/agents/context"
+	agentconversation "denova/internal/agents/conversation"
+	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
+	"denova/internal/agents/toolresult"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 func TestIncompleteToolExchangeGetsStableUnknownEffectResult(t *testing.T) {
 	t.Parallel()
 
-	messages := []*agent.Message{
-		agent.UserMessage("update the chapter"),
-		agent.AssistantMessage("", []agent.ToolCall{{
-			ID: "call-write", Function: agent.FunctionCall{Name: "write", Arguments: `{"path":"chapter.md"}`},
+	messages := []*agentschema.Message{
+		agentschema.UserMessage("update the chapter"),
+		agentschema.AssistantMessage("", []agentschema.ToolCall{{
+			ID: "call-write", Function: agentschema.FunctionCall{Name: "write", Arguments: `{"path":"chapter.md"}`},
 		}}),
-		agent.UserMessage("continue"),
+		agentschema.UserMessage("continue"),
 	}
 	policy := toolresult.ContextPolicy{Enabled: false}
 	first := toolresult.ApplyContextPolicy(messages, policy)
@@ -32,15 +33,15 @@ func TestIncompleteToolExchangeGetsStableUnknownEffectResult(t *testing.T) {
 	if len(first) != 4 || len(second) != len(first) {
 		t.Fatalf("recovered model context lengths = %d then %d, want stable four-message exchange", len(first), len(second))
 	}
-	if first[1].Role != agent.Assistant || len(first[1].ToolCalls) != 1 || first[1].ToolCalls[0].ID != "call-write" {
+	if first[1].Role != agentschema.Assistant || len(first[1].ToolCalls) != 1 || first[1].ToolCalls[0].ID != "call-write" {
 		t.Fatalf("recovered tool call = %#v", first[1])
 	}
 	result := first[2]
-	if result.Role != agent.ToolRole || result.ToolCallID != "call-write" || result.ToolName != "write" {
+	if result.Role != agentschema.ToolRole || result.ToolCallID != "call-write" || result.ToolName != "write" {
 		t.Fatalf("synthetic tool result identity = %#v", result)
 	}
-	if result.ToolResult == nil || result.ToolResult.Status != agent.ToolResultError ||
-		result.ToolResult.SyntheticReason != agent.ToolSyntheticEffectUnknown {
+	if result.ToolResult == nil || result.ToolResult.Status != agentschema.ToolResultError ||
+		result.ToolResult.SyntheticReason != agentschema.ToolSyntheticEffectUnknown {
 		t.Fatalf("synthetic tool result summary = %#v", result.ToolResult)
 	}
 	var payload struct {
@@ -62,12 +63,12 @@ func TestIncompleteToolExchangeGetsStableUnknownEffectResult(t *testing.T) {
 func TestIncompleteParallelToolCallsCompleteOnlyMissingResults(t *testing.T) {
 	t.Parallel()
 
-	messages := []*agent.Message{
-		agent.AssistantMessage("", []agent.ToolCall{
-			{ID: "call-read", Function: agent.FunctionCall{Name: "read", Arguments: `{"path":"a.md"}`}},
-			{ID: "call-write", Function: agent.FunctionCall{Name: "write", Arguments: `{"path":"b.md"}`}},
+	messages := []*agentschema.Message{
+		agentschema.AssistantMessage("", []agentschema.ToolCall{
+			{ID: "call-read", Function: agentschema.FunctionCall{Name: "read", Arguments: `{"path":"a.md"}`}},
+			{ID: "call-write", Function: agentschema.FunctionCall{Name: "write", Arguments: `{"path":"b.md"}`}},
 		}),
-		agent.ToolMessage(agent.TextToolResult("read result"), "call-read", agent.WithToolName("read")),
+		agentschema.ToolMessage(agentschema.TextToolResult("read result"), "call-read", agentschema.WithToolName("read")),
 	}
 	got := toolresult.ApplyContextPolicy(messages, toolresult.ContextPolicy{Enabled: true})
 	if len(got) != 3 {
@@ -75,7 +76,7 @@ func TestIncompleteParallelToolCallsCompleteOnlyMissingResults(t *testing.T) {
 	}
 	counts := map[string]int{}
 	for _, message := range got {
-		if message.Role == agent.ToolRole {
+		if message.Role == agentschema.ToolRole {
 			counts[message.ToolCallID]++
 		}
 	}
@@ -87,17 +88,17 @@ func TestIncompleteParallelToolCallsCompleteOnlyMissingResults(t *testing.T) {
 func TestContextPolicyPreservesRecoverableMalformedArguments(t *testing.T) {
 	t.Parallel()
 
-	result := agent.SyntheticToolResult(
-		agent.ToolResultError,
-		agent.ToolSyntheticInvalidArguments,
+	result := agenttool.SyntheticToolResult(
+		agentschema.ToolResultError,
+		agentschema.ToolSyntheticInvalidArguments,
 		`{"error":{"code":"invalid_arguments","received_arguments":"["}}`,
 	)
-	messages := []*agent.Message{
-		agent.AssistantMessage("", []agent.ToolCall{{
+	messages := []*agentschema.Message{
+		agentschema.AssistantMessage("", []agentschema.ToolCall{{
 			ID: "malformed-call", Type: "function",
-			Function: agent.FunctionCall{Name: "read", Arguments: `[`},
+			Function: agentschema.FunctionCall{Name: "read", Arguments: `[`},
 		}}),
-		agent.ToolMessage(result, "malformed-call", agent.WithToolName("read")),
+		agentschema.ToolMessage(result, "malformed-call", agentschema.WithToolName("read")),
 	}
 
 	got := toolresult.ApplyContextPolicy(messages, toolresult.ContextPolicy{Enabled: true})
@@ -107,7 +108,7 @@ func TestContextPolicyPreservesRecoverableMalformedArguments(t *testing.T) {
 	if arguments := got[0].ToolCalls[0].Function.Arguments; arguments != `{}` {
 		t.Fatalf("recoverable malformed arguments = %q, want canonical empty object", arguments)
 	}
-	if got[1].ToolResult == nil || got[1].ToolResult.SyntheticReason != agent.ToolSyntheticInvalidArguments ||
+	if got[1].ToolResult == nil || got[1].ToolResult.SyntheticReason != agentschema.ToolSyntheticInvalidArguments ||
 		!strings.Contains(got[1].Content, `"received_arguments":"["`) {
 		t.Fatalf("recoverable malformed result = %#v", got[1])
 	}
@@ -116,23 +117,23 @@ func TestContextPolicyPreservesRecoverableMalformedArguments(t *testing.T) {
 func TestIncompleteReusedCallIDCompletesOnlyItsAssistantBatch(t *testing.T) {
 	t.Parallel()
 
-	messages := []*agent.Message{
-		agent.AssistantMessage("", []agent.ToolCall{{
+	messages := []*agentschema.Message{
+		agentschema.AssistantMessage("", []agentschema.ToolCall{{
 			ID: "provider-local", Type: "function",
-			Function: agent.FunctionCall{Name: "write", Arguments: `{"path":"one.md"}`},
+			Function: agentschema.FunctionCall{Name: "write", Arguments: `{"path":"one.md"}`},
 		}}),
-		agent.UserMessage("next turn"),
-		agent.AssistantMessage("", []agent.ToolCall{{
+		agentschema.UserMessage("next turn"),
+		agentschema.AssistantMessage("", []agentschema.ToolCall{{
 			ID: "provider-local", Type: "function",
-			Function: agent.FunctionCall{Name: "read", Arguments: `{"path":"two.md"}`},
+			Function: agentschema.FunctionCall{Name: "read", Arguments: `{"path":"two.md"}`},
 		}}),
-		agent.ToolMessage(agent.TextToolResult("second result"), "provider-local"),
+		agentschema.ToolMessage(agentschema.TextToolResult("second result"), "provider-local"),
 	}
 
 	got := toolresult.ApplyContextPolicy(messages, toolresult.ContextPolicy{Enabled: true})
-	if len(got) != 5 || got[0].Role != agent.Assistant || got[1].ToolCallID != "provider-local" ||
-		!toolresult.IsUnknownEffectResult(got[1].Content) || got[2].Role != agent.User ||
-		got[3].Role != agent.Assistant || got[4].Content != "second result" {
+	if len(got) != 5 || got[0].Role != agentschema.Assistant || got[1].ToolCallID != "provider-local" ||
+		!toolresult.IsUnknownEffectResult(got[1].Content) || got[2].Role != agentschema.User ||
+		got[3].Role != agentschema.Assistant || got[4].Content != "second result" {
 		t.Fatalf("provider-local ID reuse suppressed the missing-result recovery: %#v", got)
 	}
 	if got[1].ToolName != "write" || got[4].ToolName != "read" {
@@ -151,11 +152,11 @@ func TestCanonicalSessionHistoryProjectsUnknownToolEffectIntoNextModelContext(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.UserMessage("update the chapter")); err != nil {
+	if err := sess.Append(agentschema.UserMessage("update the chapter")); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.AppendContextMessage(agent.AssistantMessage("", []agent.ToolCall{{
-		ID: "canonical-call", Function: agent.FunctionCall{Name: "write", Arguments: `{"path":"chapter.md"}`},
+	if err := sess.AppendContextMessage(agentschema.AssistantMessage("", []agentschema.ToolCall{{
+		ID: "canonical-call", Function: agentschema.FunctionCall{Name: "write", Arguments: `{"path":"chapter.md"}`},
 	}})); err != nil {
 		t.Fatal(err)
 	}
@@ -167,8 +168,8 @@ func TestCanonicalSessionHistoryProjectsUnknownToolEffectIntoNextModelContext(t 
 		t.Fatal(err)
 	}
 	messages := projection.Messages[:len(projection.Messages)-1]
-	if len(messages) != 3 || messages[1].Role != agent.Assistant || len(messages[1].ToolCalls) != 1 ||
-		messages[2].Role != agent.ToolRole || messages[2].ToolCallID != "canonical-call" ||
+	if len(messages) != 3 || messages[1].Role != agentschema.Assistant || len(messages[1].ToolCalls) != 1 ||
+		messages[2].Role != agentschema.ToolRole || messages[2].ToolCallID != "canonical-call" ||
 		!toolresult.IsUnknownEffectResult(messages[2].Content) {
 		t.Fatalf("canonical next model context did not contain a complete unknown-effect exchange: %#v", messages)
 	}

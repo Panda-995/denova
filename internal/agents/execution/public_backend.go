@@ -18,9 +18,12 @@ import (
 	agenttool "denova/internal/agents/tool"
 	agenttoolruntime "denova/internal/agents/toolruntime"
 
-	agent "github.com/alfredxw/denova/agent"
+	"github.com/alfredxw/denova/agent"
+	agentexecution "github.com/alfredxw/denova/agent/engine/execution"
+	agentevent "github.com/alfredxw/denova/agent/lifecycle/event"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 	agentsession "github.com/alfredxw/denova/agent/session"
-	publictools "github.com/alfredxw/denova/agent/tools"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
 )
 
 type publicBackend struct {
@@ -32,6 +35,9 @@ type publicBackend struct {
 	permissionRuleStore PermissionRuleStore
 	childDefinitions    ChildDefinitionResolver
 
+	// Input routing and durable admission share one boundary. Execution and
+	// event projection never hold this lock.
+	inputMu       sync.Mutex
 	mu            sync.RWMutex
 	registrations map[string]*publicCycleRegistration
 	cycles        map[string]map[int]*publicCycleRegistration
@@ -57,15 +63,16 @@ type publicCycleRegistration struct {
 
 type pendingPublicRunStart struct {
 	runID   string
-	started agent.RunStarted
+	started agentevent.RunStarted
 }
 
 type publicRunHandle struct {
-	session      *agent.Session
-	run          *agent.Run
-	registration *publicCycleRegistration
-	trace        *publicAgentRunTrace
-	done         chan struct{}
+	session                *agent.Session
+	run                    *agent.Run
+	registration           *publicCycleRegistration
+	trace                  *publicAgentRunTrace
+	done                   chan struct{}
+	completedRegistrations []publicCycleRegistrationAt
 }
 
 // NewAgentRuntime constructs the Denova host on the public Agent -> Session ->
@@ -155,7 +162,7 @@ func NewEphemeralRuntime() *Runtime {
 	return &Runtime{public: backend}
 }
 
-func denovaProviderCacheKey(key agent.SessionKey) (string, error) {
+func denovaProviderCacheKey(key agentsession.Key) (string, error) {
 	providerKey := key
 	if strings.HasPrefix(key.Namespace, "task.") {
 		parent, err := agentdelegation.ParentSession(key)
@@ -194,6 +201,9 @@ func (backend *publicBackend) resolveDefinition(
 	if strings.HasPrefix(request.Agent.Session.Key.Namespace, "task.") {
 		return backend.resolveTaskDefinition(ctx, request.Agent)
 	}
+	if request.Agent.Reason == agent.TurnReasonStructural {
+		return resolveStructuralDefinition(ctx, request.Agent)
+	}
 	if request.Agent.Reason == agent.TurnReasonGoalMutation {
 		// Goal mutations are Session capability operations, not product turns.
 		// They deliberately carry no opaque turn HostData and need only the
@@ -211,7 +221,7 @@ func (backend *publicBackend) resolveDefinition(
 	if commandID == "" {
 		commandID = strings.TrimSpace(request.Agent.Run.CommandID)
 	}
-	inspection := agent.IsInspection(ctx)
+	inspection := agentexecution.IsInspection(ctx)
 	var registration *publicCycleRegistration
 	if inspection {
 		registration, err = inspectionRegistrationFromContext(ctx, request.Agent.Session.Key, data)
@@ -290,7 +300,7 @@ func (backend *publicBackend) ResolveDefinition(
 func (backend *publicBackend) ResolveCanonicalInput(
 	ctx context.Context,
 	request agentlifecycle.DefinitionRequest,
-) (agent.CanonicalAdapter, error) {
+) (agentcanonical.CanonicalAdapter, error) {
 	if strings.HasPrefix(request.Agent.Session.Key.Namespace, "task.") {
 		// A child Session owns its prompt as ordinary public Agent transcript.
 		// It must never append that prompt through the parent product canonical
@@ -372,7 +382,7 @@ func (backend *publicBackend) preparedCycleCanonicalInput(
 	request agent.PrepareRequest,
 	cycle Cycle,
 	registration *publicCycleRegistration,
-) (agent.CanonicalAdapter, error) {
+) (agentcanonical.CanonicalAdapter, error) {
 	options := cycle.Options.Normalize(cycle.Options.Workspace)
 	var err error
 	var committer agentlifecycle.ConversationCommitter
@@ -540,147 +550,6 @@ func publicOptions(binding agentrun.RuntimeBinding, data agentlifecycle.TurnHost
 	}.Normalize(binding.Workspace)
 }
 
-func (backend *publicBackend) bindDefinition(
-	ctx context.Context,
-	request agent.PrepareRequest,
-	cycle Cycle,
-	registration *publicCycleRegistration,
-) (agent.Definition, error) {
-	options := cycle.Options.Normalize(cycle.Options.Workspace)
-	registration.mu.Lock()
-	if registration.projector == nil || !registration.projectorBound {
-		registration.projector = agentchat.NewPublicEventProjector(cycle.Conversation, cycle.Request, options, registration.emit)
-		registration.projectorBound = true
-	}
-	projector := registration.projector
-	pendingRunStart := registration.pendingRunStart
-	commandKind := registration.commandKind
-	registration.pendingRunStart = nil
-	registration.request, registration.options = cycle.Request, options
-	registration.mu.Unlock()
-	if pendingRunStart != nil {
-		projector.ProjectRunStarted(
-			pendingRunStart.runID,
-			pendingRunStart.started.Cycle,
-			firstPublicCycleValue(pendingRunStart.started.CommandID, cycle.Request.CommandID),
-			firstPublicCycleValue(pendingRunStart.started.Delivery, string(commandKind)),
-			pendingRunStart.started.StartedAt,
-		)
-	}
-	effectApplier, err := agentlifecycle.NewToolEffectApplier(backend.effects, options, registration.recordMutation)
-	if err != nil {
-		return agent.Definition{}, err
-	}
-	var committer agentlifecycle.ConversationCommitter
-	switch conversation := cycle.Conversation.(type) {
-	case *agentconversation.SessionConversation:
-		inputEffect := projectInputCommitEffect(options.InputCommitEffect, projector, options)
-		committer, err = agentlifecycle.NewSessionConversationCommitter(agentlifecycle.SessionCommitterConfig{
-			Conversation: conversation, Session: conversation.CanonicalSession(), Options: options,
-			Request:     cycle.Request,
-			InputEffect: inputEffect,
-		})
-	case agentlifecycle.ConversationCommitterProvider:
-		committer, err = conversation.NewAgentConversationCommitter(options)
-	default:
-		err = fmt.Errorf("Denova conversation %T has no public canonical committer", cycle.Conversation)
-	}
-	if err != nil {
-		return agent.Definition{}, err
-	}
-	identityConfig := struct {
-		Definition string
-		Binding    agent.SessionKey
-	}{cycle.Definition.Key, request.Session.Key}
-	boundary, err := agentlifecycle.NewConversationBoundary(agentlifecycle.ConversationBoundaryConfig{
-		Conversation: cycle.Conversation, BookService: cycle.BookService,
-		Request: cycle.Request, Options: options, Committer: committer,
-		ContextIdentity:   publicCapabilityIdentity("denova.context", identityConfig),
-		CanonicalIdentity: denovaCanonicalIdentity(request.Session.Key),
-		OnPrepared: func(prepared agentchat.AgentContextPreparation) {
-			projector.ProjectPreparedContext(request.Run, prepared)
-		},
-		ProjectOutput: projector.ProjectCanonicalOutput,
-	})
-	if err != nil {
-		return agent.Definition{}, err
-	}
-	definition := cycle.Definition
-	definition.Effects = effectApplier
-	definition.AttachmentRoot = options.StateRoot
-	definition.Execution.IdleTimeout = options.IdleTimeout
-	if taskCatalog, ok := agentdelegation.AsCatalog(definition.Tools); ok {
-		parentAttributes, attributeErr := agentdelegation.ParentAttributes(request.Session.Key)
-		if attributeErr != nil {
-			return agent.Definition{}, attributeErr
-		}
-		route := request.HostData
-		if route == nil {
-			route = request.Input.HostData
-		}
-		attributes, attributeErr := agentdelegation.WithParentRoute(parentAttributes, route)
-		if attributeErr != nil {
-			return agent.Definition{}, attributeErr
-		}
-		children := taskCatalog.Children()
-		candidates := make([]publictools.LocalTaskAgent, len(children))
-		for index, child := range children {
-			candidates[index] = publictools.LocalTaskAgent{
-				Name: child.Name, Description: child.Description,
-				Opener: backend.agent, Identity: child.Identity,
-				Attributes: attributes, LookupAttributes: parentAttributes,
-			}
-		}
-		parentSession, taskErr := backend.agent.Session(ctx, request.Session.Key)
-		if taskErr != nil {
-			return agent.Definition{}, fmt.Errorf("open parent Agent Session for delegated completion delivery: %w", taskErr)
-		}
-		executor, taskErr := publictools.NewLocalTasks(publictools.LocalTaskOptions{
-			Parallelism: taskCatalog.Parallelism(), CompletionParent: parentSession,
-			MaxResultBytes: taskCatalog.MaxResultBytes(),
-		}, candidates...)
-		if taskErr != nil {
-			return agent.Definition{}, fmt.Errorf("bind delegated Agent executor: %w", taskErr)
-		}
-		if taskErr = executor.ReconcileTaskCompletions(ctx); taskErr != nil {
-			return agent.Definition{}, fmt.Errorf("reconcile delegated Agent completions: %w", taskErr)
-		}
-		definition.Tools, taskErr = taskCatalog.Bind(executor)
-		if taskErr != nil {
-			return agent.Definition{}, fmt.Errorf("bind delegated Agent Toolset: %w", taskErr)
-		}
-	}
-	if provider, ok := cycle.Conversation.(agentchat.ToolArtifactStoreProvider); ok {
-		store := provider.ToolArtifactStore()
-		if store != nil {
-			definition.Artifacts, err = agent.IdentifyToolArtifactStorage(
-				store, publicCapabilityIdentity("denova.tool_artifacts", identityConfig),
-			)
-			if err != nil {
-				return agent.Definition{}, err
-			}
-		}
-	}
-	definition.Compaction = agentlifecycle.BindConversationCompaction(definition.Compaction, cycle.Conversation)
-	definition.Context, err = agent.CombineContextSources(definition.Context, boundary.ContextSource())
-	if err != nil {
-		return agent.Definition{}, fmt.Errorf("compose project and conversation ContextSources: %w", err)
-	}
-	definition.Canonical = boundary.CanonicalAdapter()
-	definition.Permission = agentlifecycle.BindPermissionRuleStore(
-		definition.Permission, backend.permissionRuleStore.Load, backend.permissionRuleStore.Persist,
-	)
-	var trace agentchat.PublicRunTraceBinder = registration
-	if agent.IsInspection(ctx) {
-		trace = nil
-	}
-	host := agentchat.NewPublicHostMiddleware(cycle.Request, options, trace)
-	definition.Middlewares = append(definition.Middlewares, agent.IdentifyMiddleware(
-		host, publicCapabilityIdentity("denova.public_host", identityConfig),
-	))
-	return definition, nil
-}
-
 func projectInputCommitEffect(
 	effect agentrun.InputCommitEffect,
 	projector *agentchat.PublicEventProjector,
@@ -714,64 +583,26 @@ func firstPublicCycleValue(values ...string) string {
 	return ""
 }
 
-func publicCapabilityIdentity(kind string, value any) agent.CapabilityIdentity {
+func publicCapabilityIdentity(kind string, value any) agentschema.CapabilityIdentity {
 	encoded, _ := json.Marshal(value)
 	digest := sha256.Sum256(encoded)
-	return agent.CapabilityIdentity{Kind: kind, Version: 1, ConfigHash: hex.EncodeToString(digest[:])}
+	return agentschema.CapabilityIdentity{Kind: kind, Version: 1, ConfigHash: hex.EncodeToString(digest[:])}
 }
 
-func denovaCanonicalIdentity(key agent.SessionKey) agent.CapabilityIdentity {
+func denovaCanonicalIdentity(key agentsession.Key) agentschema.CapabilityIdentity {
 	return publicCapabilityIdentity("denova.canonical", key)
-}
-
-func (backend *publicBackend) registration(key agent.SessionKey, commandID string) *publicCycleRegistration {
-	backend.mu.RLock()
-	defer backend.mu.RUnlock()
-	return backend.registrations[publicRegistrationKey(key, commandID)]
-}
-
-func (backend *publicBackend) rememberRegistration(key agent.SessionKey, commandID string, registration *publicCycleRegistration) {
-	backend.mu.Lock()
-	backend.registrations[publicRegistrationKey(key, commandID)] = registration
-	backend.mu.Unlock()
-}
-
-func (backend *publicBackend) bindRecoveryRoute(
-	key agent.SessionKey,
-	commandID string,
-	options agentrun.Options,
-	emit func(agentrun.Event),
-) *publicCycleRegistration {
-	registration := backend.registration(key, commandID)
-	if registration == nil {
-		registration = &publicCycleRegistration{options: options, emit: emit}
-		backend.rememberRegistration(key, commandID, registration)
-		return registration
-	}
-	registration.mu.Lock()
-	registration.options = options
-	registration.emit = emit
-	projector := registration.projector
-	registration.mu.Unlock()
-	if projector != nil {
-		projector.SetEmit(emit)
-	}
-	return registration
-}
-
-func publicRegistrationKey(key agent.SessionKey, commandID string) string {
-	encoded, _ := json.Marshal(key)
-	return string(encoded) + "\x00" + strings.TrimSpace(commandID)
 }
 
 func publicResultOutcome(result agent.Result, err error, content, thinking string) agentrun.Outcome {
 	status := agentrun.OutcomeFailed
 	switch result.Status {
-	case agent.ResultCompleted:
+	case agentschema.ResultCompleted:
 		status = agentrun.OutcomeCompleted
-	case agent.ResultAborted:
+	case agentschema.ResultAborted:
 		status = agentrun.OutcomeAborted
-	case agent.ResultIncomplete, agent.ResultBlocked:
+	case agentschema.ResultSuspended:
+		status = agentrun.OutcomeSuspended
+	case agentschema.ResultIncomplete, agentschema.ResultBlocked:
 		status = agentrun.OutcomeFailed
 	}
 	return agentrun.NewOutcome(status, err, result.Reason, content, thinking)
@@ -788,7 +619,7 @@ func mapPublicReceipt(run *agent.Run) agentrun.CommandReceipt {
 	}
 }
 
-func mapPublicCommandReceipt(receipt agent.CommandReceipt) agentrun.CommandReceipt {
+func mapPublicCommandReceipt(receipt agentevent.CommandReceipt) agentrun.CommandReceipt {
 	return agentrun.CommandReceipt{
 		CommandID: agentrun.CommandID(receipt.CommandID), OperationID: agentrun.OperationID(receipt.RunID),
 		Cursor: agentrun.Cursor(receipt.Cursor),

@@ -6,9 +6,9 @@ import (
 	"os"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	agentcontext "denova/internal/agents/context"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestCommitDomainMessageIsIdempotentAndPersistsCoordinatorIdentity(t *testing.T) {
@@ -22,7 +22,7 @@ func TestCommitDomainMessageIsIdempotentAndPersistsCoordinatorIdentity(t *testin
 	}
 	intent, err := NewDomainCommitIntent(
 		DomainCommitIdentity{CommandID: "command-1", OperationID: "operation-1", Cycle: 1},
-		agent.AssistantMessage("canonical answer", nil),
+		agentschema.AssistantMessage("canonical answer", nil),
 		MessageMetadata{RunID: "run-1", AgentKind: "ide"},
 	)
 	if err != nil {
@@ -78,8 +78,8 @@ func TestCommitDomainMessageRejectsIdentityReuseWithDifferentPayload(t *testing.
 		t.Fatal(err)
 	}
 	identity := DomainCommitIdentity{CommandID: "command-1", OperationID: "operation-1", Cycle: 1}
-	first, _ := NewDomainCommitIntent(identity, agent.AssistantMessage("first", nil), MessageMetadata{})
-	second, _ := NewDomainCommitIntent(identity, agent.AssistantMessage("different", nil), MessageMetadata{})
+	first, _ := NewDomainCommitIntent(identity, agentschema.AssistantMessage("first", nil), MessageMetadata{})
+	second, _ := NewDomainCommitIntent(identity, agentschema.AssistantMessage("different", nil), MessageMetadata{})
 	if _, err := sess.CommitDomainMessage(first); err != nil {
 		t.Fatal(err)
 	}
@@ -101,11 +101,11 @@ func TestCommitDomainMessageRejectsSameContentWithDifferentSemanticMetadata(t *t
 		t.Fatal(err)
 	}
 	identity := DomainCommitIdentity{CommandID: "command-1", OperationID: "operation-1", Cycle: 1}
-	first, err := NewDomainCommitIntent(identity, agent.UserMessage("same content"), MessageMetadata{UserReferences: []agentcontext.UserReference{{Kind: "file", Label: "a.md"}}})
+	first, err := NewDomainCommitIntent(identity, agentschema.UserMessage("same content"), MessageMetadata{UserReferences: []agentcontext.UserReference{{Kind: "file", Label: "a.md"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := NewDomainCommitIntent(identity, agent.UserMessage("same content"), MessageMetadata{UserReferences: []agentcontext.UserReference{{Kind: "file", Label: "b.md"}}})
+	second, err := NewDomainCommitIntent(identity, agentschema.UserMessage("same content"), MessageMetadata{UserReferences: []agentcontext.UserReference{{Kind: "file", Label: "b.md"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestCanonicalOutputAtomicallyResolvesInterruption(t *testing.T) {
 		t.Fatal("expected pending interruption")
 	}
 	identity := DomainCommitIdentity{CommandID: "command-1", OperationID: "operation-1", Cycle: 1}
-	intent, err := NewDomainCommitIntent(identity, agent.AssistantMessage("recovered", nil), MessageMetadata{
+	intent, err := NewDomainCommitIntent(identity, agentschema.AssistantMessage("recovered", nil), MessageMetadata{
 		ResolveInterruptionID: pending.ID,
 	})
 	if err != nil {
@@ -153,32 +153,7 @@ func TestCanonicalOutputAtomicallyResolvesInterruption(t *testing.T) {
 	if got := reopened.PendingInterruption(); got != nil {
 		t.Fatalf("reopened interruption remained pending: %#v", got)
 	}
-	if _, found, err := reopened.FindDomainCommit(identity, agent.Assistant, intent.Hash); err != nil || !found {
+	if _, found, err := reopened.FindDomainCommit(identity, agentschema.Assistant, intent.Hash); err != nil || !found {
 		t.Fatalf("canonical output not recoverable found=%t err=%v", found, err)
-	}
-}
-
-func TestContextCursorRejectsStaleStructuralMutation(t *testing.T) {
-	store, err := NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	sess, err := store.GetOrCreate("context-cursor")
-	if err != nil {
-		t.Fatal(err)
-	}
-	stale := sess.ContextCursor()
-	if err := sess.Append(agent.UserMessage("new turn")); err != nil {
-		t.Fatal(err)
-	}
-	if err := sess.AppendClearMarkerAt(stale); !errors.Is(err, ErrContextRevisionConflict) {
-		t.Fatalf("stale clear error = %v, want %v", err, ErrContextRevisionConflict)
-	}
-	current := sess.ContextCursor()
-	if err := sess.AppendClearMarkerAt(current); err != nil {
-		t.Fatal(err)
-	}
-	if after := sess.ContextCursor(); after.Revision != current.Revision+1 {
-		t.Fatalf("revision after clear = %d, want %d", after.Revision, current.Revision+1)
 	}
 }

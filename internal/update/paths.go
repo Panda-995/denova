@@ -7,9 +7,8 @@ import (
 )
 
 const (
-	updateDataDirName       = ".denova-updates"
-	legacyUpdateDataDirName = ".nova-updates"
-	releasePackageRootName  = "denova"
+	updateDataDirName      = ".denova-updates"
+	releasePackageRootName = "denova"
 )
 
 func updaterExecutableName() string {
@@ -43,8 +42,4 @@ func installUpdaterTarget(installDir, stagedUpdater string) string {
 
 func updateDataDir(installDir string) string {
 	return filepath.Join(installDir, updateDataDirName)
-}
-
-func legacyUpdateDataDir(installDir string) string {
-	return filepath.Join(installDir, legacyUpdateDataDirName)
 }

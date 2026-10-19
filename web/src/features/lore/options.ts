@@ -1,15 +1,5 @@
 import type { LoreItem } from '@/lib/api'
 
-export const TYPE_OPTIONS = [
-  { value: 'character' },
-  { value: 'world' },
-  { value: 'location' },
-  { value: 'faction' },
-  { value: 'rule' },
-  { value: 'item' },
-  { value: 'other' },
-] as const
-
 export const IMPORTANCE_OPTIONS = [
   { value: 'major' },
   { value: 'important' },
@@ -30,7 +20,7 @@ export function loreTypeLabel(
 ) {
   const key = `lore.type.${type}`
   const label = t(key)
-  return label === key ? t('lore.type.other') : label
+  return label === key ? t('lore.type.default') : label
 }
 
 export function loreImportanceLabel(

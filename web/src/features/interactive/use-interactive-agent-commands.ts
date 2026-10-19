@@ -41,20 +41,20 @@ export function useInteractiveAgentCommands({ storyId, branchId, readRuntime, on
 
   const requireProjectedOperation = useCallback(() => {
     const runtime = readRuntime()
-    if (runtime.phase !== 'running' || !runtime.operationId) {
+    if ((runtime.phase !== 'running' && runtime.phase !== 'suspended') || !runtime.operationId) {
       throw new Error(t('chat.runtime.operationChanged'))
     }
     return runtime
   }, [readRuntime, t])
 
-  const recover = useCallback(async (active: ActiveInteractiveChat) => {
+  const recover = useCallback(async (active: ActiveInteractiveChat, continuePaused = false) => {
     const recoveryAbort = active.recovery_actions?.find((action) => action.kind === 'abort') || null
     recoveryAbortActionRef.current = recoveryAbort
     onRuntimeChange((current) => ({
       ...current,
       recoveryAbortAvailable: Boolean(recoveryAbort),
     }))
-    const actions = interactiveRecoveryActionsToSubmit(active)
+    const actions = interactiveRecoveryActionsToSubmit(active, continuePaused)
     if (!actions.length) return active
     let taskId = active.task_id?.trim() || ''
     for (const action of actions) {
@@ -74,11 +74,12 @@ export function useInteractiveAgentCommands({ storyId, branchId, readRuntime, on
       ...active,
       active: true,
       status: 'running' as const,
+      phase: 'running',
       task_id: taskId,
       // start_turn only restores the display stream; keep the server-derived
       // abort capability while the durable operation remains recovery-paused.
-      recovery_paused: !executionResumed,
-      runtime_recoverable: !executionResumed,
+      recovery_paused: !executionResumed && Boolean(active.recovery_paused),
+      runtime_recoverable: !executionResumed && Boolean(active.recovery_paused),
       stream_attached: true,
       recovery_actions: executionResumed ? [] : recoveryAbort ? [recoveryAbort] : [],
     }
@@ -167,15 +168,14 @@ export function useInteractiveAgentCommands({ storyId, branchId, readRuntime, on
         },
       })
       retryCommandIDsRef.current.delete(retryKey)
-      recoveryAbortActionRef.current = null
+      if (runtime.phase !== 'suspended') recoveryAbortActionRef.current = null
       onRuntimeChange((current) => current.operationId !== runtime.operationId
         ? current
         : {
             ...current,
             cursor: Math.max(current.cursor, receipt.cursor),
             operationId: receipt.operation_id,
-            recoveryPaused: false,
-            recoveryAbortAvailable: false,
+            ...(current.phase !== 'suspended' ? { recoveryPaused: false, recoveryAbortAvailable: false } : {}),
             queue: mergeProjectedAgentQueue(current.queue, {
               command_id: commandId,
               operation_id: receipt.operation_id,
@@ -195,32 +195,33 @@ export function useInteractiveAgentCommands({ storyId, branchId, readRuntime, on
     action: AgentQueuedCommandAction,
     reason?: string,
   ) => {
-    const runtime = requireProjectedOperation()
-    if (item.operation_id !== runtime.operationId || !runtime.queue.some((candidate) => candidate.command_id === item.command_id)) {
+    const runtime = action === 'steer_queued' ? requireProjectedOperation() : readRuntime()
+    const operationId = item.operation_id
+    if (!operationId || (action === 'steer_queued' && operationId !== runtime.operationId) ||
+      !runtime.queue.some((candidate) => candidate.command_id === item.command_id && candidate.operation_id === operationId)) {
       throw new Error(t('chat.runtime.invalidCommand'))
     }
     const payload = { target_command_id: item.command_id, ...(reason ? { reason } : {}) }
-    const retryKey = agentCommandRetryKey(runtime.operationId, action, payload)
+    const retryKey = agentCommandRetryKey(operationId, action, payload)
     const commandId = rememberAgentCommandID(retryCommandIDsRef.current, retryKey, createAgentCommandID)
     try {
       const receipt = await submitInteractiveAgentCommand({
         type: action,
         commandId,
-        targetOperationId: runtime.operationId,
+        targetOperationId: operationId,
         targetCommandId: item.command_id,
         storyId,
         branchId,
         ...(reason ? { reason } : {}),
       })
       retryCommandIDsRef.current.delete(retryKey)
-      if (action === 'steer_queued') recoveryAbortActionRef.current = null
-      onRuntimeChange((current) => current.operationId !== runtime.operationId
+      if (action === 'steer_queued' && runtime.phase !== 'suspended') recoveryAbortActionRef.current = null
+      onRuntimeChange((current) => action === 'steer_queued' && current.operationId !== operationId
         ? current
         : {
             ...current,
             cursor: Math.max(current.cursor, receipt.cursor),
-            operationId: receipt.operation_id,
-            ...(action === 'steer_queued' ? {
+            ...(action === 'steer_queued' && current.phase !== 'suspended' ? {
               recoveryPaused: false,
               recoveryAbortAvailable: false,
             } : {}),
@@ -235,7 +236,7 @@ export function useInteractiveAgentCommands({ storyId, branchId, readRuntime, on
       if (isKnownAgentCommandOutcome(error)) retryCommandIDsRef.current.delete(retryKey)
       throw new Error(agentCommandErrorMessage(error, t))
     }
-  }, [branchId, onRuntimeChange, requireProjectedOperation, storyId, t])
+  }, [branchId, onRuntimeChange, readRuntime, requireProjectedOperation, storyId, t])
 
   const steerQueued = useCallback(
     (item: AgentRuntimeQueuedCommand) => submitQueuedControl(item, 'steer_queued'),
@@ -249,14 +250,14 @@ export function useInteractiveAgentCommands({ storyId, branchId, readRuntime, on
   return { abort, cancelQueued, followUp, project, recover, steerQueued }
 }
 
-function interactiveRecoveryActionsToSubmit(active: ActiveInteractiveChat) {
+function interactiveRecoveryActionsToSubmit(active: ActiveInteractiveChat, continuePaused: boolean) {
   if (!active.runtime_recoverable) return []
   if (active.stream_attached && !active.recovery_paused) return []
   const projected = active.recovery_actions || []
   const attach = active.stream_attached
     ? undefined
     : projected.find((action) => action.kind === 'start_turn')
-  const stateChange = projected.find((action) => action.kind !== 'start_turn' && action.kind !== 'abort')
+  const stateChange = projected.find((action) => action.kind !== 'start_turn' && action.kind !== 'abort' && (continuePaused || action.kind !== 'resume'))
   return [attach, stateChange].filter((action): action is AgentRuntimeRecoveryAction => Boolean(action))
 }
 
@@ -273,6 +274,7 @@ export function runtimeFromActiveInteractiveChat(
     operationId: active.active_operation_id || '',
     cycle: active.active_cycle || 0,
     activeOutput: active.active_output,
+    pendingAsk: active.pending_ask,
     queue: active.queue || [],
     openTools: active.open_tools || [],
     connection,

@@ -1,0 +1,268 @@
+package canonical
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	agenthistory "github.com/alfredxw/denova/agent/context/history"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentsession "github.com/alfredxw/denova/agent/session"
+	agenttool "github.com/alfredxw/denova/agent/tool"
+)
+
+type CommitStage string
+
+const (
+	CommitInput   CommitStage = "input"
+	CommitContext CommitStage = "context"
+	CommitOutput  CommitStage = "output"
+)
+
+// CommitIdentity is the exact idempotency boundary shared by Agent and a
+// product store. Adapters must never substitute a display or request ID.
+type CommitIdentity struct {
+	Session   agentsession.Key
+	CommandID string
+	RunID     string
+	Cycle     int
+	Stage     CommitStage
+}
+
+type InputCommitRequest struct {
+	Identity   CommitIdentity
+	Hash       string
+	Input      agentschema.Input
+	Checkpoint CanonicalCheckpoint
+}
+
+type OutputCommitRequest struct {
+	Identity CommitIdentity
+	Hash     string
+	// Message is the exact provider-neutral final output. Hosts may persist
+	// continuation metadata and usage beside their product projection without
+	// depending on a provider SDK type.
+	Message agentschema.Message
+	// ContextMessages is the active canonical window, including this output.
+	// Archived bodies are absent. A host projection must preserve its order and
+	// message count so original journal coordinates remain valid.
+	ContextMessages []*agentschema.Message
+	// ActiveUserIndex is local to ContextMessages, not the archived journal.
+	// Output projection must leave messages before this cycle unchanged.
+	ActiveUserIndex int
+	Checkpoint      CanonicalCheckpoint
+}
+
+// ContextCommitRequest appends one model-visible, UI-hidden message batch to
+// the same canonical lane as accepted input and final output. Sequence makes
+// retries deterministic within one Agent cycle; the messages define the batch
+// shape so callers cannot label content inconsistently.
+type ContextCommitRequest struct {
+	Identity   CommitIdentity
+	Sequence   int
+	Messages   []agentschema.Message
+	Checkpoint CanonicalCheckpoint
+}
+
+// CanonicalCheckpoint supplies Agent continuation records for the host's
+// exact product commit receipt. Embedded hosts must append these records in
+// the same journal transaction as the product change, after validating the
+// expected Agent revision. Preparation may be repeated after a confirmed
+// uncommitted transaction conflict; append only the final attempt. Never retry
+// after an ambiguous or successful commit, or call back into the same Session.
+// A nil callback means no embedded log.
+type CanonicalCheckpoint func(CommitReceipt) (JournalCheckpoint, error)
+
+type JournalCheckpoint struct {
+	Session          agentsession.Key
+	ExpectedRevision agentsession.Revision
+	Records          []agentsession.Record
+}
+
+type CommitReceipt struct{ Revision string }
+
+// OutputProjection optionally replaces the provider output retained in the
+// Agent transcript. It supports host protocols such as structured plan cards:
+// the raw output remains the canonical commit identity, while only the
+// product-approved projection becomes future model context.
+type OutputProjection struct {
+	Content  string
+	Thinking string
+	// ContextMessages, when non-nil, replaces the supplied active window with
+	// its settled product projection, preserving its positions and count.
+	// Current-turn output and lifecycle still retain the provider's metadata.
+	// Hosts that persist complete Agent messages can leave this nil.
+	ContextMessages []*agentschema.Message
+}
+
+type OutputCommitReceipt struct {
+	Revision   string
+	Transcript *OutputProjection
+}
+
+// CanonicalPreparedOutput is optional for hosts that durably accept a complete
+// product draft before final publication. PendingOutput only reads that exact
+// cycle's accepted output; Agent commits it through the ordinary output path.
+type CanonicalPreparedOutput interface {
+	PendingOutput(context.Context, CommitIdentity) (*agentschema.Message, error)
+}
+
+type EffectRequest struct {
+	ID       string
+	Identity CommitIdentity
+	CallID   string
+	Index    int
+	Effect   agentschema.Effect
+}
+
+type EffectResult struct {
+	ID       string
+	Revision string
+	Error    string
+}
+
+// CanonicalAdapter coordinates direct idempotent conversation commits to a
+// host's product journal. Tool effects use Definition.Effects independently.
+type CanonicalAdapter interface {
+	Identity() agentschema.CapabilityIdentity
+	MaterializeInput(context.Context, InputCommitRequest) (CommitReceipt, error)
+	CommitOutput(context.Context, OutputCommitRequest) (OutputCommitReceipt, error)
+}
+
+// CanonicalContextAdapter is the optional extension used by hosts that own
+// the conversation journal. Standalone Agents without a product journal keep
+// using Agent's built-in transcript store.
+type CanonicalContextAdapter interface {
+	CommitContext(context.Context, ContextCommitRequest) (CommitReceipt, error)
+}
+
+// CanonicalAdapterFuncs is the compact adapter form for hosts whose product
+// store already exposes idempotent commit functions.
+type CanonicalAdapterFuncs struct {
+	CapabilityIdentity agentschema.CapabilityIdentity
+	MaterializeInputFn func(context.Context, InputCommitRequest) (CommitReceipt, error)
+	CommitOutputFn     func(context.Context, OutputCommitRequest) (OutputCommitReceipt, error)
+}
+
+func (adapter CanonicalAdapterFuncs) Identity() agentschema.CapabilityIdentity {
+	return adapter.CapabilityIdentity
+}
+
+func (adapter CanonicalAdapterFuncs) MaterializeInput(ctx context.Context, request InputCommitRequest) (CommitReceipt, error) {
+	if adapter.MaterializeInputFn == nil {
+		return CommitReceipt{}, agentschema.ErrCapabilityUnsupported
+	}
+	return adapter.MaterializeInputFn(ctx, request)
+}
+
+func (adapter CanonicalAdapterFuncs) CommitOutput(ctx context.Context, request OutputCommitRequest) (OutputCommitReceipt, error) {
+	if adapter.CommitOutputFn == nil {
+		return OutputCommitReceipt{}, agentschema.ErrCapabilityUnsupported
+	}
+	return adapter.CommitOutputFn(ctx, request)
+}
+
+// ValidateContextCommitMessages derives and validates the one supported batch
+// shape from its messages. A context-state batch, a complete tool batch, and a
+// delegated task-completion batch are deliberately mutually exclusive.
+func ValidateContextCommitMessages(messages []*agentschema.Message) error {
+	if len(messages) == 0 || messages[0] == nil {
+		return errors.New("canonical context commit requires messages")
+	}
+	first := messages[0]
+	switch {
+	case first.Role == agentschema.Assistant && len(first.ToolCalls) > 0:
+		return validateCanonicalToolBatch(messages)
+	case first.Role == agentschema.User && agenthistory.IsContextStateMessage(first):
+		for index, message := range messages {
+			if message == nil || message.Role != agentschema.User || !agenthistory.IsContextStateMessage(message) || message.TaskCompletion != nil ||
+				len(message.ToolCalls) != 0 || strings.TrimSpace(message.ToolCallID) != "" {
+				return fmt.Errorf("canonical context state message %d is invalid", index)
+			}
+		}
+		if _, err := agenthistory.RebuildContextStateSnapshot(messages); err != nil {
+			return fmt.Errorf("validate canonical context state: %w", err)
+		}
+		return nil
+	case first.Role == agentschema.User && first.TaskCompletion != nil:
+		for index, message := range messages {
+			if message == nil || message.Role != agentschema.User || message.TaskCompletion == nil ||
+				strings.TrimSpace(message.TaskCompletion.CompletionID) == "" ||
+				strings.TrimSpace(message.TaskCompletion.Author) == "" ||
+				strings.TrimSpace(message.TaskCompletion.Recipient) == "" ||
+				len(message.ToolCalls) != 0 || strings.TrimSpace(message.ToolCallID) != "" ||
+				agenthistory.IsContextStateMessage(message) {
+				return fmt.Errorf("canonical task completion message %d is invalid", index)
+			}
+		}
+		return nil
+	default:
+		return errors.New("canonical context messages do not form a supported batch")
+	}
+}
+
+func validateCanonicalToolBatch(messages []*agentschema.Message) error {
+	if len(messages) < 2 {
+		return errors.New("canonical tool batch requires one assistant call message and its results")
+	}
+	pending, err := ValidateCanonicalToolCallMessage(messages[0])
+	if err != nil {
+		return err
+	}
+	if len(messages) != len(messages[0].ToolCalls)+1 {
+		return errors.New("canonical tool batch must contain exactly one result per tool call")
+	}
+	for index, message := range messages[1:] {
+		if message == nil || message.Role != agentschema.ToolRole || len(message.ToolCalls) != 0 || message.TaskCompletion != nil {
+			return fmt.Errorf("canonical tool result %d is invalid", index)
+		}
+		id := strings.TrimSpace(message.ToolCallID)
+		if _, ok := pending[id]; !ok || id == "" {
+			return fmt.Errorf("canonical tool result %d has no matching call", index)
+		}
+		delete(pending, id)
+	}
+	if len(pending) != 0 {
+		return errors.New("canonical tool batch is missing tool results")
+	}
+	return nil
+}
+
+func ValidateCanonicalToolCallMessage(message *agentschema.Message) (map[string]struct{}, error) {
+	if message == nil || message.Role != agentschema.Assistant || len(message.ToolCalls) == 0 ||
+		strings.TrimSpace(message.ToolCallID) != "" || message.TaskCompletion != nil {
+		return nil, errors.New("canonical tool batch requires an assistant tool-call message")
+	}
+	pending := make(map[string]struct{}, len(message.ToolCalls))
+	for _, call := range message.ToolCalls {
+		id := strings.TrimSpace(call.ID)
+		if id == "" || strings.TrimSpace(call.Function.Name) == "" {
+			return nil, errors.New("canonical tool batch contains an invalid tool call")
+		}
+		if err := agenttool.ValidateToolArgumentsJSON(call.Function.Arguments); err != nil {
+			return nil, fmt.Errorf("canonical tool call %q arguments: %w", id, err)
+		}
+		if _, duplicate := pending[id]; duplicate {
+			return nil, fmt.Errorf("canonical tool batch repeats tool call %q", id)
+		}
+		pending[id] = struct{}{}
+	}
+	return pending, nil
+}
+
+// ValidateContextCommit verifies an Agent-owned context sequence before a host
+// applies its own idempotent write.
+func ValidateContextCommit(request ContextCommitRequest) error {
+	if request.Identity.Stage != CommitContext {
+		return errors.New("canonical context commit has a non-context identity")
+	}
+	if request.Sequence < 0 {
+		return errors.New("canonical context commit requires a non-negative sequence")
+	}
+	messages := make([]*agentschema.Message, len(request.Messages))
+	for index := range request.Messages {
+		messages[index] = request.Messages[index].Clone()
+	}
+	return ValidateContextCommitMessages(messages)
+}

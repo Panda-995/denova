@@ -26,6 +26,7 @@ export interface AgentChatPendingAction {
 }
 
 export interface AgentChatConversationTabProps {
+  page?: AgentPanelProps['page']
   projectId: string
   projectType: 'book' | 'general' | 'agents'
   workspace: string
@@ -45,11 +46,14 @@ export interface AgentChatConversationTabProps {
   onOpenChangeReview?: (reviewThreadID: string, groupID: string) => void
   onWorkspaceChanged?: (workspace: string, paths: string[], metadata: WorkspaceChangeMetadata) => void | Promise<void>
   onRunningChange?: (projectID: string, sessionId: string, running: boolean | null) => void
+  /** The host opens another conversation without changing this tab's durable binding. */
+  onCreateSession: AgentPanelProps['onCreateSession']
   onDraftCommitted?: (message: string) => void
   pendingAction?: AgentChatPendingAction | null
   onPendingActionConsumed?: (id: string) => void
   /** Adds host-owned model context while keeping the user's message as the transcript projection. */
   messageTransform?: (message: string) => string
+  quickPromptScope?: AgentPanelProps['quickPromptScope']
   onConversationStateChange?: (state: AgentChatConversationState) => void
   activeSubAgentSession?: AgentSubAgentSessionTarget | null
   onSubAgentSessionOpen?: (target: AgentSubAgentSessionTarget) => void | Promise<void>
@@ -73,7 +77,6 @@ export interface AgentChatConversationHost {
   sessionActionsDisabled: boolean
   sessionRailVisible: boolean
   onSessionRailVisibleChange: (visible: boolean) => void
-  onCreateSession: AgentPanelProps['onCreateSession']
   onSwitchSession: AgentPanelProps['onSwitchSession']
   onRenameSession: AgentPanelProps['onRenameSession']
   onDeleteSession: AgentPanelProps['onDeleteSession']
@@ -107,6 +110,7 @@ export interface AgentChatConversationHost {
  * to one immutable project/session pair, so switching tabs never re-points a shared runtime.
  */
 function AgentChatConversationTabComponent({
+  page,
   projectId,
   projectType,
   workspace,
@@ -125,10 +129,12 @@ function AgentChatConversationTabComponent({
   onOpenChangeReview,
   onWorkspaceChanged,
   onRunningChange,
+  onCreateSession,
   onDraftCommitted,
   pendingAction,
   onPendingActionConsumed,
   messageTransform,
+  quickPromptScope,
   onConversationStateChange,
   activeSubAgentSession,
   onSubAgentSessionOpen,
@@ -198,8 +204,8 @@ function AgentChatConversationTabComponent({
     // A locally-owned turn already streams into this hook. Only external owners need a history
     // refresh and active-run inspection, otherwise a Project metadata poll could double-attach it.
     if (draft || !initializedRef.current || chat.isExecutionActive) return
-    void synchronize()
-  }, [chat.isExecutionActive, draft, syncRevision, synchronize])
+    void chat.synchronizeActiveChat()
+  }, [chat.isExecutionActive, chat.synchronizeActiveChat, draft, syncRevision])
 
   const send = useCallback(
     (message: string, options?: Parameters<typeof chat.send>[1]) => {
@@ -207,11 +213,11 @@ function AgentChatConversationTabComponent({
       return chat.send(transformed, {
         ...options,
         displayMessage: options?.displayMessage ?? (transformed === message ? undefined : message),
-        onSubmissionStart: () => {
-          options?.onSubmissionStart?.()
+        onSubmissionAccepted: () => {
+          options?.onSubmissionAccepted?.()
           if (!draft || draftCommittedRef.current) return
           draftCommittedRef.current = true
-          // The first request now owns the local session ID. Do not reload history when the parent
+          // The accepted request now owns the local session ID. Do not reload history when the parent
           // flips the tab out of draft state; the live useChat instance already owns that stream.
           initializedRef.current = true
           onDraftCommitted?.(message)
@@ -222,7 +228,9 @@ function AgentChatConversationTabComponent({
   )
 
   useEffect(() => {
-    if (!pendingAction || !initialContentReady || chat.isExecutionActive || submittedActionRef.current === pendingAction.id) return
+    // Startup recovery is temporarily streaming without an active operation. Wait for
+    // that inspection before submitting the initial instruction to the idle session.
+    if (!pendingAction || !initialContentReady || chat.isStreaming || chat.isExecutionActive || submittedActionRef.current === pendingAction.id) return
     submittedActionRef.current = pendingAction.id
     void Promise.resolve(send(pendingAction.message, { displayMessage: pendingAction.displayMessage }))
       .then((accepted) => {
@@ -241,7 +249,7 @@ function AgentChatConversationTabComponent({
           error,
         })
       })
-  }, [chat.isExecutionActive, initialContentReady, onPendingActionConsumed, pendingAction, projectId, send, sessionId])
+  }, [chat.isExecutionActive, chat.isStreaming, initialContentReady, onPendingActionConsumed, pendingAction, projectId, send, sessionId])
 
   useEffect(() => {
     onRunningChange?.(projectId, sessionId, chat.isExecutionActive)
@@ -254,7 +262,7 @@ function AgentChatConversationTabComponent({
       action,
       {
         answer: (answers) => client.answerSessionAsk(sessionId, askID, answers),
-        cancel: () => client.cancelSessionAsk(sessionId, askID),
+        cancel: (reason) => client.cancelSessionAsk(sessionId, askID, reason),
       },
       () => chat.loadHistory(sessionId),
     )
@@ -329,6 +337,7 @@ function AgentChatConversationTabComponent({
 
   return (
     <AgentPanel
+      page={page}
       projectId={projectId}
       active={active}
       agentKind={projectType === 'book' ? 'writing' : 'general'}
@@ -336,11 +345,11 @@ function AgentChatConversationTabComponent({
       chrome={host?.chrome ?? 'workbench'}
       view={host?.view}
       onViewChange={host?.onViewChange}
-      sessionActionsDisabled={host?.sessionActionsDisabled}
+      sessionActionsDisabled={host?.sessionActionsDisabled ?? false}
       sessionRailVisible={host?.sessionRailVisible}
       onSessionRailVisibleChange={host?.onSessionRailVisibleChange}
       initializing={!initialContentReady}
-      quickPromptScope={host?.quickPromptScope}
+      quickPromptScope={host?.quickPromptScope ?? quickPromptScope}
       composerDraftScope={host?.composerDraftScope}
       composerSettings={composerSettings}
       currentChapter={host?.currentChapter}
@@ -375,7 +384,7 @@ function AgentChatConversationTabComponent({
       hasEarlierMessages={chat.hasEarlierMessages}
       isLoadingEarlierHistory={chat.isLoadingEarlierHistory}
       fileSuggestions={host?.fileSuggestions ?? []}
-      onCreateSession={host?.onCreateSession ?? chat.createChatSession}
+      onCreateSession={onCreateSession}
       onSwitchSession={host?.onSwitchSession ?? chat.switchChatSession}
       onRenameSession={host?.onRenameSession ?? chat.renameChatSession}
       onDeleteSession={host?.onDeleteSession ?? chat.deleteChatSession}
@@ -388,6 +397,10 @@ function AgentChatConversationTabComponent({
       onAnalyzeContext={(message, options) => chat.analyzeContext(messageTransform?.(message) ?? message, options)}
       ideContext={host?.ideContext}
       onStop={chat.stop}
+      onSuspend={chat.suspend}
+      onResumeTask={chat.resumeTask}
+      recoveryFailed={chat.recoveryFailed}
+      onRetryRecovery={() => { void chat.resumeActiveChat() }}
       onSteerQueuedCommand={chat.steerQueuedCommand}
       onDeleteQueuedCommand={chat.deleteQueuedCommand}
       onEditQueuedCommand={chat.editQueuedCommand}

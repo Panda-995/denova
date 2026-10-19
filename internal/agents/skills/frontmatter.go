@@ -5,10 +5,12 @@ import (
 	"regexp"
 	"strings"
 
+	"denova/internal/portablepath"
+
 	"gopkg.in/yaml.v3"
 )
 
-var skillNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
+var skillNamePattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}\p{M}\x{200C}\x{200D}_-]{0,63}$`)
 
 type frontMatterFile struct {
 	Name         string   `yaml:"name"`
@@ -19,8 +21,9 @@ type frontMatterFile struct {
 }
 
 func ValidateName(name string) error {
-	if !skillNamePattern.MatchString(strings.TrimSpace(name)) {
-		return fmt.Errorf("skill name must match %s", skillNamePattern.String())
+	name = strings.TrimSpace(name)
+	if !skillNamePattern.MatchString(name) || len(name) > portablepath.MaxComponentBytes {
+		return fmt.Errorf("skill name must contain 1-64 Unicode letters, numbers, combining marks, joiners, underscores or hyphens, start with a letter or number, and fit within %d UTF-8 bytes", portablepath.MaxComponentBytes)
 	}
 	return nil
 }
@@ -112,4 +115,40 @@ func normalizeAgentList(agents []string) []string {
 		out = append(out, agent)
 	}
 	return out
+}
+
+// RenameDocument preserves all frontmatter fields while assigning an explicitly
+// chosen import name. The surrounding Skill's supporting files are unchanged.
+func RenameDocument(content, name string) (string, error) {
+	if err := ValidateName(name); err != nil {
+		return "", err
+	}
+	frontmatter, body, err := parseFrontmatter(content)
+	if err != nil {
+		return "", err
+	}
+	var node yaml.Node
+	if err := yaml.Unmarshal([]byte(frontmatter), &node); err != nil {
+		return "", err
+	}
+	if len(node.Content) != 1 || node.Content[0].Kind != yaml.MappingNode {
+		return "", fmt.Errorf("Skill frontmatter must be a mapping")
+	}
+	mapping := node.Content[0]
+	found := false
+	for i := 0; i < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == "name" {
+			mapping.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name}
+			found = true
+			break
+		}
+	}
+	if !found {
+		return "", fmt.Errorf("Skill frontmatter name is required")
+	}
+	raw, err := yaml.Marshal(&node)
+	if err != nil {
+		return "", err
+	}
+	return "---\n" + string(raw) + "---\n" + body, nil
 }

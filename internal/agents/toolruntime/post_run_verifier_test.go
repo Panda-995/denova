@@ -12,15 +12,15 @@ import (
 	"denova/internal/book"
 )
 
-func TestVerifyPostRunMutationsAcceptsIllustrationMetaWrite(t *testing.T) {
+func TestVerifyPostRunMutationsAcceptsIllustrationFile(t *testing.T) {
 	workspace := t.TempDir()
 	bookService := book.NewService(workspace)
-	if err := bookService.WriteFile("assets/illustrations/ch01/run/meta.json", "{}"); err != nil {
-		t.Fatalf("write meta: %v", err)
+	if err := bookService.WriteBinaryFile("assets/writing/ch01--asset_illustration.png", []byte("image")); err != nil {
+		t.Fatalf("write image: %v", err)
 	}
 	result := agenttool.VerifyPostRunMutations(bookService, []agenttool.Mutation{{
 		ToolName:      producttools.GenerateImageToolName,
-		Target:        "assets/illustrations/ch01/run/meta.json",
+		Target:        "assets/writing/ch01--asset_illustration.png",
 		Source:        agenttool.ToolSourceImage,
 		MutationScope: agenttool.ToolMutationWorkspace,
 		PostCheck:     agenttool.ToolPostCheckWorkspaceChange,

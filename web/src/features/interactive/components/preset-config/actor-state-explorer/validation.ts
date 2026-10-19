@@ -23,6 +23,10 @@ export function isActorStateExplorerValueValid(value: ExplorerProps['value']) {
 			const normalizedName = normalizeStateName(field.name)
 			if (!normalizedName || actorStateFieldNameHasPathSeparator(field.name) || fieldNames.has(normalizedName)) return false
 			fieldNames.add(normalizedName)
+      if (field.max_field) {
+        const capacity = tpl.fields?.find((candidate) => candidate.name === field.max_field)
+        if (field.type !== 'number' || field.max !== undefined || !capacity || capacity === field || capacity.type !== 'number' || capacity.max_field) return false
+      }
     }
     const rulePools = new Set<string>()
     for (const rule of tpl.trait_rules || []) {

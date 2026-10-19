@@ -2,7 +2,7 @@ import { expect, test } from '../support/fixtures'
 import { createAndOpenBook } from '../support/api'
 import { openAgentChatWorkbench } from '../support/agent-chat'
 
-test('restores a Book review tab from the production bundle without crashing', async ({ page, request }) => {
+test('restores a Book review tab from the production bundle without crashing', { tag: '@smoke' }, async ({ page, request }) => {
   const book = await createAndOpenBook(request, 'Production Review Book')
   const threadID = 'production-review'
   await page.route(`**/api/projects/${book.projectId}/changes/review-threads/${threadID}`, route => route.fulfill({

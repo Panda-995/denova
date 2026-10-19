@@ -14,11 +14,47 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"denova/internal/hostruntime"
 )
+
+func TestUpdateCheckAndDownloadUseConfiguredProxy(t *testing.T) {
+	var connects atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			t.Errorf("unexpected proxy method: %s", r.Method)
+		}
+		connects.Add(1)
+		http.Error(w, "fixture proxy unavailable", http.StatusBadGateway)
+	}))
+	t.Cleanup(proxy.Close)
+	for _, key := range []string{"HTTPS_PROXY", "https_proxy"} {
+		t.Setenv(key, proxy.URL)
+	}
+	for _, key := range []string{"NO_PROXY", "no_proxy"} {
+		t.Setenv(key, "")
+	}
+	service := NewService()
+	// Download can be entered without a preceding release check.
+	client := service.downloadHTTPClient()
+	client.Timeout = time.Second
+	t.Cleanup(client.CloseIdleConnections)
+	response, err := client.Get("https://archive.invalid/update.zip")
+	if response != nil {
+		response.Body.Close()
+	}
+	if err == nil || connects.Load() != 1 {
+		t.Fatalf("update download bypassed the proxy: connects=%d error=%v", connects.Load(), err)
+	}
+	service.httpClient.Timeout = time.Second
+	_, err = service.Check(context.Background())
+	if err == nil || connects.Load() != 2 {
+		t.Fatalf("update check bypassed the proxy: connects=%d error=%v", connects.Load(), err)
+	}
+}
 
 func TestSelectAssetForPlatform(t *testing.T) {
 	assets := []githubAsset{
@@ -52,27 +88,10 @@ func TestDefaultServiceUsesDenovaReleaseRepository(t *testing.T) {
 	}
 }
 
-func TestVerifyChecksumRequiresChecksumsAsset(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(githubRelease{
-			TagName: "v0.2.0",
-			Assets:  []githubAsset{{Name: "denova-v0.2.0-linux-x64.tar.gz"}},
-		})
-	}))
-	defer server.Close()
-
-	archivePath := filepath.Join(t.TempDir(), "denova-v0.2.0-linux-x64.tar.gz")
-	if err := os.WriteFile(archivePath, []byte("archive"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	service := &Service{
-		repository:    "owner/repo",
-		httpClient:    server.Client(),
-		githubAPIBase: server.URL,
-	}
-	err := service.verifyChecksum(context.Background(), filepath.Base(archivePath), archivePath)
+func TestReleaseChecksumRequiresChecksumsAsset(t *testing.T) {
+	_, err := (&Service{}).releaseChecksum(context.Background(), githubRelease{}, "denova-v0.2.0-linux-x64.tar.gz")
 	if err == nil || !strings.Contains(err.Error(), "checksums.txt") {
-		t.Fatalf("missing checksums.txt error = %v", err)
+		t.Fatalf("missing checksum asset: %v", err)
 	}
 }
 
@@ -129,7 +148,7 @@ func TestValidateReleasePackageRequiresRipgrepLicenses(t *testing.T) {
 	}
 }
 
-func TestInstallStagesUpdateAndIgnoresRequestCancel(t *testing.T) {
+func TestInstallStagesUpdateWithCallerOwnedLifetime(t *testing.T) {
 	platform := platformKey(runtime.GOOS, runtime.GOARCH)
 	assetName := "denova-v0.2.0-" + platform + ".tar.gz"
 	updaterName := updaterExecutableName()
@@ -211,7 +230,7 @@ func TestInstallStagesUpdateAndIgnoresRequestCancel(t *testing.T) {
 	cancel()
 
 	var progress []InstallProgress
-	result, err := service.InstallWithProgress(ctx, func(event InstallProgress) {
+	result, err := service.InstallWithProgress(context.WithoutCancel(ctx), func(event InstallProgress) {
 		progress = append(progress, event)
 	})
 	if err != nil {
@@ -238,7 +257,7 @@ func TestInstallStagesUpdateAndIgnoresRequestCancel(t *testing.T) {
 	if got, err := os.ReadFile(filepath.Join(result.StagedPath, "tools", hostruntime.RipgrepExecutableName())); err != nil || string(got) != "ripgrep" {
 		t.Fatalf("staged ripgrep missing: %q err=%v", got, err)
 	}
-	archivePath := filepath.Join(installDir, ".denova-updates", "downloads", assetName)
+	archivePath := filepath.Join(installDir, ".denova-updates", "downloads", hex.EncodeToString(sum[:]), assetName)
 	if _, err := os.Stat(archivePath); err != nil {
 		t.Fatalf("downloaded archive should be kept in install dir: %v", err)
 	}

@@ -9,8 +9,8 @@ import (
 	chatagent "denova/internal/agents/chat"
 	agentconversation "denova/internal/agents/conversation"
 	agentrun "denova/internal/agents/run"
+	agentruntime "denova/internal/agents/runtime"
 	"denova/internal/agents/session"
-	appagentruntime "denova/internal/app/agentruntime"
 	conversationapp "denova/internal/app/conversation"
 	apptask "denova/internal/app/task"
 )
@@ -20,19 +20,30 @@ func (service *Service) ActiveView(ctx context.Context, binding Binding) ActiveV
 	if err != nil || service.host == nil {
 		return ActiveView{}
 	}
-	_, executionRuntime := service.host.BaseRuntime()
-	runtime, projected := appagentruntime.RuntimeProjection(ctx, executionRuntime, runtimeOptions(binding, ""))
+	var runtime agentrun.RuntimeStatus
+	projected := false
 	active := service.activeRun(binding)
+	// Maintenance uses an internal Task for occupancy/shutdown, not a user
+	// operation or reconnectable chat stream. Its controller may hold a model
+	// lock, so leave that projection unavailable until maintenance settles.
+	if active == nil || active.kind != compactionRun || active.task.Finished() {
+		if bound, err := service.agentSession(ctx, binding, ""); err == nil {
+			runtime, err = bound.Status(ctx)
+			projected = err == nil
+		}
+	}
 	var taskSnapshot *apptask.Snapshot
-	var pendingAsk *session.AskInteraction
+	var pendingAsks []*session.AskInteraction
 	streamAttached := false
-	if active != nil && active.task != nil {
+	if active != nil && active.kind == turnRun && active.task != nil {
 		snapshot := active.task.Snapshot()
 		taskSnapshot = &snapshot
 		streamAttached = !snapshot.Finished
 	}
-	if projected && len(runtime.PendingInteractions) > 0 {
-		pendingAsk = chatagent.ProjectPendingInteraction(runtime.PendingInteractions[0], runtime)
+	if projected {
+		for _, request := range runtime.PendingInteractions {
+			pendingAsks = append(pendingAsks, chatagent.ProjectPendingInteraction(request, runtime))
+		}
 	}
 	pendingInterruptionID := ""
 	if project, projectErr := service.projectRuntime(ctx, binding.ProjectID); projectErr == nil {
@@ -44,7 +55,7 @@ func (service *Service) ActiveView(ctx context.Context, binding Binding) ActiveV
 	}
 	return ActiveView{
 		Task: taskSnapshot, Runtime: runtime, RuntimeProjectionOK: projected,
-		StreamAttached: streamAttached, PendingAsk: pendingAsk, PendingInterruptionID: pendingInterruptionID,
+		StreamAttached: streamAttached, PendingAsks: pendingAsks, PendingInterruptionID: pendingInterruptionID,
 	}
 }
 
@@ -54,7 +65,7 @@ func (service *Service) DisplayTask(binding Binding, taskID string) *apptask.Tas
 	if err != nil || strings.TrimSpace(taskID) == "" {
 		return nil
 	}
-	if active := service.activeRun(binding); active != nil && active.task != nil && active.task.ID() == taskID {
+	if active := service.activeRun(binding); active != nil && active.kind == turnRun && active.task != nil && active.task.ID() == taskID {
 		return active.task
 	}
 	record := service.starts.Latest(binding.ProjectID, binding.SessionID)
@@ -107,7 +118,7 @@ func (service *Service) AnalyzeContext(ctx context.Context, binding Binding, req
 	}
 	return chatagent.BuildInspectedContextAnalysis(
 		&runtime.Config, runtime.AgentKind, mode, inspected.Composition, inspected.Inspection,
-	), nil
+	)
 }
 
 func (service *Service) AnswerAsk(ctx context.Context, binding Binding, askID string, answers []agentconversation.HostAskAnswer) (agentconversation.HostAskResolution, error) {
@@ -133,36 +144,16 @@ func (service *Service) resolveAsk(
 	if err != nil {
 		return agentconversation.HostAskResolution{}, err
 	}
-	return project.executionRuntime.ResolveAsk(ctx, runtimeOptions(binding, ""), askID, status, answers, cancelReason)
-}
-
-// ClearSession drains exactly one binding and appends the durable clear marker.
-func (service *Service) ClearSession(ctx context.Context, binding Binding) error {
-	service.admission.Lock()
-	defer service.admission.Unlock()
-	binding, err := service.ResolveBinding(binding)
-	if err != nil {
-		return err
-	}
-	if active := service.activeRun(binding); active != nil && active.task != nil && !active.task.Finished() {
-		return appagentruntime.ErrOperationActive
-	}
-	project, err := service.projectRuntime(ctx, binding.ProjectID)
-	if err != nil {
-		return err
-	}
-	if err := project.executionRuntime.ClearSession(ctx, runtimeOptions(binding, "")); err != nil {
-		return err
-	}
 	sess, err := project.store.Get(binding.SessionID)
 	if err != nil {
-		return err
+		return agentconversation.HostAskResolution{}, err
 	}
-	if err := sess.Clear(); err != nil {
-		return err
+	if engines := service.host.AgentEngines(); engines != nil {
+		if result, owned, err := engines.Operations.ResolveAsk(ctx, binding.ProjectID, sess, askID, status, answers, cancelReason); owned || err != nil {
+			return result, err
+		}
 	}
-	service.starts.ReleaseScope(binding.ProjectID, binding.SessionID)
-	return nil
+	return project.executionRuntime.ResolveAsk(ctx, runtimeOptions(binding, ""), askID, status, answers, cancelReason)
 }
 
 func (service *Service) SessionBusy(binding Binding) bool {
@@ -219,7 +210,7 @@ func (service *Service) Activity() []Binding {
 
 func (service *Service) requireIdle(binding Binding) error {
 	if service.SessionBusy(binding) {
-		return fmt.Errorf("%w: AgentChat conversation is running", appagentruntime.ErrOperationActive)
+		return fmt.Errorf("%w: AgentChat conversation is running", agentruntime.ErrOperationActive)
 	}
 	return nil
 }

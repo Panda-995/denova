@@ -11,7 +11,8 @@ import (
 	"denova/internal/agents/session"
 	novaskills "denova/internal/agents/skills"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentevent "github.com/alfredxw/denova/agent/lifecycle/event"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestPublicEventProjectorKeepsDisplayIdentityAcrossCyclesAndReload(t *testing.T) {
@@ -44,11 +45,11 @@ func TestPublicEventProjectorKeepsDisplayIdentityAcrossCyclesAndReload(t *testin
 			live[id] = displayContent{Content: event.DataString("content"), Cycle: cycle}
 		})
 		projector.ProjectRunStarted("same-run", cycle, "same-command", "follow_up", time.Now())
-		for _, source := range []agent.EventSource{{Name: "root"}, {Name: "child", InvocationID: "child-session", Path: []string{"root", "child"}}} {
-			projector.Project(agent.Event{RunID: "same-run", Payload: agent.ThinkingDelta{Source: source, Delta: fmt.Sprintf("%s thinking %d", source.Name, cycle)}})
-			projector.Project(agent.Event{RunID: "same-run", Payload: agent.AssistantDelta{Source: source, Delta: fmt.Sprintf("%s answer %d", source.Name, cycle)}})
+		for _, source := range []agentevent.EventSource{{Name: "root"}, {Name: "child", InvocationID: "child-session", Path: []string{"root", "child"}}} {
+			projector.Project(agentevent.Event{RunID: "same-run", Payload: agentevent.ThinkingDelta{Source: source, Delta: fmt.Sprintf("%s thinking %d", source.Name, cycle)}})
+			projector.Project(agentevent.Event{RunID: "same-run", Payload: agentevent.AssistantDelta{Source: source, Delta: fmt.Sprintf("%s answer %d", source.Name, cycle)}})
 		}
-		projector.Finalize(agent.ResultCompleted, "")
+		projector.Finalize(agentschema.ResultCompleted, "")
 	}
 	reloadedStore, err := session.NewStore(dir)
 	if err != nil {
@@ -84,7 +85,7 @@ func TestPublicEventProjectorScopesExplicitSkillsToCycle(t *testing.T) {
 			}
 		})
 		prepared := AgentContextPreparation{ExplicitSkills: []novaskills.Invocation{{Name: "review", Instructions: "Review the draft."}}}
-		run := agent.RunView{ID: "same-run", Cycle: cycle}
+		run := agentschema.RunView{ID: "same-run", Cycle: cycle}
 		projector.ProjectPreparedContext(run, prepared)
 		projector.ProjectRunStarted(run.ID, run.Cycle, "same-command", "follow_up", time.Now())
 		projector.ProjectPreparedContext(run, prepared)

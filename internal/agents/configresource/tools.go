@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 const defaultToolResultMaxBytes = config.DefaultAgentToolResultLimitKB * 1024
@@ -35,7 +36,7 @@ type configApplyInput struct {
 // NewTools constructs the shared configuration tools over the typed resource
 // registry. Capability filtering remains with the caller that owns the full
 // model-visible tool catalog.
-func NewTools(cfg *config.Config, maxResultBytes int) ([]agent.ToolDefinition, error) {
+func NewTools(cfg *config.Config, maxResultBytes int) ([]agenttool.ToolDefinition, error) {
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
@@ -46,7 +47,7 @@ func NewTools(cfg *config.Config, maxResultBytes int) ([]agent.ToolDefinition, e
 	if maxResultBytes <= 0 {
 		maxResultBytes = defaultToolResultMaxBytes
 	}
-	readTool, err := agent.InferTool(
+	readTool, err := agenttool.InferTool(
 		"config_read",
 		"Inspect, list, or read Denova configuration resources through one typed registry. List and large exact reads return stable continuation cursors. Exact reads return existing items plus missing_ids/failures; only an entirely unsuccessful completed request fails. Call operation=describe before using an unfamiliar resource and keep returned revisions for later mutations.",
 		func(ctx context.Context, input configReadInput) (string, error) {
@@ -63,15 +64,15 @@ func NewTools(cfg *config.Config, maxResultBytes int) ([]agent.ToolDefinition, e
 	if err != nil {
 		return nil, err
 	}
-	applyTool, err := agent.InferTool(
+	applyTool, err := agenttool.InferTool(
 		"config_apply",
 		"Create, update, or delete exactly one Denova configuration resource. Updates, deletes, and agent_profile SubAgent creates require the latest revision from config_read; custom Agent creates use the same requirement. agent_profile deletes require value.kind. Resource-specific value shapes live in the configuration Skill references.",
-		func(ctx context.Context, input configApplyInput) (agent.ToolResult, error) {
+		func(ctx context.Context, input configApplyInput) (agentschema.ToolResult, error) {
 			value, err := registry.Apply(ctx, Mutation{
 				Operation: input.Operation, Resource: input.Resource, ID: input.ID, Scope: input.Scope, Revision: input.Revision, Value: input.Value,
 			})
 			if err != nil {
-				return agent.ToolResult{}, err
+				return agentschema.ToolResult{}, err
 			}
 			return configApplyResult(value)
 		},
@@ -87,13 +88,13 @@ func NewTools(cfg *config.Config, maxResultBytes int) ([]agent.ToolDefinition, e
 	if err != nil {
 		return nil, err
 	}
-	return []agent.ToolDefinition{readDefinition, applyDefinition}, nil
+	return []agenttool.ToolDefinition{readDefinition, applyDefinition}, nil
 }
 
-func defineTool(tool agent.Tool, descriptor agent.ToolDescriptor) (agent.ToolDefinition, error) {
-	definition := agent.ToolDefinition{Tool: tool, Descriptor: descriptor}
+func defineTool(tool agenttool.Tool, descriptor agenttool.ToolDescriptor) (agenttool.ToolDefinition, error) {
+	definition := agenttool.ToolDefinition{Tool: tool, Descriptor: descriptor}
 	if err := definition.Validate(context.Background()); err != nil {
-		return agent.ToolDefinition{}, err
+		return agenttool.ToolDefinition{}, err
 	}
 	return definition, nil
 }
@@ -101,7 +102,7 @@ func defineTool(tool agent.Tool, descriptor agent.ToolDescriptor) (agent.ToolDef
 func newConfigResourceRegistry(cfg *config.Config) (*Registry, error) {
 	novaDir := strings.TrimSpace(cfg.DataDir())
 	workspace := strings.TrimSpace(cfg.Workspace)
-	return New(
+	adapters := []Adapter{
 		newStyleReferenceResource(novaDir),
 		newNarrativeStyleResource(novaDir),
 		newGamePlanningResource(novaDir),
@@ -112,33 +113,37 @@ func newConfigResourceRegistry(cfg *config.Config) (*Registry, error) {
 		newAutomationResource(novaDir, cfg.ProjectID, workspace, cfg.ProjectStoreDir),
 		newSkillConfigResource(cfg),
 		newAgentProfileResource(cfg),
-	)
+	}
+	if workspace != "" {
+		adapters = append(adapters, newLoreIndexResource(workspace), newLoreIndexMembershipResource(workspace))
+	}
+	return New(adapters...)
 }
 
-func configReadDescriptor(maxResultBytes ...int) agent.ToolDescriptor {
+func configReadDescriptor(maxResultBytes ...int) agenttool.ToolDescriptor {
 	limit := defaultToolResultMaxBytes
 	if len(maxResultBytes) > 0 && maxResultBytes[0] > 0 {
 		limit = maxResultBytes[0]
 	}
-	return agent.ToolDescriptor{
-		Source: agent.ToolSourceRead, Capability: config.AgentToolConfigRead, Execution: agent.ToolExecutionParallelRead,
-		MutationScope: agent.ToolMutationNone, PostCheck: agent.ToolPostCheckNone, Recovery: agent.ToolRecoveryReadOnly,
-		ResultRecoveryKind: agent.ToolResultRecoveryRerun,
-		ResultProjection:   agent.ToolResultBoundedModelContext, ResultRetention: agent.ToolResultDeferred,
-		Steering: agent.SteeringFinishCurrent, MaxResultBytes: limit,
+	return agenttool.ToolDescriptor{
+		Source: agenttool.ToolSourceRead, Capability: config.AgentToolConfigRead, Execution: agenttool.ToolExecutionParallelRead,
+		MutationScope: agenttool.ToolMutationNone, PostCheck: agenttool.ToolPostCheckNone, Recovery: agenttool.ToolRecoveryReadOnly,
+		ResultRecoveryKind: agentschema.ToolResultRecoveryRerun,
+		ResultProjection:   agentschema.ToolResultBoundedModelContext, ResultRetention: agentschema.ToolResultDeferred,
+		Steering: agenttool.SteeringFinishCurrent, MaxResultBytes: limit,
 	}
 }
 
-func configApplyDescriptor(maxResultBytes ...int) agent.ToolDescriptor {
+func configApplyDescriptor(maxResultBytes ...int) agenttool.ToolDescriptor {
 	limit := defaultToolResultMaxBytes
 	if len(maxResultBytes) > 0 && maxResultBytes[0] > 0 {
 		limit = maxResultBytes[0]
 	}
-	return agent.ToolDescriptor{
-		Source: agent.ToolSourceWrite, Capability: config.AgentToolConfigApply, Execution: agent.ToolExecutionConfigExclusive,
-		MutationScope: agent.ToolMutationConfig, PostCheck: agent.ToolPostCheckConfigRevision, Recovery: agent.ToolRecoveryReconcilable,
-		ResultProjection: agent.ToolResultBoundedModelContext, ResultRetention: agent.ToolResultProtected,
-		Steering: agent.SteeringFinishCurrent, MaxResultBytes: limit,
+	return agenttool.ToolDescriptor{
+		Source: agenttool.ToolSourceWrite, Capability: config.AgentToolConfigApply, Execution: agenttool.ToolExecutionConfigExclusive,
+		MutationScope: agenttool.ToolMutationConfig, PostCheck: agenttool.ToolPostCheckConfigRevision, Recovery: agenttool.ToolRecoveryReconcilable,
+		ResultProjection: agentschema.ToolResultBoundedModelContext, ResultRetention: agentschema.ToolResultProtected,
+		Steering: agenttool.SteeringFinishCurrent, MaxResultBytes: limit,
 	}
 }
 
@@ -159,10 +164,10 @@ type configApplyReceiptDetails struct {
 	Revision  string `json:"revision,omitempty"`
 }
 
-func configApplyResult(value any) (agent.ToolResult, error) {
+func configApplyResult(value any) (agentschema.ToolResult, error) {
 	receipt, ok := value.(configMutationReceipt)
 	if !ok {
-		return agent.ToolResult{}, fmt.Errorf("config resource Adapter returned %T, want configMutationReceipt", value)
+		return agentschema.ToolResult{}, fmt.Errorf("config resource Adapter returned %T, want configMutationReceipt", value)
 	}
 	details, err := json.Marshal(configApplyReceiptDetails{
 		Schema: "config.mutation_receipt.v1", Status: "applied",
@@ -170,12 +175,12 @@ func configApplyResult(value any) (agent.ToolResult, error) {
 		ID: receipt.ID, Revision: receipt.Revision,
 	})
 	if err != nil {
-		return agent.ToolResult{}, fmt.Errorf("encode config mutation receipt: %w", err)
+		return agentschema.ToolResult{}, fmt.Errorf("encode config mutation receipt: %w", err)
 	}
 	// Mutation output stays receipt-only so a large, successfully persisted
 	// configuration cannot be followed by an invalid or truncated JSON echo.
 	// The configuration workflow always verifies the canonical value with get.
-	result := agent.TextToolResult(string(details))
+	result := agentschema.TextToolResult(string(details))
 	result.Details = details
 	result.Metadata.Target = receipt.ID
 	return result, nil

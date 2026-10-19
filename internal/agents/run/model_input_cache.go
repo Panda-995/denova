@@ -11,10 +11,11 @@ import (
 	"sync"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
-	"github.com/alfredxw/denova/agent/providers"
-
 	"denova/internal/agents/prompts"
+
+	agentcontext "github.com/alfredxw/denova/agent/context"
+	"github.com/alfredxw/denova/agent/model/providers"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 const modelInputCacheScopes = 128
@@ -41,10 +42,10 @@ type modelInputLogCache struct {
 }
 
 type modelInputLogMessageFingerprint struct {
-	Index       int            `json:"index"`
-	Role        agent.RoleType `json:"role,omitempty"`
-	Component   string         `json:"component"`
-	Fingerprint string         `json:"fingerprint"`
+	Index       int                  `json:"index"`
+	Role        agentschema.RoleType `json:"role,omitempty"`
+	Component   string               `json:"component"`
+	Fingerprint string               `json:"fingerprint"`
 }
 
 type modelInputLogSystemSectionFingerprint struct {
@@ -56,14 +57,14 @@ type modelInputLogSystemSectionFingerprint struct {
 }
 
 type modelInputLogFirstDivergence struct {
-	PreviousCallID        string         `json:"previous_call_id"`
-	Component             string         `json:"component"`
-	Index                 int            `json:"index,omitempty"`
-	Role                  agent.RoleType `json:"role,omitempty"`
-	SectionID             string         `json:"section_id,omitempty"`
-	MatchingMessagePrefix int            `json:"matching_message_prefix"`
-	PreviousFingerprint   string         `json:"previous_fingerprint,omitempty"`
-	CurrentFingerprint    string         `json:"current_fingerprint,omitempty"`
+	PreviousCallID        string               `json:"previous_call_id"`
+	Component             string               `json:"component"`
+	Index                 int                  `json:"index,omitempty"`
+	Role                  agentschema.RoleType `json:"role,omitempty"`
+	SectionID             string               `json:"section_id,omitempty"`
+	MatchingMessagePrefix int                  `json:"matching_message_prefix"`
+	PreviousFingerprint   string               `json:"previous_fingerprint,omitempty"`
+	CurrentFingerprint    string               `json:"current_fingerprint,omitempty"`
 }
 
 type modelInputCacheBaseline struct {
@@ -97,7 +98,7 @@ func modelInputSystemSectionsFromContext(ctx context.Context) []modelInputLogSys
 	return append([]modelInputLogSystemSectionFingerprint(nil), sections...)
 }
 
-func modelInputLogCacheAttribution(messages []*agent.Message, tools []modelInputLogTool) modelInputLogCache {
+func modelInputLogCacheAttribution(messages []*agentschema.Message, tools []modelInputLogTool) modelInputLogCache {
 	return modelInputLogCache{
 		MessageFingerprint:      modelInputLogFingerprint(messages),
 		SystemPromptFingerprint: modelInputLogFingerprint(modelInputLogSystemMessages(messages)),
@@ -110,7 +111,7 @@ func modelInputLogCacheAttribution(messages []*agent.Message, tools []modelInput
 	}
 }
 
-func modelInputLogCacheObservation(callID, scope string, cfg providers.ModelConfig, messages []*agent.Message, tools []modelInputLogTool, systemSections []modelInputLogSystemSectionFingerprint) modelInputLogCache {
+func modelInputLogCacheObservation(callID, scope string, cfg providers.ModelConfig, messages []*agentschema.Message, tools []modelInputLogTool, systemSections []modelInputLogSystemSectionFingerprint) modelInputLogCache {
 	observation := modelInputLogCacheAttribution(messages, tools)
 	observation.ModelConfigFingerprint = modelInputLogFingerprint(modelInputLogConfig(cfg))
 	observation.SystemSections = append([]modelInputLogSystemSectionFingerprint(nil), systemSections...)
@@ -144,16 +145,16 @@ func modelInputLogCacheObservation(callID, scope string, cfg providers.ModelConf
 	return observation
 }
 
-func modelInputLogMessageFingerprints(messages []*agent.Message) []modelInputLogMessageFingerprint {
+func modelInputLogMessageFingerprints(messages []*agentschema.Message) []modelInputLogMessageFingerprint {
 	result := make([]modelInputLogMessageFingerprint, 0, len(messages))
 	for index, message := range messages {
 		component := "message"
-		role := agent.RoleType("")
+		role := agentschema.RoleType("")
 		if message != nil {
 			role = message.Role
-			if role == agent.System {
+			if role == agentschema.System {
 				component = "system_message"
-			} else if agent.IsContextStateMessage(message) {
+			} else if agentcontext.IsContextStateMessage(message) {
 				component = "context_state"
 			}
 		}
@@ -293,7 +294,7 @@ func firstToolFingerprintDivergence(previous, current []modelInputLogToolFingerp
 	return common
 }
 
-func logModelInputCacheResult(callID, runID string, usage *agent.TokenUsage) {
+func logModelInputCacheResult(callID, runID string, usage *agentschema.TokenUsage) {
 	if !modelInputLogEnabled.Load() || strings.TrimSpace(callID) == "" || usage == nil || usage.PromptTokens <= 0 {
 		return
 	}
@@ -311,13 +312,13 @@ func logModelInputCacheResult(callID, runID string, usage *agent.TokenUsage) {
 	}
 }
 
-func modelInputLogSystemMessages(messages []*agent.Message) []*agent.Message {
+func modelInputLogSystemMessages(messages []*agentschema.Message) []*agentschema.Message {
 	if len(messages) == 0 {
 		return nil
 	}
-	var result []*agent.Message
+	var result []*agentschema.Message
 	for _, message := range messages {
-		if message == nil || message.Role != agent.System {
+		if message == nil || message.Role != agentschema.System {
 			continue
 		}
 		result = append(result, message)

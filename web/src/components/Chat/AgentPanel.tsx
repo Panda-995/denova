@@ -1,13 +1,17 @@
+import type { AgentPage } from './AgentPageContext'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Button } from '@/components/ui/button'
 import { Plus } from 'lucide-react'
 import { motion } from 'motion/react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
+import { useQueryClient } from '@tanstack/react-query'
+import { AgentTaskControls } from './AgentTaskControls'
 import { createStablePortalHost, StablePortalSlot } from '@/components/layout/stable-portal-slot'
 import type { ImagePreset, Teller } from '@/features/interactive/types'
 import { DEFAULT_NARRATIVE_STYLE_ID, resolveNarrativeStyle } from '@/features/interactive/narrative-style'
 import { novaEase } from '@/features/motion/motion-tokens'
-import { answerSessionAsk, cancelSessionAsk, removeChatContextCompaction } from '@/lib/api'
+import { APIError, answerSessionAsk, cancelSessionAsk, createVersion, removeChatContextCompaction, versionQueryKeys } from '@/lib/api'
 import type {
   ActiveChatTask,
   AgentAskAnswer,
@@ -56,11 +60,11 @@ import {
   type ReviewFeedbackComment,
   type ReviewFeedbackSelection,
 } from '@/features/changes/agent/ReviewFeedbackTray'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import type { ChatSendOptions } from '@/hooks/useAgentChat'
 import type { InputAreaSendOptions } from './InputArea'
 import { resolveAgentAskAndRefresh } from '@/lib/agent-ask'
-import type { ConversationConfigBinding } from '@/features/conversation-config/types'
+import { supportsRuntimeOperation, type ConversationConfigBinding } from '@/features/conversation-config/types'
 import { useConversationGoal } from '@/features/agent-goal/use-conversation-goal'
 import { useConversationConfig } from '@/features/conversation-config/use-conversation-config'
 import { CustomAgentSelect } from '@/features/agents/CustomAgentSelect'
@@ -73,7 +77,6 @@ export type AgentPanelChrome = 'panel' | 'workbench'
 const WRITING_AGENT_INIT_EVENT = 'nova:writing-agent-init'
 export const WRITING_COMPOSER_SETTING_DEFAULTS = {
   ide_story_teller_id: DEFAULT_NARRATIVE_STYLE_ID,
-  interactive_story_teller_id: DEFAULT_NARRATIVE_STYLE_ID,
   ide_image_preset_id: 'game-cg',
   writing_skill_default: DEFAULT_WRITING_SKILL,
 } as const
@@ -81,6 +84,7 @@ export const WRITING_COMPOSER_SETTING_DEFAULTS = {
 export type WritingComposerSettingsController = PersistedUserSettingsController<typeof WRITING_COMPOSER_SETTING_DEFAULTS>
 
 export interface AgentPanelProps {
+  page?: AgentPage
   /** Stable identity for every project-owned API and cache key. */
   projectId: string
   workspace: string
@@ -148,19 +152,24 @@ export interface AgentPanelProps {
   onRefreshHistory: (sessionId?: string) => void | Promise<void>
   /** Scoped AgentChat tabs override interaction endpoints so Writing state is never touched. */
   onAnswerAsk?: (sessionId: string, askId: string, answers: AgentAskAnswer[]) => Promise<AgentAskResolution>
-  onCancelAsk?: (sessionId: string, askId: string) => Promise<AgentAskResolution>
-  onRemoveContextCompaction?: () => Promise<boolean>
+  onCancelAsk?: (sessionId: string, askId: string, reason?: string) => Promise<AgentAskResolution>
+  onRemoveContextCompaction?: (() => Promise<boolean>) | null
   onSend: (message: string, options?: ChatSendOptions) => boolean | Promise<boolean>
   onAnalyzeContext: (
     message: string,
     options?: {
       writingSkill?: string
+      pageContext?: ChatSendOptions['pageContext']
       ideContext?: IDEContext
       imagePresetId?: string
       tellerId?: string
     },
   ) => Promise<ContextAnalysis>
   onStop: () => void
+  onSuspend?: () => void
+  onResumeTask?: () => void
+  recoveryFailed?: boolean
+  onRetryRecovery?: () => void
   onSteerQueuedCommand?: (item: AgentRuntimeQueuedCommand) => boolean | Promise<boolean>
   onDeleteQueuedCommand?: (item: AgentRuntimeQueuedCommand) => boolean | Promise<boolean>
   onEditQueuedCommand?: (item: AgentRuntimeQueuedCommand) => string | null | Promise<string | null>
@@ -193,6 +202,7 @@ export interface AgentPanelProps {
  * `chrome` selects which frame it renders with.
  */
 function AgentPanelComponent({
+  page,
   projectId,
   workspace,
   agentKind = 'writing',
@@ -245,6 +255,10 @@ function AgentPanelComponent({
   onSend,
   onAnalyzeContext,
   onStop,
+  onSuspend,
+  onResumeTask,
+  recoveryFailed = false,
+  onRetryRecovery,
   onSteerQueuedCommand,
   onDeleteQueuedCommand,
   onEditQueuedCommand,
@@ -270,6 +284,7 @@ function AgentPanelComponent({
   onSubAgentSessionOpen,
 }: AgentPanelProps) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const dockedChrome = chrome === 'panel'
   const generalAgent = agentKind === 'general'
   const [internalView, setInternalView] = useState<AgentPanelView>('chat')
@@ -291,7 +306,7 @@ function AgentPanelComponent({
   const [inputAreaHeight, setInputAreaHeight] = useState(0)
   const pendingWritingInitRef = useRef<string | null>(null)
   const recoveryPaused = Boolean(runtimeProjection?.recovery_paused)
-  const runtimeRecovering = Boolean(runtimeProjection?.runtime_recoverable && (!runtimeProjection.stream_attached || recoveryPaused))
+  const runtimeRecovering = !recoveryFailed && Boolean(runtimeProjection?.runtime_recoverable && runtimeProjection.phase !== 'suspended' && !runtimeProjection.stream_attached)
   const recoveryAbortAvailable = Boolean(runtimeProjection?.recovery_actions?.some((action) => action.kind === 'abort'))
   const activeControlsDisabled =
     isStreaming && (!runtimeProjection?.active_operation_id?.trim() || Boolean(runtimeProjection?.runtime_recoverable && !runtimeProjection.stream_attached))
@@ -336,7 +351,7 @@ function AgentPanelComponent({
 
   useEffect(() => {
     // Cached configuration and workbench conversations must not consume Writing's entry action.
-    if (generalAgent || chrome === 'workbench' || (configuredQuickPromptScope && configuredQuickPromptScope !== 'writing')) return
+    if (page || generalAgent || chrome === 'workbench' || (configuredQuickPromptScope && configuredQuickPromptScope !== 'writing')) return
     if (!active) return
     const handleWritingInitRequest = (event: Event) => {
       const detail = (event as CustomEvent<{ prompt?: string; autoSend?: boolean }>).detail
@@ -362,7 +377,7 @@ function AgentPanelComponent({
     }
     window.addEventListener(WRITING_AGENT_INIT_EVENT, handleWritingInitRequest)
     return () => window.removeEventListener(WRITING_AGENT_INIT_EVENT, handleWritingInitRequest)
-  }, [active, chrome, configuredQuickPromptScope, generalAgent, ideContext, ideTellerId, imagePresetId, isStreaming, onSend, persistedSettings.loading, t, writingSkill])
+  }, [active, chrome, configuredQuickPromptScope, generalAgent, ideContext, ideTellerId, imagePresetId, isStreaming, onSend, page, persistedSettings.loading, t, writingSkill])
 
   useEffect(() => {
     if (generalAgent) return
@@ -394,9 +409,10 @@ function AgentPanelComponent({
         await onAnalyzeContext(
           message,
           generalAgent
-            ? undefined
+            ? { pageContext: page?.context }
             : {
-                writingSkill,
+                writingSkill: page ? undefined : writingSkill,
+                pageContext: page?.context,
                 ideContext,
                 imagePresetId,
                 tellerId: ideTellerId,
@@ -441,7 +457,7 @@ function AgentPanelComponent({
   }, [onPlanModeChange])
 
   const removeContextCompaction = async () => {
-    await onRemoveContextCompaction()
+    await onRemoveContextCompaction?.()
     await handleAnalyzeContext(CONTEXT_ANALYSIS_SIMULATED_MESSAGE)
   }
 
@@ -470,6 +486,32 @@ function AgentPanelComponent({
   )
 
   const sendWithWritingSkill = async (message: string, inputOptions?: InputAreaSendOptions) => {
+    // Snapshot only persisted Project files, using the same API as version management.
+    const snapshot = message.trim().match(/^\/snapshot(?:\s+([\s\S]*))?$/)
+    if (snapshot) {
+      const toastID = toast.loading(t('versions.saving'))
+      try {
+        const result = await createVersion(projectId, snapshot[1]?.trim())
+        toast.success(t('versions.saved', { message: result.version?.message || result.message }), { id: toastID })
+        console.info('[AgentPanel] Created workspace version', { projectId, versionId: result.version?.id })
+        await queryClient.invalidateQueries({ queryKey: versionQueryKeys.all })
+        return true
+      } catch (error) {
+        if (error instanceof APIError && error.code === 'api.versions.noChanges') {
+          toast.info(t('versions.noChanges'), { id: toastID })
+          return true
+        }
+        console.error('[AgentPanel] Failed to create workspace version', { projectId, error })
+        toast.error(error instanceof Error ? error.message : t('versions.createFailed'), { id: toastID })
+        return false
+      }
+    }
+    // Session navigation belongs to the host, before feedback or model context is prepared.
+    if (message.trim() === '/new') {
+      if (sessionControlsDisabled) return false
+      await onCreateSession()
+      return true
+    }
     if (persistedSettings.loading) return false
     const feedbackSelection = reviewFeedback?.filter((selection) => selection.comments.length) ?? []
     const feedback = feedbackSelection.length
@@ -507,7 +549,8 @@ function AgentPanelComponent({
     }
     const accepted = await onSend(effectiveMessage, {
       attachments: inputOptions?.attachments,
-      ...(generalAgent ? {} : { writingSkill, ideContext, imagePresetId, tellerId: ideTellerId }),
+      ...(generalAgent || page ? {} : { writingSkill, ideContext, imagePresetId, tellerId: ideTellerId }),
+      pageContext: page?.context,
       reviewFeedback: feedback,
       reviewFeedbackDisplay: feedbackSelection.length
         ? {
@@ -524,6 +567,7 @@ function AgentPanelComponent({
   }
 
   const submitGoal = async (objective: string, inputOptions?: InputAreaSendOptions) => {
+    if (objective.trim() === '/new' || /^\/snapshot(?:\s|$)/.test(objective.trim())) return sendWithWritingSkill(objective, inputOptions)
     if (planMode) onPlanModeChange(false)
     const next = await conversationGoal.set(objective)
     if (!next) {
@@ -560,7 +604,7 @@ function AgentPanelComponent({
     }))
   }, [onEditQueuedCommand])
 
-  const quickPromptScope = configuredQuickPromptScope ?? (generalAgent ? undefined : 'writing')
+  const quickPromptScope = configuredQuickPromptScope ?? (generalAgent || page ? undefined : 'writing')
   const fillQuickPrompt = useCallback((prompt: string) => {
     setInputPrefill((current) => ({
       prompt,
@@ -586,7 +630,7 @@ function AgentPanelComponent({
         action,
         {
           answer: (answers) => onAnswerAsk(activeSessionId, askID, answers),
-          cancel: () => onCancelAsk(activeSessionId, askID),
+          cancel: (reason) => onCancelAsk(activeSessionId, askID, reason),
         },
         () => onRefreshHistory(activeSessionId),
       )
@@ -600,7 +644,7 @@ function AgentPanelComponent({
     isStreaming,
     visible: active,
     isExecutionActive,
-    activityContent: runtimeRecovering ? t('chat.activity.recovering') : recoveryPaused ? t('chat.activity.recoveryPaused') : activityContent,
+    activityContent: recoveryFailed ? '' : runtimeRecovering ? t('chat.activity.recovering') : recoveryPaused ? t('chat.activity.recoveryPaused') : activityContent,
     scrollResetKey: `${workspace || 'none'}:${activeSessionId || 'current'}`,
     bottomPaddingClassName: 'pb-36',
     bottomPaddingPx: messageListBottomPadding,
@@ -620,27 +664,36 @@ function AgentPanelComponent({
     onExitPlanMode,
     onResolveAsk: resolveAsk,
     activeRunId: runtimeProjection?.active_operation_id,
-    afterContent: lastRuntimeFailure ? (
+    afterContent: <>
+      {recoveryFailed && <div role="alert" className="rounded-lg border border-[var(--nova-danger-border)] bg-[var(--nova-danger-bg)] px-3 py-2 text-xs text-[var(--nova-danger)]">
+        <p>{t('chat.activity.recoveryFailed')}</p>
+        <Button variant="outline" size="sm" className="mt-2" onClick={onRetryRecovery}>{t('chat.activity.retryRecovery')}</Button>
+      </div>}
+      <AgentTaskControls suspended={runtimeProjection?.phase === 'suspended'} pending={commandSubmitting || abortPending} onResume={onResumeTask} onAbort={onStop} />
+      {lastRuntimeFailure ? (
       <div
         role="alert"
         className="whitespace-pre-wrap break-words rounded-lg border border-[var(--nova-danger-border)] bg-[var(--nova-danger-bg)] px-3 py-2 text-xs leading-relaxed text-[var(--nova-danger)]"
       >
         {t('chat.activity.requestFailed', { error: lastRuntimeFailure })}
       </div>
-    ) : undefined,
-    afterContentKey: lastRuntimeFailure
-      ? `runtime-failure:${runtimeProjection?.last_operation?.operation_id || lastRuntimeFailure}`
-      : undefined,
+    ) : null}</>,
+    afterContentKey: `${recoveryFailed}:${runtimeProjection?.phase || 'idle'}:${commandSubmitting}:${lastRuntimeFailure || ''}`,
   }
   const inputAreaProps = {
+    page,
+    autoFocus: active && sessionDraft && chrome === 'workbench',
     onSend: sendWithWritingSkill,
     attachmentsEnabled: true,
-    onStop,
+    // Preserve resumable output only when the selected engine supports pause.
+    onStop: runtimeRecovering || recoveryPaused || !supportsRuntimeOperation(agentSelectionConfig.snapshot, 'pause')
+      ? onStop : onSuspend || onStop,
     disabled: sessionTransitionPending,
-    sendBlocked: persistedSettings.loading || sessionTransitionPending,
+    sendBlocked: persistedSettings.loading || sessionTransitionPending || recoveryFailed,
     generationActive: isStreaming,
     resumeAvailable: !isStreaming && Boolean(runtimeProjection?.pending_interruption_id?.trim()),
     queuedCommands: runtimeProjection?.queue || [],
+    activeOperationID: runtimeProjection?.active || runtimeProjection?.phase === 'suspended' ? runtimeProjection.active_operation_id : '',
     queueActionPendingCommandID,
     onQueuedCommandSteer: onSteerQueuedCommand,
     onQueuedCommandDelete: onDeleteQueuedCommand,
@@ -662,11 +715,11 @@ function AgentPanelComponent({
     referencedFiles: references,
     onReferenceRemove,
     fileSuggestions,
-    loreReferences: generalAgent ? [] : loreReferences,
+    loreReferences: generalAgent && !page ? [] : loreReferences,
     loreReferenceLabels,
     onLoreReferenceAdd,
     onLoreReferenceRemove,
-    loreSuggestions: generalAgent ? [] : loreSuggestions,
+    loreSuggestions: generalAgent && !page ? [] : loreSuggestions,
     styleScenes: generalAgent ? [] : styleScenes,
     onStyleSceneAdd,
     onStyleSceneRemove,
@@ -686,7 +739,7 @@ function AgentPanelComponent({
     composerSettingsControl: (
       <>
         {quickPrompts.menuItem}
-        {!generalAgent ? (
+        {!generalAgent && !page ? (
           <>
             <ImageGenerationSettingsMenu projectId={projectId} disabled={!workspace || persistedSettings.loading || isStreaming}>
               <WritingImagePresetMenu
@@ -785,7 +838,7 @@ function AgentPanelComponent({
             value={agentSelectionConfig.snapshot?.custom_agent_id ?? ''}
             disabled={sessionControlsDisabled || agentSelectionConfig.loading}
             size="sm"
-            className="min-w-0 max-w-48 border-transparent bg-[var(--nova-surface-2)] py-0 text-[11px] *:data-[slot=select-value]:block *:data-[slot=select-value]:truncate"
+            className="min-w-0 max-w-48 border-transparent bg-[var(--nova-surface-2)] py-0 *:data-[slot=select-value]:block *:data-[slot=select-value]:truncate"
             onValueChange={(customAgentId) => {
               if (customAgentId === undefined) return
               if (customAgentId === (agentSelectionConfig.snapshot?.custom_agent_id ?? '')) return
@@ -827,7 +880,7 @@ function AgentPanelComponent({
             error={contextAnalysisError}
             analysis={contextAnalysis}
             onOpenChange={setContextAnalysisOpen}
-            onRemoveCompaction={removeContextCompaction}
+            onRemoveCompaction={onRemoveContextCompaction ? removeContextCompaction : undefined}
           />
         </>
       ) : (

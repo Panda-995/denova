@@ -103,8 +103,8 @@ resolve_port() {
     echo "${port}"
 }
 
-BACKEND_PORT="$(resolve_port "${DENOVA_BACKEND_PORT:-}" "${NOVA_BACKEND_PORT:-}" "backend_port" "8080")"
-FRONTEND_PORT="$(resolve_port "${DENOVA_FRONTEND_PORT:-}" "${NOVA_FRONTEND_PORT:-}" "frontend_port" "5173")"
+BACKEND_PORT="$(resolve_port "${DENOVA_BACKEND_PORT:-}" "${NOVA_BACKEND_PORT:-}" "backend_port" "7789")"
+FRONTEND_PORT="$(resolve_port "${DENOVA_FRONTEND_PORT:-}" "${NOVA_FRONTEND_PORT:-}" "frontend_port" "7788")"
 FRONTEND_URL="http://localhost:${FRONTEND_PORT}"
 BACKEND_URL="http://localhost:${BACKEND_PORT}"
 
@@ -122,7 +122,7 @@ usage() {
     echo ""
     echo "Frontend options:"
     echo "  --backend-port <port>  Set Vite's backend proxy port when starting the frontend separately"
-    echo "  --lan                  Allow LAN access to the frontend (equivalent to --host 0.0.0.0)"
+    echo "  --lan                  Allow LAN access to the frontend (IPv4 and IPv6 when available)"
     echo "  --host <host>          Set the Vite development server bind address"
 }
 
@@ -226,6 +226,11 @@ case "$MODE" in
     echo "  Press Ctrl+C to stop"
     export DENOVA_BACKEND_PORT="${BACKEND_PORT}"
     export DENOVA_FRONTEND_PORT="${FRONTEND_PORT}"
+    # An unspecified host lets Node use dual-stack networking when available,
+    # avoiding localhost IPv6 fallback delays with an IPv4-only LAN listener.
+    if [ "${FRONTEND_BIND_HOST}" = "0.0.0.0" ]; then
+        cd web && exec pnpm dev --host --port "${FRONTEND_PORT}"
+    fi
     if [ -n "${FRONTEND_BIND_HOST}" ]; then
         cd web && exec pnpm dev --host "${FRONTEND_BIND_HOST}" --port "${FRONTEND_PORT}"
     fi

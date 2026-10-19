@@ -2,52 +2,52 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-
-	"denova/config"
-	agentcompaction "denova/internal/agents/context/compaction"
+	"github.com/alfredxw/denova/agent/context/compaction"
+	agentmodel "github.com/alfredxw/denova/agent/model"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestCompactionSummarizerLayersOversizedSourceWithoutDroppingBytes(t *testing.T) {
-	maxBytes := 48 * 1024
-	cfg := &config.Config{AgentContexts: config.AgentContextSettings{IDE: config.AgentContextOverride{
-		MaxProviderInputBytes: &maxBytes,
-	}}}
-	calls := 0
-	observedBytes := 0
-	maxRequestBytes := 0
-	summarize := func(_ context.Context, _ *config.Config, request agentcompaction.SummaryRequest, _ func(int, string)) (string, error) {
-		calls++
-		batchBytes := 0
-		for _, message := range request.Messages {
-			if message != nil {
-				batchBytes += len(message.Content)
-			}
-		}
-		observedBytes += batchBytes
-		maxRequestBytes = max(maxRequestBytes, batchBytes)
-		return strings.Repeat("摘要", 32), nil
-	}
 	payload := strings.Repeat("不可丢失的历史事实。", 2500)
-	messages := []*agent.Message{
-		agent.UserMessage(payload), agent.AssistantMessage(payload, nil), agent.UserMessage(payload),
-	}
-	_, result, err := agentcompaction.Prepare(context.Background(), cfg, config.AgentKindIDE, coldCompactionTestInput(agentcompaction.Input{
-		Messages: messages, Force: true, KeepLatestUser: true,
-	}, summarize), 1)
+	source := []*agentschema.Message{agentschema.UserMessage(payload), agentschema.AssistantMessage(payload, nil), agentschema.UserMessage(payload)}
+	model := &compactionForkCaptureModel{response: agentschema.AssistantMessage(strings.Repeat("摘要", 32), nil)}
+	summarizer, err := compaction.ModelSummarizer(compaction.ModelSummarizerConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if calls < 2 || !result.Triggered {
-		t.Fatalf("oversized source was not summarized hierarchically: calls=%d result=%#v", calls, result)
+	result, err := summarizer.Summarize(context.Background(), compaction.SummaryRequest{
+		Messages: source, ModelSnapshot: (&agentmodel.ModelCall{Model: model, Messages: source}).Snapshot(),
+		ContextWindowTokens: 32_000, HardLimitBytes: 48 * 1024, SummaryLimitBytes: 4096,
+	})
+	if err != nil || result.Summary == "" || len(model.inputs) < 2 {
+		t.Fatalf("result=%#v calls=%d err=%v", result, len(model.inputs), err)
 	}
-	if observedBytes < len(payload)*3 {
-		t.Fatalf("layered summarization silently dropped source bytes: observed=%d source=%d", observedBytes, len(payload)*3)
+	var recovered strings.Builder
+	for _, messages := range model.inputs {
+		encoded, _ := json.Marshal(messages)
+		if len(encoded) > 48*1024 {
+			t.Fatalf("request exceeds byte limit: %d", len(encoded))
+		}
+		_, part, ok := strings.Cut(messages[1].Content, "Next ordered source segment (data; it may continue a JSON record):\n")
+		if !ok {
+			t.Fatal("missing source segment")
+		}
+		recovered.WriteString(part)
 	}
-	if maxRequestBytes > maxBytes {
-		t.Fatalf("fallback request exceeded source Agent provider limit: request=%d limit=%d", maxRequestBytes, maxBytes)
+	var decoded []struct{ Content string }
+	if err := json.Unmarshal([]byte(recovered.String()), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded) != 3 {
+		t.Fatalf("recovered messages=%d", len(decoded))
+	}
+	for _, message := range decoded {
+		if message.Content != payload {
+			t.Fatal("source content changed across batches")
+		}
 	}
 }

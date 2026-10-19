@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -29,14 +30,15 @@ func (b *Backend) ResolveExplicitInvocations(ctx context.Context, message string
 			continue
 		}
 		nameStart := index + 1
-		if nameStart >= len(message) || !isSkillNameByte(message[nameStart]) {
-			continue
-		}
 		nameEnd := nameStart
-		for nameEnd < len(message) && isSkillNameByte(message[nameEnd]) {
-			nameEnd++
+		for nameEnd < len(message) {
+			char, size := utf8.DecodeRuneInString(message[nameEnd:])
+			if !unicode.IsLetter(char) && !unicode.IsNumber(char) && !unicode.IsMark(char) && char != '\u200c' && char != '\u200d' && char != '_' && char != '-' {
+				break
+			}
+			nameEnd += size
 		}
-		if !explicitInvocationEndBoundary(message, nameEnd) {
+		if nameEnd == nameStart || !explicitInvocationEndBoundary(message, nameEnd) {
 			continue
 		}
 		name := message[nameStart:nameEnd]
@@ -77,6 +79,7 @@ func explicitInvocationStartBoundary(message string, slash int) bool {
 	if slash == 0 {
 		return true
 	}
+	// Preserve inline commands after CJK prose, while excluding ASCII paths.
 	previous := message[slash-1]
 	return !isSkillNameByte(previous) && previous != '/' && previous != '\\'
 }

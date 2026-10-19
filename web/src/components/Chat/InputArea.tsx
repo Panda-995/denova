@@ -1,3 +1,4 @@
+import { AgentPageAccessories, type AgentPage } from './AgentPageContext'
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, type ReactNode } from 'react'
 import { BarChart3, ClipboardList, List, Paperclip, ScrollText, Target } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -8,6 +9,7 @@ import type { VisibleAgentKey } from '@/features/agents/agent-registry'
 import { Button } from '@/components/ui/button'
 import { AgentComposerShell } from './AgentComposerShell'
 import { ModelProfileSwitcher } from './ModelProfileSwitcher'
+import { ConversationConfigError } from '@/features/conversation-config/ConversationConfigError'
 import { ComposerTokenInput, type ComposerTokenInputHandle, type ComposerTokenSpec, type ComposerTrigger } from './composer-token-input'
 import { workspaceFileName } from '@/lib/workspace-path'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -22,7 +24,7 @@ import { InputCommandMenu, type InputCommandOption } from './InputCommandMenu'
 import { useInputCommands, type SkillCommand, type CommandScope, type BuiltinCommand } from './use-input-commands'
 import type { AgentQuickPromptSettings } from '@/features/settings/types'
 import { useConversationConfig } from '@/features/conversation-config/use-conversation-config'
-import type { ConversationConfigBinding } from '@/features/conversation-config/types'
+import { supportsRuntimeOperation, type ConversationConfigBinding } from '@/features/conversation-config/types'
 import { cn } from '@/lib/utils'
 import type { ConversationGoal } from '@/features/agent-goal/types'
 import { ComposerModeChip } from './ComposerModeChip'
@@ -48,6 +50,9 @@ export function applyInputPrefill(current: string, prefill: InputAreaPrefill): s
 }
 
 interface InputAreaProps {
+  page?: AgentPage
+  /** Focus a newly opened draft on desktop without raising the mobile keyboard. */
+  autoFocus?: boolean
   onSend: (message: string, options?: InputAreaSendOptions) => boolean | void | Promise<boolean | void>
   onStop?: () => void
   disabled: boolean
@@ -56,6 +61,7 @@ interface InputAreaProps {
   /** An idle empty composer can continue the exact durable interruption. */
   resumeAvailable?: boolean
   queuedCommands?: AgentRuntimeQueuedCommand[]
+  activeOperationID?: string
   queueActionPendingCommandID?: string
   onQueuedCommandSteer?: (item: AgentRuntimeQueuedCommand) => boolean | void | Promise<boolean | void>
   onQueuedCommandDelete?: (item: AgentRuntimeQueuedCommand) => boolean | void | Promise<boolean | void>
@@ -115,12 +121,15 @@ interface InputAreaProps {
 
 /** 输入区域组件，支持 Enter 发送和命令菜单 */
 export function InputArea({
+  page,
+  autoFocus = false,
   onSend,
   onStop,
   disabled,
   generationActive,
   resumeAvailable = false,
   queuedCommands = [],
+  activeOperationID = '',
   queueActionPendingCommandID = '',
   onQueuedCommandSteer,
   onQueuedCommandDelete,
@@ -129,12 +138,12 @@ export function InputArea({
   commandSubmitting = false,
   activeControlsDisabled = false,
   activeStopDisabled,
-  sendBlocked = false,
-  planMode = false,
-  onTogglePlanMode,
-  goal,
+  sendBlocked: configuredSendBlocked = false,
+  planMode: configuredPlanMode = false,
+  onTogglePlanMode: configuredOnTogglePlanMode,
+  goal: configuredGoal,
   goalPending = false,
-  onGoalSubmit,
+  onGoalSubmit: configuredOnGoalSubmit,
   onGoalPause,
   onGoalClear,
   draftKey,
@@ -164,7 +173,7 @@ export function InputArea({
   builtinCommands,
   placeholder,
   disabledPlaceholder,
-  onContextAnalyze,
+  onContextAnalyze: configuredOnContextAnalyze,
   tokenUsageMessages = [],
   agentKey,
   workspace,
@@ -179,12 +188,23 @@ export function InputArea({
   const { t } = useTranslation()
   const defaultApproval = useAgentApprovalMode()
   const conversationConfig = useConversationConfig(conversationBinding)
+  const externalEngine = Boolean(conversationConfig.snapshot?.runtime && conversationConfig.snapshot.runtime.kind !== 'native')
+  const planMode = externalEngine ? false : configuredPlanMode
+  const onTogglePlanMode = externalEngine ? undefined : configuredOnTogglePlanMode
+  useEffect(() => {
+    if (externalEngine && configuredPlanMode) configuredOnTogglePlanMode?.()
+  }, [externalEngine, configuredPlanMode, configuredOnTogglePlanMode])
+  const onGoalSubmit = supportsRuntimeOperation(conversationConfig.snapshot, 'goal') ? configuredOnGoalSubmit : undefined
+  const onContextAnalyze = externalEngine ? undefined : configuredOnContextAnalyze
+  const goal = supportsRuntimeOperation(conversationConfig.snapshot, 'goal') ? configuredGoal : undefined
+  const sendBlocked = configuredSendBlocked || (!supportsRuntimeOperation(conversationConfig.snapshot, 'queue') && generationActive)
   const approvalReady = conversationBinding
     ? conversationConfig.initialized && !conversationConfig.saving
     : defaultApproval.initialized && !defaultApproval.saving
   const isMobile = useIsMobile()
   const [value, setValue] = useState(() => draftKey ? inputDrafts.get(draftKey) || '' : '')
   const [tokenUsageOpen, setTokenUsageOpen] = useState(false)
+  const [actionsOpen, setActionsOpen] = useState(false)
   const [referenceQuery, setReferenceQuery] = useState<string | null>(null)
   const [styleSceneQuery, setStyleSceneQuery] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -233,7 +253,7 @@ export function InputArea({
     ...styleScenes.map((scene) => ({ kind: 'style' as const, value: scene, label: scene })),
   ], [knownLoreTokens, loreReferenceLabels, loreReferences, referencedFiles, styleScenes])
   const tokenUsageCount = useMemo(
-    () => Math.min(MAX_TOKEN_USAGE_MENU_COUNT, tokenUsageMessages.filter((message) => (!message.role || message.role === 'token_usage') && Number(message.model_calls || 0) > 0).length),
+    () => Math.min(MAX_TOKEN_USAGE_MENU_COUNT, tokenUsageMessages.filter((message) => (!message.role || message.role === 'token_usage') && (Number(message.model_calls || 0) > 0 || Number(message.total_tokens || 0) > 0)).length),
     [tokenUsageMessages],
   )
   useEffect(() => {
@@ -262,6 +282,12 @@ export function InputArea({
     submittingRef.current = false
     setSubmitting(false)
   }, [generationActive])
+
+  useEffect(() => {
+    if (!autoFocus || isMobile || disabled) return
+    const frame = window.requestAnimationFrame(() => inputRef.current?.focus())
+    return () => window.cancelAnimationFrame(frame)
+  }, [autoFocus, disabled, isMobile])
 
   useEffect(() => {
     if (!inputPrefill) return
@@ -425,7 +451,7 @@ export function InputArea({
   /** 发送消息 */
   const handleSend = () => {
     const trimmed = value.trim()
-    if ((!trimmed && !hasReviewFeedback && attachments.files.length === 0 && !canResume) || disabled || !approvalReady || submittingRef.current) return
+    if ((!trimmed && !hasReviewFeedback && attachments.files.length === 0 && !canResume) || disabled || sendBlocked || !approvalReady || submittingRef.current) return
     const submittedValue = value
     const submittedAttachments = attachments.files
     submittingRef.current = true
@@ -578,10 +604,16 @@ export function InputArea({
           heading={t('chat.styleReference.heading')}
         />
 
+        {page && <AgentPageAccessories page={page} onPrefill={(prompt) => {
+          setValue(prompt)
+          inputRef.current?.focus()
+        }} />}
         <AgentQueuedCommandList
           items={queuedCommands}
           pendingCommandID={queueActionPendingCommandID}
-          disabled={activeControlsDisabled || abortPending || commandSubmitting}
+          disabled={disabled || abortPending || commandSubmitting}
+          activeOperationID={activeOperationID}
+          steerDisabled={activeControlsDisabled}
           onSteer={onQueuedCommandSteer}
           onDelete={onQueuedCommandDelete}
           onEdit={onQueuedCommandEdit}
@@ -598,6 +630,7 @@ export function InputArea({
           />
         ) : null}
 
+        <ConversationConfigError controller={conversationConfig} agentKey={agentKey} />
         <AgentComposerShell
           references={hasReferences ? (
             <>
@@ -662,7 +695,7 @@ export function InputArea({
           }
           toolbarStart={
             <>
-              <DropdownMenu>
+              <DropdownMenu open={actionsOpen} onOpenChange={setActionsOpen}>
                 <DropdownMenuTrigger asChild>
                   <Button
                     type="button"
@@ -723,12 +756,12 @@ export function InputArea({
                       detailTone="faint"
                       onSelect={() => setTokenUsageOpen(true)}
                     />
-                    <ComposerMenuItem
+                    {!externalEngine && <ComposerMenuItem
                       icon={ScrollText}
                       label={t('chat.contextAnalysis.action')}
-                      disabled={disabled || generationActive}
+                      disabled={disabled || generationActive || !onContextAnalyze}
                       onSelect={handleContextAnalyze}
-                    />
+                    />}
                   </DropdownMenuGroup>
                 </DropdownMenuContent>
               </DropdownMenu>

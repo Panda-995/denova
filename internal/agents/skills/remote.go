@@ -4,41 +4,22 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/netip"
 	urlpkg "net/url"
 	"strings"
+
+	"denova/internal/hostruntime"
+	"denova/internal/publicnet"
 )
 
 var skillInstallHTTPClient = newSkillInstallHTTPClient()
 
-var nonPublicSkillArchiveNetworks = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"),
-	netip.MustParsePrefix("100.64.0.0/10"),
-	netip.MustParsePrefix("192.0.0.0/24"),
-	netip.MustParsePrefix("192.0.2.0/24"),
-	netip.MustParsePrefix("192.88.99.0/24"),
-	netip.MustParsePrefix("198.18.0.0/15"),
-	netip.MustParsePrefix("198.51.100.0/24"),
-	netip.MustParsePrefix("203.0.113.0/24"),
-	netip.MustParsePrefix("240.0.0.0/4"),
-	netip.MustParsePrefix("2001:db8::/32"),
-}
-
 func newSkillInstallHTTPClient() *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	// Skill archives are fetched directly so an environment proxy cannot turn
-	// a public-looking URL into access to a private network.
-	transport.Proxy = nil
-	transport.DialContext = restrictedSkillArchiveDialContext
-	return &http.Client{
-		Transport:     transport,
-		CheckRedirect: skillInstallRedirectPolicy,
-	}
+	client := publicnet.NewHTTPClientWithProxy(hostruntime.NewHTTPProxy())
+	client.CheckRedirect = skillInstallRedirectPolicy
+	return client
 }
 
 func skillInstallRedirectPolicy(req *http.Request, via []*http.Request) error {
@@ -54,62 +35,6 @@ func validateSkillArchiveURL(parsed *urlpkg.URL) error {
 	}
 	if parsed.User != nil {
 		return fmt.Errorf("remote Skill archive URL must not contain user credentials")
-	}
-	return nil
-}
-
-func restrictedSkillArchiveDialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(address)
-	if err != nil {
-		return nil, fmt.Errorf("invalid remote Skill archive address %q: %w", address, err)
-	}
-	addresses, err := resolveSkillArchiveHost(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	var dialErr error
-	dialer := net.Dialer{}
-	for _, addr := range addresses {
-		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(addr.String(), port))
-		if err == nil {
-			return conn, nil
-		}
-		dialErr = errors.Join(dialErr, err)
-	}
-	return nil, fmt.Errorf("download remote Skill archive failed to connect to %s: %w", host, dialErr)
-}
-
-func resolveSkillArchiveHost(ctx context.Context, host string) ([]netip.Addr, error) {
-	if addr, err := netip.ParseAddr(host); err == nil {
-		if err := validatePublicSkillArchiveAddr(addr); err != nil {
-			return nil, err
-		}
-		return []netip.Addr{addr}, nil
-	}
-	addresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-	if err != nil {
-		return nil, fmt.Errorf("resolve remote Skill archive host %q: %w", host, err)
-	}
-	if len(addresses) == 0 {
-		return nil, fmt.Errorf("remote Skill archive host %q resolved to no addresses", host)
-	}
-	for _, addr := range addresses {
-		if err := validatePublicSkillArchiveAddr(addr); err != nil {
-			return nil, fmt.Errorf("remote Skill archive host %q: %w", host, err)
-		}
-	}
-	return addresses, nil
-}
-
-func validatePublicSkillArchiveAddr(addr netip.Addr) error {
-	addr = addr.Unmap()
-	if !addr.IsValid() || !addr.IsGlobalUnicast() || addr.IsPrivate() || addr.IsLoopback() || addr.IsUnspecified() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() || addr.IsMulticast() {
-		return fmt.Errorf("non-public remote Skill archive destination is not allowed: %s", addr)
-	}
-	for _, prefix := range nonPublicSkillArchiveNetworks {
-		if prefix.Contains(addr) {
-			return fmt.Errorf("non-public remote Skill archive destination is not allowed: %s", addr)
-		}
 	}
 	return nil
 }
@@ -136,7 +61,7 @@ func InstallRemoteArchive(ctx context.Context, dirs []Directory, scope Scope, so
 	if err != nil {
 		return InstallResult{}, err
 	}
-	return installZip(ctx, dirs, scope, data, subdir, candidateIDs)
+	return installZipFromSource(ctx, dirs, scope, data, subdir, candidateIDs, source)
 }
 
 func remoteArchiveData(ctx context.Context, source RemoteArchiveSource) ([]byte, string, error) {

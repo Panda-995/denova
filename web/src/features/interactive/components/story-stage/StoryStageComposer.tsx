@@ -1,11 +1,9 @@
-import { useRef, type CSSProperties, type Dispatch, type RefObject, type SetStateAction } from 'react'
+import { useId, useRef, useState, type CSSProperties, type Dispatch, type ReactNode, type RefObject, type SetStateAction } from 'react'
 import type { TFunction } from 'i18next'
-import { Archive, BarChart3, ChevronDown, ChevronUp, Compass, List, Paperclip, Pencil, RefreshCw, ScrollText, Sparkles, Target, X } from 'lucide-react'
+import { Archive, BarChart3, ChevronDown, Compass, List, Paperclip, Pencil, RefreshCw, ScrollText, Sparkles, X } from 'lucide-react'
 import { AgentComposerControls } from '@/components/Chat/AgentComposerControls'
 import { AgentComposerShell } from '@/components/Chat/AgentComposerShell'
-import { AgentGoalCard } from '@/components/Chat/AgentGoalCard'
 import { AgentQueuedCommandList } from '@/components/Chat/AgentQueuedCommandList'
-import { ComposerModeChip } from '@/components/Chat/ComposerModeChip'
 import { ContextAnalysisDialog } from '@/components/Chat/ContextAnalysisDialog'
 import { FileReferencePicker, type FileReferencePickerHandle } from '@/components/Chat/FileReferencePicker'
 import { InputCommandMenu, type IndexedInputCommandOption } from '@/components/Chat/InputCommandMenu'
@@ -15,6 +13,8 @@ import { TokenUsageDialog } from '@/components/Chat/TokenUsagePanel'
 import { ComposerMenuItem } from '@/components/Chat/ComposerMenuRow'
 import { ComposerTokenInput, type ComposerTokenInputHandle, type ComposerTokenSpec, type ComposerTrigger } from '@/components/Chat/composer-token-input'
 import { Button } from '@/components/ui/button'
+import { motion, useReducedMotionConfig } from 'motion/react'
+import { novaEase } from '@/features/motion/motion-tokens'
 import { AgentApprovalModeMenu } from '@/features/agent-approval/AgentApprovalModeMenu'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import type { AgentRuntimeQueuedCommand, ContextAnalysis } from '@/lib/api'
@@ -23,13 +23,15 @@ import { EditInteractiveReplyDialog } from '../EditInteractiveReplyDialog'
 import type { StoryStageCommandItem } from './story-stage-commands'
 import { isNativeComposingKeyboardEvent } from './utils'
 import type { ConversationConfigController } from '@/features/conversation-config/types'
-import type { ConversationGoal } from '@/features/agent-goal/types'
+import { ConversationConfigError } from '@/features/conversation-config/ConversationConfigError'
+import { supportsRuntimeOperation } from '@/features/conversation-config/types'
 import { ComposerAttachmentTray, useComposerAttachments } from '@/components/Chat/ComposerAttachments'
 import type { InputAreaSendOptions } from '@/components/Chat/InputArea'
 
 type StateSetter<T> = Dispatch<SetStateAction<T>>
 
 interface StoryStageComposerProps {
+  taskControls?: ReactNode
   layout: {
     projectId: string
     creatingStory: boolean
@@ -62,10 +64,8 @@ interface StoryStageComposerProps {
     storyId: string
     branchTerminal: boolean
     hotChoices: string[]
-    hotChoicesExpanded: boolean
     showHotChoices: boolean
     canUseHotChoices: boolean
-    setHotChoicesExpanded: StateSetter<boolean>
   }
   runtime: {
     streaming: boolean
@@ -80,16 +80,6 @@ interface StoryStageComposerProps {
     commandSubmitting: boolean
     queue: AgentRuntimeQueuedCommand[]
     queueActionPendingCommandID: string
-  }
-  goal: {
-    value: ConversationGoal | null
-    mode: boolean
-    pending: boolean
-    enter: () => void
-    exit: () => void
-    edit: () => void
-    pause: () => void | Promise<void>
-    clear: () => void | Promise<void>
   }
   dialogs: {
     contextAnalysisOpen: boolean
@@ -127,17 +117,23 @@ interface StoryStageComposerProps {
   }
 }
 
-export function StoryStageComposer({ layout, editor, story, runtime, goal, dialogs, actions }: StoryStageComposerProps) {
+export function StoryStageComposer({ layout, editor, story, runtime, dialogs, actions, taskControls }: StoryStageComposerProps) {
+  const [actionsOpen, setActionsOpen] = useState(false)
+  const choicesId = useId()
+  const reducedMotion = useReducedMotionConfig()
+  const choicesTransition = { type: 'tween' as const, duration: reducedMotion ? 0 : 0.2, ease: novaEase }
   const { projectId, creatingStory, isMobile, inputTextStyle, workspace, inputFloatRef, inputRef, t } = layout
   const { input, editingTurn, styleScenes, styleSceneQuery, styleSceneSuggestions, showSkillCommands, activeSkillCommandIndex, skillCommands, filteredSkillCommands, filteredBuiltInCommandItems, filteredSkillCommandItems, setStyleSceneQuery, setShowSkillCommands, setSkillCommandQuery, setActiveSkillCommandIndex } = editor
-  const { storyId, branchTerminal, hotChoices, hotChoicesExpanded, showHotChoices, canUseHotChoices, setHotChoicesExpanded } = story
+  const { storyId, branchTerminal, hotChoices, showHotChoices, canUseHotChoices } = story
   const { streaming, approvalReady, conversationConfig, abortPending, recoveryPaused, recoveryAbortAvailable, pendingInterruptionId, operationId, connection, commandSubmitting, queue, queueActionPendingCommandID } = runtime
   const { contextAnalysisOpen, contextAnalysisLoading, contextAnalysisError, contextAnalysis, tokenUsageOpen, tokenUsageMessages, replyEditTarget, setContextAnalysisOpen, setTokenUsageOpen, closeReplyEditor, saveReply } = dialogs
   const { cancelEditing, selectHotChoice, selectStyleScene, selectSkillCommand, handleInputChange, handleInputTriggerChange, handleTokenRemove, toggleHotChoices, openContextAnalysis, removeContextCompaction, send, steerQueuedCommand, deleteQueuedCommand, stop } = actions
   const activeControlsDisabled = streaming && (!operationId || connection !== 'connected')
-  const resumeAvailable = Boolean(pendingInterruptionId) && !editingTurn && !goal.mode
+  const nativeRuntime = !conversationConfig.snapshot?.runtime || conversationConfig.snapshot.runtime.kind === 'native'
+  const sendBlocked = streaming && !supportsRuntimeOperation(conversationConfig.snapshot, 'queue')
+  const resumeAvailable = Boolean(pendingInterruptionId) && !editingTurn
   const attachments = useComposerAttachments(
-    !branchTerminal && approvalReady && !goal.pending,
+    !branchTerminal,
     `game:${layout.attachmentDraftKey}`,
   )
   const stylePickerRef = useRef<FileReferencePickerHandle>(null)
@@ -147,7 +143,7 @@ export function StoryStageComposer({ layout, editor, story, runtime, goal, dialo
       cmd: `/${command.name}`,
       description: command.description || command.name,
       hint: command.hint,
-      icon: command.name === 'goal' ? Target : Archive,
+      icon: Archive,
       source: 'builtin',
     },
   }))
@@ -172,7 +168,8 @@ export function StoryStageComposer({ layout, editor, story, runtime, goal, dialo
   }
   return (
     <div ref={inputFloatRef} className="nova-story-input-float pointer-events-none absolute inset-x-0 bottom-0 z-20 p-3">
-      <div className="pointer-events-auto mx-auto max-w-5xl">
+      <div className="nova-story-reading-column pointer-events-auto">
+        {taskControls ? <div className="mb-2">{taskControls}</div> : null}
         {editingTurn && !streaming ? (
           <div className="mb-3 flex min-w-0 items-center gap-2 rounded-[var(--nova-radius)] border border-[var(--nova-border)] bg-[var(--nova-surface-2)] px-3 py-2 text-xs text-[var(--nova-text-muted)]">
             <Pencil className="h-3.5 w-3.5 shrink-0 text-[var(--nova-text-faint)]" />
@@ -182,46 +179,44 @@ export function StoryStageComposer({ layout, editor, story, runtime, goal, dialo
             </Button>
           </div>
         ) : null}
-        {showHotChoices ? (
-          <div className="mb-2 overflow-hidden rounded-[var(--nova-radius)] border border-[var(--nova-border)] bg-[var(--nova-surface-2)]">
-            <div className="flex min-h-8 items-center gap-1.5 px-2 py-1 text-[11px] text-[var(--nova-text-muted)]">
-              <button type="button" className="nova-nav-item flex min-w-0 flex-1 items-center gap-1.5 rounded-[var(--nova-radius)] px-1.5 py-1 text-left hover:bg-[var(--nova-hover)]" onMouseDown={(event) => event.preventDefault()} onClick={() => setHotChoicesExpanded((value) => !value)} aria-expanded={hotChoicesExpanded}>
-                <Compass className="h-3.5 w-3.5 shrink-0 text-[var(--nova-text-faint)]" />
-                <span className="shrink-0 font-medium text-[var(--nova-text-muted)]">{t('storyStage.hotChoices.title')}</span>
-                <span className="min-w-0 flex-1 truncate text-[var(--nova-text-faint)]">{t('storyStage.hotChoices.count', { count: hotChoices.length })}</span>
-                {hotChoicesExpanded ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-[var(--nova-text-faint)]" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--nova-text-faint)]" />}
-              </button>
+        <div className="relative">
+          {/* Keep the popup out of the measured composer height, and animate the
+              frosted surface itself so an opacity ancestor cannot cut off its backdrop. */}
+          <motion.div
+            id={choicesId}
+            initial={false}
+            animate={{ opacity: showHotChoices ? 1 : 0, y: showHotChoices ? 0 : 8 }}
+            transition={choicesTransition}
+            aria-hidden={!showHotChoices}
+            inert={!showHotChoices}
+            className="nova-story-choice-panel absolute inset-x-0 bottom-full mb-2 overflow-hidden border"
+          >
+            <button type="button" className="nova-nav-item flex min-h-8 w-full min-w-0 items-center gap-1.5 rounded-[var(--nova-radius)] px-2 py-1 text-left text-[11px] text-[var(--nova-text-muted)] hover:bg-[var(--nova-hover)]" onMouseDown={(event) => event.preventDefault()} onClick={toggleHotChoices} aria-expanded={showHotChoices}>
+              <Compass className="h-3.5 w-3.5 shrink-0 text-[var(--nova-text-faint)]" />
+              <span className="shrink-0 font-medium">{t('storyStage.hotChoices.title')}</span>
+              <span className="min-w-0 flex-1 truncate text-[var(--nova-text-faint)]">{t('storyStage.hotChoices.count', { count: hotChoices.length })}</span>
+              <motion.span initial={false} animate={{ rotate: showHotChoices ? 180 : 0 }} transition={choicesTransition} className="flex shrink-0 text-[var(--nova-text-faint)]">
+                <ChevronDown className="h-3.5 w-3.5" />
+              </motion.span>
+            </button>
+            <div data-testid="story-stage-hot-choices-list" className="mt-1 flex max-h-48 flex-wrap content-start gap-1.5 overflow-y-auto overscroll-contain">
+              {hotChoices.map((choice, index) => (
+                <button key={`${index}-${choice}`} type="button" className="min-w-0 max-w-full flex-none rounded-[var(--nova-radius)] border border-transparent bg-[var(--nova-hover)] px-2.5 py-1.5 text-left text-xs leading-5 text-[var(--nova-text-muted)] hover:bg-[var(--nova-active)] hover:text-[var(--nova-text)]" onMouseDown={(event) => event.preventDefault()} onClick={() => selectHotChoice(choice)}>
+                  <span className="block max-w-full break-words">{choice}</span>
+                </button>
+              ))}
             </div>
-            {hotChoicesExpanded ? (
-              <div className="border-t border-[var(--nova-border)] px-2 py-2">
-                <div data-testid="story-stage-hot-choices-list" className="flex max-h-48 flex-wrap content-start gap-1.5 overflow-y-auto overscroll-contain pr-1">
-                  {hotChoices.map((choice, index) => (
-                    <button key={`${index}-${choice}`} type="button" className="min-w-0 max-w-full flex-none rounded-[var(--nova-radius)] border border-[var(--nova-border)] bg-[var(--nova-surface)] px-2.5 py-1.5 text-left text-xs leading-5 text-[var(--nova-text-muted)] hover:bg-[var(--nova-hover)] hover:text-[var(--nova-text)]" onMouseDown={(event) => event.preventDefault()} onClick={() => selectHotChoice(choice)}>
-                      <span className="block max-w-full break-words">{choice}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
+          </motion.div>
+        </div>
         <AgentQueuedCommandList
           items={queue}
           pendingCommandID={queueActionPendingCommandID}
-          disabled={activeControlsDisabled || abortPending || commandSubmitting}
+          disabled={abortPending || commandSubmitting}
+          activeOperationID={streaming || recoveryPaused ? operationId : ''}
+          steerDisabled={activeControlsDisabled}
           onSteer={steerQueuedCommand}
           onDelete={deleteQueuedCommand}
         />
-        {goal.value ? (
-          <AgentGoalCard
-            goal={goal.value}
-            pending={goal.pending}
-            disabled={branchTerminal || !approvalReady}
-            onEdit={goal.edit}
-            onPause={goal.pause}
-            onClear={goal.clear}
-          />
-        ) : null}
         <div className="relative min-w-0" {...attachments.dropProps}>
           <FileReferencePicker ref={stylePickerRef} open={styleSceneQuery !== null && styleSceneSuggestions.length > 0} query={styleSceneQuery || ''} items={styleSceneSuggestions} onSelect={(item) => selectStyleScene(item.value)} trigger="#" placeholder={t('chat.styleReference.placeholder')} emptyText={t('chat.styleReference.empty')} heading={t('chat.styleReference.heading')} />
           <InputCommandMenu
@@ -233,6 +228,7 @@ export function StoryStageComposer({ layout, editor, story, runtime, goal, dialo
             onActiveIndexChange={setActiveSkillCommandIndex}
             onSelect={(command) => selectSkillCommand(command.cmd.replace(/^\//, ''))}
           />
+          <ConversationConfigError controller={conversationConfig} agentKey="interactive_story" />
           <AgentComposerShell
             className="nova-story-stage-composer"
             references={attachments.items.length ? <ComposerAttachmentTray items={attachments.items} onRemove={attachments.remove} /> : undefined}
@@ -284,28 +280,22 @@ export function StoryStageComposer({ layout, editor, story, runtime, goal, dialo
               maxRows={isMobile ? 5 : 10}
               className="nova-agent-composer-textarea nova-agent-token-input min-h-[42px] resize-none border-0 bg-transparent px-1 py-[9px] text-sm leading-6 text-[var(--nova-text)] shadow-none placeholder:text-[var(--nova-text-faint)] focus-visible:border-transparent focus-visible:ring-0"
               style={inputTextStyle}
-              disabled={branchTerminal || !approvalReady || goal.pending}
+              disabled={branchTerminal}
               inputMode="text"
               enterKeyHint={isMobile ? 'enter' : 'send'}
               autoCapitalize="sentences"
-              placeholder={branchTerminal ? t('storyStage.inputPlaceholderTerminal') : goal.mode ? t('chat.goal.placeholder') : !isMobile && skillCommands.length > 0 ? t('storyStage.inputPlaceholderWithSkills') : t('storyStage.inputPlaceholder')}
+              placeholder={branchTerminal ? t('storyStage.inputPlaceholderTerminal') : !isMobile && skillCommands.length > 0 ? t('storyStage.inputPlaceholderWithSkills') : t('storyStage.inputPlaceholder')}
             />}
             toolbarStart={<>
-              <DropdownMenu>
+              <DropdownMenu open={actionsOpen} onOpenChange={setActionsOpen}>
                 <DropdownMenuTrigger asChild><Button type="button" variant="outline" size="icon-sm" className="nova-agent-composer-icon h-8 w-8 shrink-0 rounded-[10px] border border-[var(--nova-border)] bg-[var(--nova-surface)] text-[var(--nova-text-muted)] hover:bg-[var(--nova-hover)] hover:text-[var(--nova-text)] disabled:opacity-45" disabled={branchTerminal || (!storyId && tokenUsageMessages.length === 0)} aria-label={t('chat.input.actions')}><List className="h-3.5 w-3.5" /></Button></DropdownMenuTrigger>
                 <DropdownMenuContent align="start" side="top" className="w-80 max-w-[calc(100vw-1rem)] border-[var(--nova-border)] bg-[var(--nova-surface-2)] p-2 text-[var(--nova-text)]">
                   <DropdownMenuGroup>
                     <ComposerMenuItem
                       icon={Paperclip}
                       label={t('chat.attachment.add')}
-                      disabled={branchTerminal || goal.pending}
+                      disabled={branchTerminal}
                       onSelect={attachments.openPicker}
-                    />
-                    <ComposerMenuItem
-                      icon={Target}
-                      label={t(goal.mode ? 'chat.goal.exitMode' : 'chat.goal.enterMode')}
-                      disabled={streaming || branchTerminal || goal.pending}
-                      onSelect={goal.mode ? goal.exit : goal.enter}
                     />
                   </DropdownMenuGroup>
                   <AgentApprovalModeMenu runActive={streaming} presentation="submenu" conversationConfig={conversationConfig} />
@@ -318,23 +308,22 @@ export function StoryStageComposer({ layout, editor, story, runtime, goal, dialo
                       detailTone="faint"
                       onSelect={() => setTokenUsageOpen(true)}
                     />
-                    <ComposerMenuItem
+                    {nativeRuntime && <ComposerMenuItem
                       icon={ScrollText}
                       label={t('chat.contextAnalysis.action')}
                       disabled={!storyId || streaming || branchTerminal}
                       onSelect={openContextAnalysis}
-                    />
+                    />}
                   </DropdownMenuGroup>
                 </DropdownMenuContent>
               </DropdownMenu>
-              {goal.mode ? <ComposerModeChip icon={Target} label={t('chat.goal.short')} ariaLabel={t('chat.goal.exitMode')} disabled={goal.pending} onClose={goal.exit} /> : null}
               {attachments.input}
             </>}
             toolbarEnd={<>
-              <ModelProfileSwitcher agentKey="interactive_story" workspace={workspace} conversationConfig={conversationConfig} disabled={!approvalReady} runActive={streaming} />
-              <Button type="button" variant="outline" className={`nova-agent-composer-pill h-8 shrink-0 rounded-[10px] border-[var(--nova-border)] bg-[var(--nova-surface)] px-2.5 text-[11px] text-[var(--nova-text-muted)] hover:bg-[var(--nova-hover)] hover:text-[var(--nova-text)] ${hotChoicesExpanded ? 'text-[var(--nova-text)]' : ''}`} disabled={!canUseHotChoices} onMouseDown={(event) => event.preventDefault()} onClick={toggleHotChoices} aria-label={hotChoicesExpanded ? t('storyStage.hotChoices.collapse') : t('storyStage.hotChoices.get')}><Compass className="h-3.5 w-3.5" />{t('storyStage.hotChoices.button')}</Button>
+              <ModelProfileSwitcher agentKey="interactive_story" workspace={workspace} conversationConfig={conversationConfig} disabled={branchTerminal} runActive={streaming || Boolean(pendingInterruptionId)} />
+              <Button type="button" variant="outline" className={`nova-agent-composer-pill h-8 shrink-0 rounded-[10px] border-[var(--nova-border)] bg-[var(--nova-surface)] px-2.5 text-[11px] text-[var(--nova-text-muted)] hover:bg-[var(--nova-hover)] hover:text-[var(--nova-text)] ${showHotChoices ? 'text-[var(--nova-text)]' : ''}`} disabled={!canUseHotChoices} onMouseDown={(event) => event.preventDefault()} onClick={toggleHotChoices} aria-controls={choicesId} aria-expanded={showHotChoices} aria-pressed={showHotChoices} aria-label={showHotChoices ? t('storyStage.hotChoices.collapse') : t('storyStage.hotChoices.get')}><Compass className="h-3.5 w-3.5" />{t('storyStage.hotChoices.button')}</Button>
             </>}
-            submitControl={<AgentComposerControls generationActive={streaming} hasSendableContent={Boolean(input.trim() || attachments.files.length)} resumeAvailable={resumeAvailable} onStop={() => { void stop() }} onSend={() => { void submit() }} sendDisabled={!approvalReady || !storyId || (!input.trim() && attachments.files.length === 0 && !resumeAvailable) || goal.pending} disabled={branchTerminal} abortPending={abortPending} actionPending={commandSubmitting || goal.pending} activeControlsDisabled={activeControlsDisabled} stopDisabled={streaming && !recoveryAbortAvailable && (recoveryPaused || !operationId || connection !== 'connected')} sendLabel={editingTurn ? t('storyStage.sendRegenerate') : undefined} sendIcon={editingTurn ? <RefreshCw data-icon="inline-start" /> : undefined} />}
+            submitControl={<AgentComposerControls generationActive={streaming} hasSendableContent={Boolean(input.trim() || attachments.files.length)} resumeAvailable={resumeAvailable} onStop={() => { void stop() }} onSend={() => { void submit() }} sendDisabled={sendBlocked || !approvalReady || !storyId || (!input.trim() && attachments.files.length === 0 && !resumeAvailable)} disabled={branchTerminal} abortPending={abortPending} actionPending={commandSubmitting} activeControlsDisabled={activeControlsDisabled} stopDisabled={streaming && !recoveryAbortAvailable && (recoveryPaused || !operationId || connection !== 'connected')} sendLabel={editingTurn ? t('storyStage.sendRegenerate') : undefined} sendIcon={editingTurn ? <RefreshCw data-icon="inline-start" /> : undefined} />}
           />
         </div>
         <ContextAnalysisDialog open={contextAnalysisOpen} loading={contextAnalysisLoading} error={contextAnalysisError} analysis={contextAnalysis} onOpenChange={setContextAnalysisOpen} onRemoveCompaction={removeContextCompaction} />

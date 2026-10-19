@@ -2,8 +2,6 @@ package chat
 
 import (
 	"context"
-	agentconversation "denova/internal/agents/conversation"
-	agentrun "denova/internal/agents/run"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,14 +9,16 @@ import (
 	"testing"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
 	agentcontext "denova/internal/agents/context"
+	agentconversation "denova/internal/agents/conversation"
 	agentreview "denova/internal/agents/review"
+	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
 	"denova/internal/book"
 	"denova/internal/book/lore"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func fixedTurnRuntimeEnvironment(service *book.Service) turnRuntimeEnvironment {
@@ -38,7 +38,7 @@ type pureTurnTestConversation struct {
 
 func (pureTurnTestConversation) AssembleModelContext(ctx context.Context, _ string, input agentcontext.ModelContextInput) (agentcontext.ModelContextResult, error) {
 	assembled, err := agentcontext.NewAssembler(input.Budget).Assemble(ctx, agentcontext.AssembleRequest{
-		Messages: []*agent.Message{agent.UserMessage(input.UserMessage)}, Fragments: input.Fragments,
+		Messages: []*agentschema.Message{agentschema.UserMessage(input.UserMessage)}, Fragments: input.Fragments,
 	})
 	return agentcontext.ModelContextResult{Messages: assembled.Messages, Context: assembled}, err
 }
@@ -70,7 +70,7 @@ func assembleTurnForTest(t *testing.T, req ChatRequest, pending *session.Interru
 func finalAssembledUserMessage(t *testing.T, assembled agentcontext.ModelContextResult) string {
 	t.Helper()
 	for index := len(assembled.Messages) - 1; index >= 0; index-- {
-		if assembled.Messages[index] != nil && assembled.Messages[index].Role == agent.User {
+		if assembled.Messages[index] != nil && assembled.Messages[index].Role == agentschema.User {
 			return assembled.Messages[index].Content
 		}
 	}
@@ -260,7 +260,7 @@ func TestSessionConversationAssemblesTurnAndRuntimeFragmentsUnderOneBudget(t *te
 	}}}
 	conversation := agentconversation.NewSessionConversationForAgentWithRuntimeContexts(
 		sess, cfg, config.AgentKindIDE,
-		"Stable workspace", strings.Repeat("stable-", 80),
+		"Stable workspace", strings.Repeat("stable-", 20),
 		"Dynamic workspace", strings.Repeat("dynamic-", 80),
 	)
 	conversation.BindAgentCycleIdentity(agentrun.CycleIdentity{CommandID: "assembly-command", OperationID: "assembly-operation", Cycle: 1})
@@ -289,7 +289,7 @@ func TestSessionConversationAssemblesTurnAndRuntimeFragmentsUnderOneBudget(t *te
 			t.Fatalf("fragment[%d] = %#v, want complete bounded provenance for %q", i, fragment, want)
 		}
 	}
-	if len(result.Messages) == 0 || result.Messages[len(result.Messages)-1].Role != agent.User || !strings.HasSuffix(strings.TrimSpace(result.Messages[len(result.Messages)-1].Content), "continue") {
+	if len(result.Messages) == 0 || result.Messages[len(result.Messages)-1].Role != agentschema.User || !strings.HasSuffix(strings.TrimSpace(result.Messages[len(result.Messages)-1].Content), "continue") {
 		t.Fatalf("final model message does not retain the raw request at highest priority: %#v", result.Messages)
 	}
 	if visible := sess.History(); len(visible) != 0 {
@@ -307,6 +307,27 @@ func TestSessionConversationAssemblesTurnAndRuntimeFragmentsUnderOneBudget(t *te
 	}
 }
 
+func TestSessionConversationRejectsTruncatedStableLore(t *testing.T) {
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := store.GetOrCreate("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation := agentconversation.NewSessionConversationForAgentWithRuntimeContexts(
+		sess, &config.Config{Language: "en-US"}, config.AgentKindIDE,
+		"Lore Index", "# Lore Index\n"+strings.Repeat("canon ", 100), "", "",
+	)
+	_, err = conversation.AssembleModelContext(context.Background(), "continue", agentcontext.ModelContextInput{
+		UserMessage: "continue", Budget: agentcontext.Budget{MaxFragmentBytes: 256},
+	})
+	if err == nil || !strings.Contains(err.Error(), "will not be truncated") {
+		t.Fatalf("expected complete-Lore budget error, got %v", err)
+	}
+}
+
 func TestSessionConversationReusesMaterializedInputExactlyOnceInRealModelAssembly(t *testing.T) {
 	store, err := session.NewStore(t.TempDir())
 	if err != nil {
@@ -318,10 +339,10 @@ func TestSessionConversationReusesMaterializedInputExactlyOnceInRealModelAssembl
 	}
 	identity := agentrun.CycleIdentity{CommandID: "materialized-command", OperationID: "materialized-operation", Cycle: 1}
 	references := []agentcontext.UserReference{{Kind: "file", Label: "chapters/01.md"}}
-	attachment := agent.Attachment{ID: "att_0123456789abcdef0123456789abcdef", Name: "reference.png", MediaType: "image/png", Size: 8, Path: "/state/reference.png", SHA256: "digest"}
+	attachment := agentschema.Attachment{ID: "att_0123456789abcdef0123456789abcdef", Name: "reference.png", MediaType: "image/png", Size: 8, Path: "/state/reference.png", SHA256: "digest"}
 	intent, err := session.NewDomainCommitIntent(session.DomainCommitIdentity{
 		CommandID: string(identity.CommandID), OperationID: string(identity.OperationID), Cycle: identity.Cycle,
-	}, agent.UserMessageWithAttachments("继续写", []agent.Attachment{attachment}), session.MessageMetadata{AgentKind: config.AgentKindIDE, UserReferences: references})
+	}, agentschema.UserMessageWithAttachments("继续写", []agentschema.Attachment{attachment}), session.MessageMetadata{AgentKind: config.AgentKindIDE, UserReferences: references})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +353,7 @@ func TestSessionConversationReusesMaterializedInputExactlyOnceInRealModelAssembl
 	conversation.BindAgentCycleIdentity(identity)
 	assembled, err := conversation.AssembleModelContext(context.Background(), "继续写", agentcontext.ModelContextInput{
 		UserMessage:    "继续写",
-		Attachments:    []agent.Attachment{attachment},
+		Attachments:    []agentschema.Attachment{attachment},
 		UserReferences: references,
 		Budget:         conversation.ModelContextBudget(),
 		Fragments: []agentcontext.Fragment{{
@@ -345,7 +366,7 @@ func TestSessionConversationReusesMaterializedInputExactlyOnceInRealModelAssembl
 	}
 	userMessages := 0
 	for _, message := range assembled.Messages {
-		if message != nil && message.Role == agent.User && strings.Contains(message.Content, "继续写") {
+		if message != nil && message.Role == agentschema.User && strings.Contains(message.Content, "继续写") {
 			userMessages++
 			if len(message.Attachments) != 1 || message.Attachments[0] != attachment {
 				t.Fatalf("enhanced model input lost attachments: %#v", message.Attachments)
@@ -383,7 +404,7 @@ func TestSessionConversationRejectsCommitAfterContextSnapshotChanges(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.AppendContextMessage(agent.UserMessage("concurrent structural context")); err != nil {
+	if err := sess.AppendContextMessage(agentschema.UserMessage("concurrent structural context")); err != nil {
 		t.Fatal(err)
 	}
 	if err := agentcontext.CommitModelInput(context.Background(), conversation, "stale input", assembled); !errors.Is(err, session.ErrContextRevisionConflict) {

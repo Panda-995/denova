@@ -8,9 +8,8 @@ func defaultActorStatePresetSpec() actorStatePresetSpec {
 	return actorStatePresetSpec{
 		ID:                   DefaultActorStateModuleID,
 		Name:                 "默认状态系统",
-		Description:          "以故事、主角和世界实体三个初始 Actor 集中维护关键状态；角色只预置最通用的等级与生命，其他面板和动态状态由开局 Agent 按故事实际需要主动添加。",
-		PanelFields:          defaultActorPanelFields(),
-		StateFields:          defaultActorDynamicStateFields(),
+		Description:          "以故事、主角和世界实体三个初始 Actor 集中维护关键状态；角色位阶沿用故事自己的称谓；数值等级、生命及其他资源由开局按实际规则建立。",
+		StateFields:          defaultActorStateFields(),
 		AbilityGuidance:      "类型使用战斗、社交、探索、制造或其他符合故事设定的分类。",
 		ItemGuidance:         "类型使用装备、消耗品、资源、任务物、线索或其他符合故事设定的分类。",
 		RelationshipGuidance: "关系类型按故事实际使用亲属、朋友、同伴、竞争、敌对、恋爱、主从或师徒等自然语言。",
@@ -27,8 +26,8 @@ func protagonistStateTemplate(spec actorStatePresetSpec) ActorStateTemplate {
 		textStateField("identity.appearance_style", "外貌与装扮", "合并记录有辨识度的外貌、衣着、装备外观和当前伪装；忽略无承接价值的临时描写。", "人物设定", "block"),
 		textStateField("identity.character_background", "性格与背景", "记录会持续影响选择的性格倾向与已确认背景，不复述回合经历。", "人物设定", "block"),
 	}
-	fields = append(fields, actorPanelAndStateFields(spec)...)
-	fields = append(fields, textStateField("current.situation", "当前处境", "记录当前优势、危险、限制和直接压力；具体地点由故事状态维护。", "状态", "block"))
+	fields = append(fields, spec.StateFields...)
+	fields = append(fields, textStateField("current.situation", "当前处境", "记录当前优势、危险、限制和直接压力；具体地点由故事状态维护。", "角色状态", "block"))
 	fields = append(fields, spec.ProtagonistFields...)
 	fields = append(fields, actorOwnedRecordFields(spec, 12, 16, 12, "")...)
 	return actorStatePresetTemplate(
@@ -44,11 +43,11 @@ func importantCharacterStateTemplate(spec actorStatePresetSpec) ActorStateTempla
 		textStateField("identity.profile", "基本身份", "合并记录年龄、性别、职业、种族、组织与公开身份等有用信息。", "人物设定", "block"),
 		textStateField("identity.appearance_style", "外貌与装扮", "合并记录辨识特征、常见装束、装备外观和当前伪装。", "人物设定", "block"),
 		textStateField("identity.character_background", "性格与背景", "记录稳定性格、关键来历和会持续影响行为的背景。", "人物设定", "block"),
-		textStateField("current.presence_location", "出场与位置", "用一句话记录在场、离场、失联、死亡等存续状态及当前位置或最后确认位置。", "状态", "inline"),
+		textStateField("current.presence_location", "出场与位置", "用一句话记录在场、离场、失联、死亡等存续状态及当前位置或最后确认位置。", "角色状态", "inline"),
 	}
-	fields = append(fields, actorPanelAndStateFields(spec)...)
+	fields = append(fields, spec.StateFields...)
 	fields = append(fields,
-		textStateField("current.goal_situation", "当前目标与处境", "记录已经由行为、对话或设定确认的近期目标、压力、优势与限制，不猜测幕后计划。", "状态", "block"),
+		textStateField("current.goal_situation", "当前目标与处境", "记录已经由行为、对话或设定确认的近期目标、压力、优势与限制，不猜测幕后计划。", "角色状态", "block"),
 		textStateField("protagonist_relation.summary", "与主角关系", "记录关系类型、当前态度、关系阶段、重要承诺、边界和主要矛盾。", "主角关系", "block"),
 		favorabilityStateField("protagonist_relation.favorability", "对主角好感度", "该角色对主角的总体情感倾向，不代表信任、服从或恋爱关系。", "主角关系"),
 		listStateField("knowledge.about_protagonist", "对主角的已知信息", "只列会影响该角色判断或行动、且该角色确实已经得知的信息，最多 6 项。", "主角关系"),
@@ -69,10 +68,10 @@ func opponentStateTemplate(spec actorStatePresetSpec) ActorStateTemplate {
 		textStateField("current.lifecycle_location", "存续与位置", "用一句话记录活跃、撤退、被俘、失效、消灭等状态及所在或最后确认位置。", "威胁", "inline"),
 		textStateFieldWithInstruction("threat.assessment", "威胁态势", "合并记录威胁级别、警戒或追击状态和当前目标。", "威胁", "block", "使用低、中、高、致命四档：低=通常无需专门准备；中=会造成明确损失；高=需要资源、协作或针对性策略；致命=正面对抗很可能导致死亡或不可逆后果。只有能力、数量、环境或目标发生实质变化时调整。"),
 	}
-	fields = append(fields, actorPanelAndStateFields(spec)...)
+	fields = append(fields, spec.StateFields...)
 	fields = append(fields,
-		textStateField("behavior.pattern", "行动模式", "记录已经观察或可靠确认的攻击倾向、触发方式和行为规律。", "状态", "block"),
-		textStateField("weakness.exit_condition", "弱点与退场条件", "合并记录已确认弱点，以及击败、驱散、封印、谈判或摆脱条件。", "状态", "block"),
+		textStateField("behavior.pattern", "行动模式", "记录已经观察或可靠确认的攻击倾向、触发方式和行为规律。", "角色状态", "block"),
+		textStateField("weakness.exit_condition", "弱点与退场条件", "合并记录已确认弱点，以及击败、驱散、封印、谈判或摆脱条件。", "角色状态", "block"),
 	)
 	fields = append(fields, spec.OpponentFields...)
 	fields = append(fields, actorOwnedRecordFields(spec, 6, 4, 4, "")...)
@@ -86,12 +85,12 @@ func opponentStateTemplate(spec actorStatePresetSpec) ActorStateTemplate {
 
 func storyContextStateTemplate(spec actorStatePresetSpec) ActorStateTemplate {
 	fields := []ActorStateField{
-		textStateField("scene.current_time", "当前时间", "按世界观记录当前日期、时段或阶段；只保留对行动有意义的精度。", "当前场景", "inline"),
-		textStateField("scene.location", "当前详细地点", "用一个字段表达当前具体地点及必要的上级范围，不再拆分大区、区域和房间。", "当前场景", "inline"),
-		textStateField("scene.current_event", "当前事件", "合并记录正在发生的事件、直接压力和下一步必须面对的问题。", "当前场景", "block"),
-		listStateField("scene.present_actors", "在场角色", "使用 Actor 状态中已有的精确 ID；新建 Actor 直接使用故事语言中的角色名称，Actor 名称即 ID。只保留当前可感知或正在互动的角色。", "当前场景"),
-		textStateFieldWithInstruction("scene.continuation_hook", "可承接钩子", "保留一个下一段可以直接承接的未完成动作、对话、发现或迫近威胁；它不是剧情总结或选项列表。", "当前场景", "block", "只写一个当前最直接的承接点。原钩子已经兑现、失效或被更强的新钩子替代时更新；使用具体对象与动作，不写泛泛的“继续探索”或多个备选项。"),
-		textStateField("world.situation", "世界局势", "合并记录当前阶段、环境变化、跨场景威胁与倒计时；只写仍会影响后续剧情的变化。", "世界状态", "block"),
+		textStateField("scene.current_time", "当前时间", "按世界观记录当前日期、时段或阶段；只保留对行动有意义的精度。", "场景与局势", "inline"),
+		textStateField("scene.location", "当前详细地点", "用一个字段表达当前具体地点及必要的上级范围，不再拆分大区、区域和房间。", "场景与局势", "inline"),
+		textStateField("scene.current_event", "当前事件", "合并记录正在发生的事件、直接压力和下一步必须面对的问题。", "场景与局势", "block"),
+		listStateField("scene.present_actors", "在场角色", "使用 Actor 状态中已有的精确 ID；新建 Actor 直接使用故事语言中的角色名称，Actor 名称即 ID。只保留当前可感知或正在互动的角色。", "场景与局势"),
+		textStateFieldWithInstruction("scene.continuation_hook", "可承接钩子", "保留一个下一段可以直接承接的未完成动作、对话、发现或迫近威胁；它不是剧情总结或选项列表。", "场景与局势", "block", "只写一个当前最直接的承接点。原钩子已经兑现、失效或被更强的新钩子替代时更新；使用具体对象与动作，不写泛泛的“继续探索”或多个备选项。"),
+		textStateField("world.situation", "世界局势", "合并记录当前阶段、环境变化、跨场景威胁与倒计时；只写仍会影响后续剧情的变化。", "场景与局势", "block"),
 		objectStateFieldWithInstruction("tasks.current", "当前任务", "记录已经成立且仍需推进的任务。", "当前任务", questRecordUpdateInstruction(spec)),
 	}
 	fields = append(fields, spec.StoryFields...)
@@ -156,22 +155,9 @@ func statePanelReadableRecordKeyInstruction(recordKind string) string {
 	return fmt.Sprintf("map key 直接使用故事语言中稳定、可读的%s名称，名称即 ID；不得翻译成英文、转写拼音或生成 slug；子值不要求重复名称字段。", recordKind)
 }
 
-func actorPanelAndStateFields(spec actorStatePresetSpec) []ActorStateField {
-	fields := make([]ActorStateField, 0, len(spec.PanelFields)+len(spec.StateFields))
-	fields = append(fields, spec.PanelFields...)
-	fields = append(fields, spec.StateFields...)
-	return fields
-}
-
-func defaultActorPanelFields() []ActorStateField {
+func defaultActorStateFields() []ActorStateField {
 	return []ActorStateField{
-		openEndedNumberStateField("panel.level", "等级", "角色当前规则等级。", "面板", 1, 1, "1–4 初阶；5–10 中阶；11–16 高阶；17 及以上传奇。", "等级只随明确的升级、降级或规则结算改变。"),
-	}
-}
-
-func defaultActorDynamicStateFields() []ActorStateField {
-	return []ActorStateField{
-		textStateFieldWithDefaultInstruction("state.health", "生命", "使用“当前值/上限”表达可恢复的生命资源；例如 8/12。", "状态", "inline", "10/10", "受伤、治疗或上限改变时更新；没有生命数值规则时改用作品中的等价状态。"),
+		textStateFieldWithInstruction("panel.rank", "位阶", "The story's established progression tier or rating, including any meaningful substage; do not infer combat power or mix in occupation, social identity, or temporary effects.", "角色状态", "inline", "Use the story's canonical terminology and update only after an established promotion, demotion, or rating change. During opening adaptation, rename to the story's term, replace with a numeric level when rules require calculation, or remove when no progression system exists. Do not invent a universal initial tier."),
 	}
 }
 
@@ -219,10 +205,8 @@ func favorabilityStateField(path, name, description, group string) ActorStateFie
 	return field
 }
 
-func openEndedNumberStateField(path, name, description, group string, defaultValue, minValue float64, scale, instruction string) ActorStateField {
-	field := presetStateField(path, name, "number", description+" 数值区间："+scale, group, "stat")
-	field.Default = defaultValue
-	field.Min = presetFloatPointer(minValue)
+func numberStateField(path, name, description, group, instruction string) ActorStateField {
+	field := presetStateField(path, name, "number", description, group, "inline")
 	field.UpdateInstruction = instruction
 	return field
 }

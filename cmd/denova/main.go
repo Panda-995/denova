@@ -12,15 +12,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"denova/config"
 	"denova/internal/api"
 	"denova/internal/app"
 	"denova/internal/buildinfo"
 	"denova/internal/observability"
+	"denova/internal/update"
 )
 
 func main() {
@@ -34,7 +35,25 @@ func main() {
 		fmt.Println(buildinfo.Version)
 		return
 	}
+	startupStarted := time.Now()
+	ctx := context.Background()
+	logPath, logOutput, closeLog := setupLogging("./log")
+	defer closeLog()
+	observability.ConfigureStructuredLogging(logOutput)
+	slog.InfoContext(ctx, "startup_logging_initialized", "current_file", logPath, "duration_ms", float64(time.Since(startupStarted))/float64(time.Millisecond))
+	finishStage := observability.StartStartupStage(ctx, "update_recovery")
+	recovering, err := update.PrepareStartup()
+	finishStage(err)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Update recovery failed: %v\n", err)
+		os.Exit(1)
+	}
+	if recovering {
+		return
+	}
+	finishStage = observability.StartStartupStage(ctx, "configuration")
 	cfg := config.Load()
+	finishStage(nil)
 	port := defaultPort(cfg)
 	frontendPort := defaultFrontendPort(cfg)
 	flag.StringVar(&workspace, "workspace", "", "workspace directory (defaults to the last opened workspace)")
@@ -50,13 +69,11 @@ func main() {
 	agentrun.SetTraceRuntimeConfig(cfg.TraceCaptureLevel, cfg.TraceExporter, cfg.TraceRetentionRuns)
 	agentrun.SetTraceContentCaptureEnabled(cfg.Labs.DeveloperMode)
 
-	logPath, logOutput, closeLog := setupLogging("./log")
-	defer closeLog()
-	observability.ConfigureStructuredLogging(logOutput)
-	slog.InfoContext(context.Background(), fmt.Sprintf("[startup] logging enabled dir=./log current_file=%s", logPath))
 	requestedPort := port
 	listenHost := config.HTTPListenHost(cfg.AllowLANAccess)
+	finishStage = observability.StartStartupStage(ctx, "backend_listener")
 	listener, port, err := reserveBackendListener(listenHost, requestedPort, !portWasExplicitlySet(os.Args[1:]))
+	finishStage(err)
 	if err != nil {
 		reportBackendPortConflict(os.Stderr, requestedPort, err)
 		waitForAnyKey(os.Stdin)
@@ -66,11 +83,11 @@ func main() {
 	if port != requestedPort {
 		reportBackendPortFallback(os.Stderr, requestedPort, port)
 	}
-	frontendPort = selectFrontendPort(frontendPort, port)
 	if runtimeWebPort, err := strconv.Atoi(port); err == nil {
 		cfg.RuntimeWebPort = runtimeWebPort
 	}
 	if dev {
+		frontendPort = selectFrontendPort(listenHost, frontendPort, port)
 		if runtimeWebPort, err := strconv.Atoi(frontendPort); err == nil {
 			cfg.RuntimeWebPort = runtimeWebPort
 		}
@@ -86,18 +103,21 @@ func main() {
 
 	cfg.SkillsDir = resolveSkillsDir(cfg.SkillsDir)
 
-	ctx := context.Background()
-
 	// 初始化应用运行时
+	finishStage = observability.StartStartupStage(ctx, "application")
 	application, err := app.New(ctx, cfg)
+	finishStage(err)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize application: %v\n", err)
 		os.Exit(1)
 	}
 	defer application.Close()
+	application.StartAnalytics(buildinfo.Version)
 
 	// 启动 HTTP 服务
+	finishStage = observability.StartStartupStage(ctx, "http_setup")
 	srv := api.NewServerWithListener(application, port, listener)
+	finishStage(nil)
 
 	// 打印启动信息
 	url := fmt.Sprintf("http://localhost:%s", port)
@@ -136,6 +156,12 @@ func main() {
 		}
 	}
 
+	runBackground("update-readiness", func() {
+		if err := update.ConfirmReady(ctx, url, buildinfo.Version); err != nil {
+			slog.ErrorContext(ctx, "update_readiness_failed", "error", err)
+		}
+	})
+	slog.InfoContext(ctx, "startup_prepared", "duration_ms", float64(time.Since(startupStarted))/float64(time.Millisecond))
 	srv.Run()
 }
 
@@ -163,20 +189,10 @@ func hasVersionArg(args []string) bool {
 	return false
 }
 
-// openBrowser 打开默认浏览器
+// openBrowser reports launch failures without stopping the HTTP server.
 func openBrowser(url string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "linux":
-		cmd = exec.Command("xdg-open", url)
-	case "windows":
-		cmd = exec.Command("cmd", "/c", "start", url)
-	}
-	if cmd != nil {
-		_ = cmd.Start()
-	}
+	finishStage := observability.StartStartupStage(context.Background(), "browser_launch")
+	finishStage(launchBrowser(url))
 }
 
 // startViteDev 启动 Vite 前端开发服务器
@@ -192,7 +208,13 @@ func startViteDev(port, host, backendPort string) {
 		}
 	}
 
-	cmd := exec.Command("pnpm", "dev", "--host", host, "--port", port)
+	args := []string{"dev", "--port", port, "--host"}
+	// Let Node choose a dual-stack listener for LAN access. Binding only IPv4
+	// makes localhost clients wait for IPv6 fallback on each new connection.
+	if host != config.LANHTTPHost {
+		args = append(args, host)
+	}
+	cmd := exec.Command("pnpm", args...)
 	cmd.Dir = webDir
 	cmd.Env = viteDevEnv(os.Environ(), port, backendPort)
 	cmd.Stdout = os.Stdout
@@ -224,14 +246,14 @@ func defaultPort(cfg *config.Config) string {
 	if cfg != nil && cfg.BackendPort > 0 {
 		return strconv.Itoa(cfg.BackendPort)
 	}
-	return "8080"
+	return "7789"
 }
 
 func defaultFrontendPort(cfg *config.Config) string {
 	if cfg != nil && cfg.FrontendPort > 0 {
 		return strconv.Itoa(cfg.FrontendPort)
 	}
-	return "5173"
+	return "7788"
 }
 
 // reserveBackendListener atomically claims the selected HTTP port. The listener
@@ -291,14 +313,14 @@ func waitForAnyKey(input io.Reader) {
 	_, _ = bufio.NewReader(input).ReadByte()
 }
 
-// selectFrontendPort 为前端 Vite dev server 自动选择一个可用端口。
-// 与 HTTP 后端端口不同，前端端口总是尝试自动选择（因为 Vite 不负责端口协商）。
-func selectFrontendPort(preferred string, reservedPorts ...string) string {
-	if !portReserved(preferred, reservedPorts...) && portAvailable(preferred) {
+// selectFrontendPort probes the frontend's listen address, preserving local-only
+// access even for temporary listeners that can trigger Windows firewall prompts.
+func selectFrontendPort(host, preferred string, reservedPorts ...string) string {
+	if !portReserved(preferred, reservedPorts...) && portAvailable(host, preferred) {
 		return preferred
 	}
 
-	next, err := findAvailablePort(preferred, 20, reservedPorts...)
+	next, err := findAvailablePort(host, preferred, 20, reservedPorts...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: frontend port %s is unavailable and automatic selection failed: %v\n", preferred, err)
 		slog.ErrorContext(context.Background(), fmt.Sprintf("[startup] frontend port %s is unavailable and automatic selection failed err=%v", preferred, err))
@@ -310,14 +332,14 @@ func selectFrontendPort(preferred string, reservedPorts ...string) string {
 	return next
 }
 
-func findAvailablePort(preferred string, attempts int, reservedPorts ...string) (string, error) {
+func findAvailablePort(host, preferred string, attempts int, reservedPorts ...string) (string, error) {
 	start, err := strconv.Atoi(preferred)
 	if err != nil || start <= 0 || start > 65535 {
 		return "", fmt.Errorf("invalid port: %s", preferred)
 	}
 	for port := start + 1; port <= 65535 && port <= start+attempts; port++ {
 		candidate := strconv.Itoa(port)
-		if !portReserved(candidate, reservedPorts...) && portAvailable(candidate) {
+		if !portReserved(candidate, reservedPorts...) && portAvailable(host, candidate) {
 			return candidate, nil
 		}
 	}
@@ -338,8 +360,8 @@ func portReserved(port string, reservedPorts ...string) bool {
 	return false
 }
 
-func portAvailable(port string) bool {
-	ln, err := net.Listen("tcp", "0.0.0.0:"+port)
+func portAvailable(host, port string) bool {
+	ln, err := listenOnPort(host, port)
 	if err != nil {
 		return false
 	}

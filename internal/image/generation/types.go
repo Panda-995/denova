@@ -7,14 +7,17 @@ import (
 )
 
 type GenerateRequest struct {
-	ProfileID    string `json:"profile_id,omitempty"`
-	Prompt       string `json:"prompt"`
-	N            int    `json:"n,omitempty"`
-	Size         string `json:"size,omitempty"`
-	AspectRatio  string `json:"aspect_ratio,omitempty"`
-	Resolution   string `json:"resolution,omitempty"`
-	Quality      string `json:"quality,omitempty"`
-	OutputFormat string `json:"output_format,omitempty"`
+	Images       []InputImage `json:"-"`
+	Mask         *InputImage  `json:"-"`
+	Selection    *ImageRegion `json:"-"`
+	ProfileID    string       `json:"profile_id,omitempty"`
+	Prompt       string       `json:"prompt"`
+	N            int          `json:"n,omitempty"`
+	Size         string       `json:"size,omitempty"`
+	AspectRatio  string       `json:"aspect_ratio,omitempty"`
+	Resolution   string       `json:"resolution,omitempty"`
+	Quality      string       `json:"quality,omitempty"`
+	OutputFormat string       `json:"output_format,omitempty"`
 }
 
 type Result struct {
@@ -47,4 +50,18 @@ type Image struct {
 
 type Adapter interface {
 	Generate(ctx context.Context, profile config.ResolvedImageAPIProfile, request GenerateRequest) (Result, error)
+}
+
+// InputImage contains host-resolved raster bytes, never a provider-fetchable URL.
+type InputImage struct {
+	Data     []byte
+	MIMEType string
+}
+
+// ImageRegion uses normalized coordinates in the first source image.
+type ImageRegion struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
 }

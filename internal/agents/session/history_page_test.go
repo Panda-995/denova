@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/internal/agents/conversationjournal"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestHistoryPageReadsIndexedRangesWithoutOmissions(t *testing.T) {
@@ -26,7 +26,7 @@ func TestHistoryPageReadsIndexedRangesWithoutOmissions(t *testing.T) {
 	writer := bufio.NewWriterSize(file, 1024*1024)
 	body := strings.Repeat("正文", 2048)
 	for index := 0; index < 1_000; index++ {
-		line, marshalErr := json.Marshal(agent.UserMessage(fmt.Sprintf("message-%04d-%s", index, body)))
+		line, marshalErr := json.Marshal(agentschema.UserMessage(fmt.Sprintf("message-%04d-%s", index, body)))
 		if marshalErr != nil {
 			t.Fatal(marshalErr)
 		}
@@ -104,7 +104,7 @@ func TestHistoryPageReadsIndexedRangesWithoutOmissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	readsBeforeAppend := reopened.JournalReplayStats().BytesRead
-	if err := reopened.Append(agent.UserMessage("message-1000")); err != nil {
+	if err := reopened.Append(agentschema.UserMessage("message-1000")); err != nil {
 		t.Fatal(err)
 	}
 	if reopened.JournalReplayStats().BytesRead != readsBeforeAppend {
@@ -236,7 +236,7 @@ func appendSegmentedHistoryRun(t *testing.T, sess *Session, runID string, displa
 	t.Helper()
 	now := time.Now().UTC()
 	*contextRevision++
-	user := agent.UserMessage("user-" + runID)
+	user := agentschema.UserMessage("user-" + runID)
 	records := make([]any, 0, displaysPerRun+2)
 	records = append(records, messageRecord{
 		Type: historyTypeMessage, CreatedAt: now, Message: *user,
@@ -260,7 +260,7 @@ func appendSegmentedHistoryRun(t *testing.T, sess *Session, runID string, displa
 		})
 	}
 	*contextRevision++
-	assistant := agent.AssistantMessage(canonical.String(), nil)
+	assistant := agentschema.AssistantMessage(canonical.String(), nil)
 	records = append(records, messageRecord{
 		Type: historyTypeMessage, CreatedAt: now, Message: *assistant,
 		MessageMetadata: MessageMetadata{RunID: runID, ContextRevision: *contextRevision},
@@ -283,7 +283,7 @@ func TestProjectionCheckpointResumesAssistantDigestWithoutLeakingContent(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.UserMessage("继续")); err != nil {
+	if err := sess.Append(agentschema.UserMessage("继续")); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.AppendDisplayEvent(DisplayEvent{ID: "answer-1", Role: "assistant", Content: "第一段秘密正文", RunID: "run-checkpoint"}); err != nil {
@@ -311,7 +311,7 @@ func TestProjectionCheckpointResumesAssistantDigestWithoutLeakingContent(t *test
 	if err := reopened.AppendDisplayEvent(DisplayEvent{ID: "answer-2", Role: "assistant", Content: "第二段秘密正文", RunID: "run-checkpoint"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := reopened.AppendWithMetadata(agent.AssistantMessage("第一段秘密正文第二段秘密正文", nil), MessageMetadata{RunID: "run-checkpoint"}); err != nil {
+	if err := reopened.AppendWithMetadata(agentschema.AssistantMessage("第一段秘密正文第二段秘密正文", nil), MessageMetadata{RunID: "run-checkpoint"}); err != nil {
 		t.Fatal(err)
 	}
 	page, err := reopened.ReadHistoryPage(context.Background(), -1, 10)

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"denova/internal/analytics"
 	"encoding/json"
 	"errors"
 	"io"
@@ -64,6 +65,7 @@ func (h *Handlers) HandleCreateBook(ctx context.Context, c *app.RequestContext) 
 		writeError(c, status, err.Error())
 		return
 	}
+	h.app.Analytics().ActionCompleted(analytics.BookCreated)
 	writeJSON(c, consts.StatusOK, map[string]interface{}{
 		"project_id": created.ProjectID,
 		"workspace":  created.Workspace,
@@ -208,6 +210,7 @@ func (h *Handlers) HandleBookExport(ctx context.Context, c *app.RequestContext) 
 		return
 	}
 	c.Response.Header.Set("Content-Disposition", attachmentContentDisposition(result.Filename))
+	h.app.Analytics().ActionCompleted(analytics.ContentExported)
 	c.Response.Header.Set("Cache-Control", "no-store")
 	c.Data(consts.StatusOK, result.ContentType, result.Data)
 }

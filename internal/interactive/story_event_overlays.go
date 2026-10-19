@@ -31,6 +31,28 @@ func projectStoryEventOverlays(lines []StoryEventRecord) ([]StoryEventRecord, er
 	for _, record := range lines {
 		var targetID string
 		switch record.Envelope.Type {
+		case StoryEventTypeTurnBackgroundRevised:
+			var revision TurnBackgroundRevisedEvent
+			if err := mapToStruct(record.Raw, &revision); err != nil {
+				return nil, err
+			}
+			targetID = revision.TurnID
+			index, ok := turnIndex[targetID]
+			if !ok {
+				return nil, fmt.Errorf("background revision target turn does not exist: %s", targetID)
+			}
+			var turn TurnEvent
+			if err := mapToStruct(projected[index].Raw, &turn); err != nil {
+				return nil, err
+			}
+			if turn.TurnResult == nil {
+				turn.TurnResult = &TurnResult{}
+			}
+			if turn.TurnResult.Presentation == nil {
+				turn.TurnResult.Presentation = &TurnPresentation{}
+			}
+			turn.TurnResult.Presentation.Background = revision.Background
+			projected[index].Raw = storyTurnRaw(turn)
 		case StoryEventTypeTurnNarrativeRevised:
 			var revision TurnNarrativeRevisedEvent
 			if err := mapToStruct(record.Raw, &revision); err != nil {
@@ -46,6 +68,7 @@ func projectStoryEventOverlays(lines []StoryEventRecord) ([]StoryEventRecord, er
 				return nil, err
 			}
 			turn.Narrative = revision.Narrative
+			turn.NarrativeRevision = revision.ID
 			if turn.TerminalOutcome != nil && turn.TerminalOutcome.Terminal && turn.TerminalOutcome.CausedByTurnID == turn.ID {
 				outcome := *turn.TerminalOutcome
 				outcome.FinalNarrativeSummary = trimBytes(revision.Narrative, maxInteractiveTextBytes)

@@ -4,12 +4,10 @@ package reviewapp
 
 import "denova/internal/book"
 
-// Runtime is an immutable project snapshot. DocumentsEnabled distinguishes a
-// Book project from a General project even though both have a file service.
+// Runtime is an immutable Project snapshot shared by Book and General conversations.
 type Runtime struct {
-	Workspace        string
-	StateRoot        string
-	SessionID        string
-	DocumentsEnabled bool
-	BookService      *book.Service
+	Workspace   string
+	StateRoot   string
+	SessionID   string
+	BookService *book.Service
 }

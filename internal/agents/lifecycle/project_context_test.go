@@ -10,7 +10,8 @@ import (
 	"denova/config"
 	"denova/internal/book"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentcontext "github.com/alfredxw/denova/agent/context"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestProjectInstructionsContextSourceIsOrderedVerbatimAndLive(t *testing.T) {
@@ -20,7 +21,7 @@ func TestProjectInstructionsContextSourceIsOrderedVerbatimAndLive(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	fragments, err := source.Materialize(context.Background(), agent.ContextRequest{})
+	fragments, err := source.Materialize(context.Background(), agentcontext.ContextRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +35,7 @@ func TestProjectInstructionsContextSourceIsOrderedVerbatimAndLive(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(workspace, book.CreatorFileName), []byte("Use close third-person narration."), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	fragments, err = source.Materialize(context.Background(), agent.ContextRequest{})
+	fragments, err = source.Materialize(context.Background(), agentcontext.ContextRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +54,7 @@ func TestProjectInstructionsContextSourceIsOrderedVerbatimAndLive(t *testing.T) 
 	for index, want := range wants {
 		fragment := fragments[index]
 		if fragment.Source != want.source || fragment.Resource != want.resource || fragment.Revision == "" ||
-			fragment.Placement != agent.ContextLeadingMessage || fragment.Rendering != agent.ContextRenderVerbatim || fragment.Role != agent.User {
+			fragment.Placement != agentschema.ContextLeadingMessage || fragment.Rendering != agentschema.ContextRenderVerbatim || fragment.Role != agentschema.User {
 			t.Fatalf("unexpected project instruction fragment %d: %#v", index, fragment)
 		}
 		if !strings.HasPrefix(fragment.Content, want.heading+"\n\n"+want.body) || strings.Contains(fragment.Content, "Source:") ||
@@ -65,7 +66,7 @@ func TestProjectInstructionsContextSourceIsOrderedVerbatimAndLive(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(workspace, book.CreatorFileName), []byte("Use first-person narration."), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	next, err := source.Materialize(context.Background(), agent.ContextRequest{})
+	next, err := source.Materialize(context.Background(), agentcontext.ContextRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +103,7 @@ func TestProjectInstructionsContextSourceRejectsEachOversizeFile(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := source.Materialize(context.Background(), agent.ContextRequest{}); err == nil ||
+			if _, err := source.Materialize(context.Background(), agentcontext.ContextRequest{}); err == nil ||
 				!strings.Contains(err.Error(), resource) || !strings.Contains(err.Error(), "project instruction limit") {
 				t.Fatalf("oversize error = %v", err)
 			}

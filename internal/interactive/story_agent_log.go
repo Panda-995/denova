@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"denova/internal/agents/conversationjournal"
 	"denova/internal/agents/sessionjournal"
 	"denova/internal/localfs"
 
@@ -62,4 +63,15 @@ func AgentSessionKeys(contentRoot, novaDir, storyID string) ([]agentsession.Key,
 	}
 	defer handle.journal.Close()
 	return handle.projection.AgentSessions.Keys(), nil
+}
+
+// OpenAgentReader observes a branch without opening an execution writer.
+func OpenAgentReader(ctx context.Context, contentRoot, novaDir, storyID string, key agentsession.Key) (agentsession.Log, error) {
+	store := NewStoreWithNovaDir(contentRoot, novaDir)
+	path := store.storyPath(storyID)
+	meta, err := readStoryJournalHeader(path)
+	if err != nil {
+		return nil, err
+	}
+	return sessionjournal.OpenCurrent(ctx, path, conversationjournal.Identity{ID: storyID, Generation: storyJournalGeneration(meta)}, key)
 }

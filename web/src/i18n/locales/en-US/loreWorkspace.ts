@@ -1,9 +1,9 @@
 const loreWorkspace = {
   'loreWorkspace.title': 'Story Lore',
   'loreWorkspace.directoryTitle': 'Lore Directory',
-  'loreWorkspace.directoryDescription': 'Maintain the material used by the Agent without leaving your writing context.',
   'loreWorkspace.openDirectory': 'Open lore directory',
   'loreWorkspace.openLibrary': 'Open full lore library',
+  'loreWorkspace.rename': 'Rename: {{name}}',
   'loreWorkspace.referenceAgent': 'Reference this lore in the Writing Agent',
   'loreWorkspace.protagonistTag': 'Protagonist',
   'loreWorkspace.markProtagonist': 'Mark as protagonist',

@@ -2,6 +2,7 @@ package update
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -18,9 +19,10 @@ type ApplyInvocation struct {
 	Env        []string
 }
 
-// ApplyScheduler starts denova-updater after the HTTP response has had time to
-// flush, then exits the current Denova process.
+// ApplyScheduler confirms the updater handoff before returning to HTTP, then
+// drains application work and exits after the response has had time to flush.
 type ApplyScheduler struct {
+	Shutdown     func()
 	Delay        time.Duration
 	ManifestPath string
 	Manifest     ApplyManifest
@@ -72,6 +74,9 @@ func (s ApplyScheduler) Schedule(ctx context.Context) error {
 		Args:       []string{manifest.UpdaterExecutable, "--manifest", s.ManifestPath},
 		Env:        append([]string(nil), os.Environ()...),
 	}
+	if err := start(invocation); err != nil {
+		return err
+	}
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -80,28 +85,36 @@ func (s ApplyScheduler) Schedule(ctx context.Context) error {
 		}()
 		logger.InfoContext(ctx, "updater_scheduled", "executable", invocation.Executable, "manifest", s.ManifestPath, "delay", delay)
 		sleep(delay)
-		if err := start(invocation); err != nil {
-			logger.ErrorContext(ctx, "updater_start_failed", "executable", invocation.Executable, "error", err)
-			return
+		if s.Shutdown != nil {
+			s.Shutdown()
 		}
 		exit(0)
 	}()
 	return nil
 }
 
-func (s *Service) Apply(ctx context.Context) (ApplyResult, error) {
-	_ = ctx
+// Apply hands the observed staged transaction to the updater. expectedID must
+// match Status.ID; only an acknowledged handoff may trigger shutdown and exit.
+func (s *Service) Apply(ctx context.Context, shutdown func(), port int, expectedID string) (ApplyResult, error) {
+	if !updateOperation.TryLock() {
+		return ApplyResult{}, ErrUpdateBusy
+	}
+	defer updateOperation.Unlock()
+	unlock, err := s.lockOperation()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	locked := true
+	defer func() {
+		if locked {
+			unlock()
+		}
+	}()
 	if s.executablePath == "" {
 		return ApplyResult{}, fmt.Errorf("cannot locate the current executable")
 	}
 	installDir := filepath.Dir(s.executablePath)
 	manifestPath, err := readPendingManifestRef(updateDataDir(installDir))
-	if err != nil {
-		if legacyPath, legacyErr := readPendingManifestRef(legacyUpdateDataDir(installDir)); legacyErr == nil {
-			manifestPath = legacyPath
-			err = nil
-		}
-	}
 	if err != nil {
 		return ApplyResult{}, err
 	}
@@ -109,10 +122,30 @@ func (s *Service) Apply(ctx context.Context) (ApplyResult, error) {
 	if err != nil {
 		return ApplyResult{}, err
 	}
-	if err := (ApplyScheduler{ManifestPath: manifestPath, Manifest: manifest}).Schedule(ctx); err != nil {
+	if manifest.State != PhaseStaged || manifest.ID != expectedID {
+		return ApplyResult{}, fmt.Errorf("no staged update to apply")
+	}
+	manifest.CurrentPID = os.Getpid()
+	manifest.RelaunchArgs = relaunchArgs(os.Args, s.executablePath)
+	if port > 0 {
+		manifest.RelaunchArgs = append(manifest.RelaunchArgs, "--port", fmt.Sprint(port))
+	}
+	if err := setPhase(manifestPath, &manifest, PhaseWaiting, nil); err != nil {
 		return ApplyResult{}, err
 	}
-	return ApplyResult{Status: "restarting", Version: manifest.Version, LogPath: manifest.LogPath}, nil
+	unlock()
+	locked = false
+	if err := (ApplyScheduler{ManifestPath: manifestPath, Manifest: manifest, Shutdown: shutdown}).Schedule(ctx); err != nil {
+		// startApplyProcess kills and reaps an unacknowledged child before
+		// returning. No files changed and the verified package can be retried.
+		unlock, lockErr := lockInstallation(installDir)
+		if lockErr != nil {
+			return ApplyResult{}, errors.Join(err, lockErr)
+		}
+		defer unlock()
+		return ApplyResult{}, errors.Join(err, setPhase(manifestPath, &manifest, PhaseStaged, err))
+	}
+	return ApplyResult{Status: "restarting", ID: manifest.ID, Version: manifest.Version, LogPath: manifest.LogPath}, nil
 }
 
 func startApplyProcess(invocation ApplyInvocation) error {
@@ -120,9 +153,41 @@ func startApplyProcess(invocation ApplyInvocation) error {
 	if len(invocation.Args) > 1 {
 		args = invocation.Args[1:]
 	}
+	pathToManifest := invocation.Args[len(invocation.Args)-1]
+	if err := os.Remove(pathToManifest + ".accepted"); err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	cmd := exec.Command(invocation.Executable, args...)
 	cmd.Env = invocation.Env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// The child cannot replace files while this process is alive. On failed
+	// handoff, kill and reap it before allowing another attempt.
+	accepted := false
+	defer func() {
+		if !accepted {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		} else {
+			_ = cmd.Process.Release()
+		}
+	}()
+	path := invocation.Args[len(invocation.Args)-1]
+	manifest, err := readManifest(path)
+	if err != nil {
+		return err
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var id string
+		if err := readJSONFile(path+".accepted", &id); err == nil && id == manifest.ID {
+			accepted = true
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("updater did not acknowledge handoff; see %s", manifest.LogPath)
 }

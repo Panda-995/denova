@@ -6,7 +6,9 @@ import (
 
 	"denova/internal/agents/toolresult"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentmiddleware "github.com/alfredxw/denova/agent/engine/middleware"
+	agentmodel "github.com/alfredxw/denova/agent/model"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestModelContextMiddlewaresContainProjectionThenNormalizer(t *testing.T) {
@@ -25,44 +27,44 @@ func TestModelContextMiddlewaresContainProjectionThenNormalizer(t *testing.T) {
 func TestDefaultMaxTokensMiddlewareAppliesProfileCapUnlessCallOverridesIt(t *testing.T) {
 	middleware := NewDefaultMaxTokensMiddleware(4096)
 
-	_, defaulted, err := middleware.BeforeModelCall(context.Background(), &agent.ModelCall{}, &agent.ModelContext{})
+	_, defaulted, err := middleware.BeforeModelCall(context.Background(), &agentmodel.ModelCall{}, &agentmiddleware.ModelContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defaultOptions := agent.GetCommonOptions(&agent.Options{}, defaulted.Options...)
+	defaultOptions := agentmodel.GetCommonOptions(&agentmodel.Options{}, defaulted.Options...)
 	if defaultOptions.MaxTokens == nil || *defaultOptions.MaxTokens != 4096 {
 		t.Fatalf("default max tokens = %#v, want 4096", defaultOptions.MaxTokens)
 	}
 
-	_, overridden, err := middleware.BeforeModelCall(context.Background(), &agent.ModelCall{
-		Options: []agent.ModelOption{agent.WithMaxTokens(512)},
-	}, &agent.ModelContext{})
+	_, overridden, err := middleware.BeforeModelCall(context.Background(), &agentmodel.ModelCall{
+		Options: []agentmodel.ModelOption{agentmodel.WithMaxTokens(512)},
+	}, &agentmiddleware.ModelContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	overriddenOptions := agent.GetCommonOptions(&agent.Options{}, overridden.Options...)
+	overriddenOptions := agentmodel.GetCommonOptions(&agentmodel.Options{}, overridden.Options...)
 	if overriddenOptions.MaxTokens == nil || *overriddenOptions.MaxTokens != 512 {
 		t.Fatalf("explicit max tokens = %#v, want 512", overriddenOptions.MaxTokens)
 	}
 }
 
 func TestModelHistoryProjectionHidesDisabledSettledToolsButPreservesProviderReasoning(t *testing.T) {
-	call := agent.ToolCall{ID: "historical", Type: "function", Function: agent.FunctionCall{Name: "read", Arguments: `{}`}}
-	current := agent.ToolCall{ID: "current", Type: "function", Function: agent.FunctionCall{Name: "read", Arguments: `{}`}}
+	call := agentschema.ToolCall{ID: "historical", Type: "function", Function: agentschema.FunctionCall{Name: "read", Arguments: `{}`}}
+	current := agentschema.ToolCall{ID: "current", Type: "function", Function: agentschema.FunctionCall{Name: "read", Arguments: `{}`}}
 	middleware := NewModelHistoryProjectionMiddleware(toolresult.ContextPolicy{Enabled: false})
-	historicalAnswer := agent.AssistantMessage("old answer", nil)
+	historicalAnswer := agentschema.AssistantMessage("old answer", nil)
 	historicalAnswer.ReasoningContent = "private historical reasoning"
-	currentCall := agent.AssistantMessage("", []agent.ToolCall{current})
+	currentCall := agentschema.AssistantMessage("", []agentschema.ToolCall{current})
 	currentCall.ReasoningContent = "current tool reasoning"
-	_, projected, err := middleware.BeforeModelCall(context.Background(), &agent.ModelCall{Messages: []*agent.Message{
-		agent.UserMessage("old request"),
-		agent.AssistantMessage("", []agent.ToolCall{call}),
-		{Role: agent.ToolRole, ToolCallID: "historical", ToolName: "read", Content: "old result"},
+	_, projected, err := middleware.BeforeModelCall(context.Background(), &agentmodel.ModelCall{Messages: []*agentschema.Message{
+		agentschema.UserMessage("old request"),
+		agentschema.AssistantMessage("", []agentschema.ToolCall{call}),
+		{Role: agentschema.ToolRole, ToolCallID: "historical", ToolName: "read", Content: "old result"},
 		historicalAnswer,
-		agent.UserMessage("current request"),
+		agentschema.UserMessage("current request"),
 		currentCall,
-		{Role: agent.ToolRole, ToolCallID: "current", ToolName: "read", Content: "current result"},
-	}}, &agent.ModelContext{})
+		{Role: agentschema.ToolRole, ToolCallID: "current", ToolName: "read", Content: "current result"},
+	}}, &agentmiddleware.ModelContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,13 +89,13 @@ func TestModelHistoryProjectionHidesDisabledSettledToolsButPreservesProviderReas
 }
 
 func TestContextNormalizerEmitsBoundedRepairMetric(t *testing.T) {
-	missing := agent.ToolCall{ID: "missing", Type: "function", Function: agent.FunctionCall{Name: "read", Arguments: `{}`}}
-	call := &agent.ModelCall{Messages: []*agent.Message{
-		agent.SystemMessage("stable"),
-		agent.AssistantMessage("", []agent.ToolCall{missing}),
+	missing := agentschema.ToolCall{ID: "missing", Type: "function", Function: agentschema.FunctionCall{Name: "read", Arguments: `{}`}}
+	call := &agentmodel.ModelCall{Messages: []*agentschema.Message{
+		agentschema.SystemMessage("stable"),
+		agentschema.AssistantMessage("", []agentschema.ToolCall{missing}),
 	}}
-	middleware := &contextNormalizerMiddleware{BaseMiddleware: &agent.BaseMiddleware{}}
-	modelContext := &agent.ModelContext{}
+	middleware := &contextNormalizerMiddleware{BaseMiddleware: &agentmiddleware.BaseMiddleware{}}
+	modelContext := &agentmiddleware.ModelContext{}
 	_, normalized, err := middleware.BeforeModelCall(context.Background(), call, modelContext)
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +104,7 @@ func TestContextNormalizerEmitsBoundedRepairMetric(t *testing.T) {
 		t.Fatalf("normalized messages = %#v", normalized.Messages)
 	}
 	metrics, ok := modelContext.ContextNormalization()
-	if !ok || metrics != (agent.ContextNormalizationMetrics{RepairCount: 1, MessagesBefore: 2, MessagesAfter: 3}) {
+	if !ok || metrics != (agentmiddleware.ContextNormalizationMetrics{RepairCount: 1, MessagesBefore: 2, MessagesAfter: 3}) {
 		t.Fatalf("normalization metrics = %#v, %v", metrics, ok)
 	}
 }

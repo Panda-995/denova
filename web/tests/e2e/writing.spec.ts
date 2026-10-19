@@ -1,7 +1,7 @@
 import { expect, test } from '../support/fixtures'
 import { createAndOpenBook, createProjectFile, readProjectFile } from '../support/api'
 
-test('edits and persists a chapter through the Writing workbench', async ({ page, request }) => {
+test('edits and persists a chapter through the Writing workbench', { tag: '@smoke' }, async ({ page, request }) => {
   const book = await createAndOpenBook(request, 'Writing E2E Book')
   const chapterPath = 'chapters/e2e-chapter.md'
   await createProjectFile(request, book.projectId, chapterPath, '# 起点\n\n最初的段落。')

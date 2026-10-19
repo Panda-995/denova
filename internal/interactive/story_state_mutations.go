@@ -75,6 +75,15 @@ func (s *Store) AppendStateDelta(storyID string, req AppendStateDeltaRequest) (S
 	}
 	delta := newStateDeltaWithActorOps(nextOps, nextActorOps)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	projection, err := s.storyBranchProjectionLocked(storyID, branchID)
+	if err != nil {
+		return StateDeltaEvent{}, err
+	}
+	director := s.storyDirectorForMeta(meta)
+	actorState := actorStateSystemFromSnapshot(meta.ActorStateSchema, director.ActorState)
+	if err := validateActorResourcesAfterOps(actorState, projection.StateBeforeLatest, nextOps, nextActorOps); err != nil {
+		return StateDeltaEvent{}, err
+	}
 	revision := TurnStateRevisedEvent{
 		V: schemaVersion, Type: StoryEventTypeTurnStateRevised, ID: newID("tsr"),
 		ParentID: parentID, BranchID: branchID, Ts: now, TurnID: parentID,
@@ -215,7 +224,6 @@ func (s *Store) RerollRuleResolution(storyID, resolutionID string, req RuleResol
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	next.CreatedAt = now
 	next.ID = newID("rr")
-	ruleOps, ruleActorOps := applyRuleStateConsumptionV2(state, actorState, target.ID, &next, director.Strategy.RuleStateConsumptionMode)
 	terminalOutcome := terminalOutcomeFromRuleResolution(next, target.ID, target.Narrative)
 	existingOps := []interactivestate.Op{}
 	existingActorOps := []ActorStateOp{}
@@ -223,8 +231,13 @@ func (s *Store) RerollRuleResolution(storyID, resolutionID string, req RuleResol
 		existingOps = append(existingOps, target.StateDelta.Ops...)
 		existingActorOps = append(existingActorOps, target.StateDelta.ActorOps...)
 	}
-	nextOps := append(removeRuleResolutionStateOps(existingOps, target.RuleResolution.ID), ruleOps...)
-	nextActorOps := append(removeRuleResolutionActorOps(existingActorOps, target.RuleResolution.ID), ruleActorOps...)
+	nextOps := removeRuleResolutionStateOps(existingOps, target.RuleResolution.ID)
+	nextActorOps := removeRuleResolutionActorOps(existingActorOps, target.RuleResolution.ID)
+	ruleState := cloneActorStateRoot(state)
+	applyStateDeltaToProjection(ruleState, StateDelta{Ops: nextOps, ActorOps: nextActorOps})
+	ruleOps, ruleActorOps := applyRuleStateConsumptionV2(ruleState, actorState, target.ID, &next, director.Strategy.RuleStateConsumptionMode)
+	nextOps = append(nextOps, ruleOps...)
+	nextActorOps = append(nextActorOps, ruleActorOps...)
 	for _, op := range nextOps {
 		if err := validateStateOp(op); err != nil {
 			return RuleResolution{}, err
@@ -234,6 +247,9 @@ func (s *Store) RerollRuleResolution(storyID, resolutionID string, req RuleResol
 		if err := validateActorStateOp(op); err != nil {
 			return RuleResolution{}, err
 		}
+	}
+	if err := validateActorResourcesAfterOps(actorState, state, nextOps, nextActorOps); err != nil {
+		return RuleResolution{}, err
 	}
 	revision := TurnStateRevisedEvent{
 		V: schemaVersion, Type: StoryEventTypeTurnStateRevised, ID: newID("tsr"),

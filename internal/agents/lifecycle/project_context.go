@@ -13,7 +13,8 @@ import (
 	"denova/config"
 	"denova/internal/book"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentcontext "github.com/alfredxw/denova/agent/context"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 type projectInstructionDefinition struct {
@@ -32,7 +33,7 @@ var projectInstructionDefinitions = [...]projectInstructionDefinition{
 	},
 	{
 		resource: book.CreatorFileName,
-		heading:  "# Creative instructions",
+		heading:  book.CreatorInstructionsHeading,
 		source:   "workspace CREATOR.md",
 		purpose:  "apply stable workspace-level creative instructions",
 	},
@@ -40,7 +41,7 @@ var projectInstructionDefinitions = [...]projectInstructionDefinition{
 
 // NewProjectInstructionsContextSource exposes root AGENTS.md and CREATOR.md as
 // independently attributable stable instructions before conversation history.
-func NewProjectInstructionsContextSource(cfg *config.Config, agentKind string, state *book.State) (agent.ContextSource, error) {
+func NewProjectInstructionsContextSource(cfg *config.Config, agentKind string, state *book.State) (agentcontext.ContextSource, error) {
 	if state == nil {
 		return nil, nil
 	}
@@ -67,7 +68,7 @@ func NewProjectInstructionsContextSource(cfg *config.Config, agentKind string, s
 	return projectInstructionsContextSource{
 		files: book.NewService(workspace),
 		limit: limit,
-		identity: agent.CapabilityIdentity{
+		identity: agentschema.CapabilityIdentity{
 			Kind: "denova.project_instructions.context", Version: 3, ConfigHash: hex.EncodeToString(digest[:]),
 		},
 	}, nil
@@ -76,15 +77,15 @@ func NewProjectInstructionsContextSource(cfg *config.Config, agentKind string, s
 type projectInstructionsContextSource struct {
 	files    *book.Service
 	limit    int
-	identity agent.CapabilityIdentity
+	identity agentschema.CapabilityIdentity
 }
 
-func (source projectInstructionsContextSource) Identity() agent.CapabilityIdentity {
+func (source projectInstructionsContextSource) Identity() agentschema.CapabilityIdentity {
 	return source.identity
 }
 
-func (source projectInstructionsContextSource) Materialize(context.Context, agent.ContextRequest) ([]agent.ContextFragment, error) {
-	fragments := make([]agent.ContextFragment, 0, len(projectInstructionDefinitions))
+func (source projectInstructionsContextSource) Materialize(context.Context, agentcontext.ContextRequest) ([]agentschema.ContextFragment, error) {
+	fragments := make([]agentschema.ContextFragment, 0, len(projectInstructionDefinitions))
 	for _, definition := range projectInstructionDefinitions {
 		raw, err := source.files.ReadFile(definition.resource)
 		if errors.Is(err, os.ErrNotExist) {
@@ -97,15 +98,15 @@ func (source projectInstructionsContextSource) Materialize(context.Context, agen
 		if body == "" {
 			continue
 		}
-		content := definition.heading + "\n\n" + body + "\n\nA later explicit user request takes precedence."
+		content := book.ProjectInstructionsContent(definition.heading, body)
 		if len(content) > source.limit {
 			return nil, fmt.Errorf("%s exceeds the %d-byte project instruction limit", definition.resource, source.limit)
 		}
 		digest := sha256.Sum256([]byte(body))
-		fragments = append(fragments, agent.ContextFragment{
+		fragments = append(fragments, agentschema.ContextFragment{
 			Source: definition.source, Purpose: definition.purpose,
 			Resource: definition.resource, Revision: hex.EncodeToString(digest[:]),
-			Stability: agent.ContextStablePrefix, Placement: agent.ContextLeadingMessage, Rendering: agent.ContextRenderVerbatim, Role: agent.User,
+			Stability: agentschema.ContextStablePrefix, Placement: agentschema.ContextLeadingMessage, Rendering: agentschema.ContextRenderVerbatim, Role: agentschema.User,
 			Content: content, HardLimit: source.limit,
 		})
 	}

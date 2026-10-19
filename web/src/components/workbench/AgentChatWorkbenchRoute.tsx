@@ -1,10 +1,12 @@
-import { lazy, memo } from 'react'
+import { memo } from 'react'
+import loadable from '@loadable/component'
 import type { ComponentProps } from 'react'
-import { RetainedWorkbenchRouteLayer } from './WorkbenchRouteHost'
+import type { AgentChatRoute as AgentChatRouteComponent } from '@/features/agent-chat/AgentChatRoute'
+import { RetainedWorkbenchRouteLayer, workbenchLoadingOptions } from './WorkbenchRouteHost'
 
-const AgentChatRoute = memo(lazy(() => import('@/features/agent-chat/AgentChatRoute').then((module) => ({ default: module.AgentChatRoute }))))
+const AgentChatRoute = memo(loadable(() => import('@/features/agent-chat/AgentChatRoute').then((module) => ({ default: module.AgentChatRoute })), workbenchLoadingOptions))
 
-interface AgentChatWorkbenchRouteProps extends ComponentProps<typeof AgentChatRoute> {
+interface AgentChatWorkbenchRouteProps extends ComponentProps<typeof AgentChatRouteComponent> {
   mounted: boolean
   visible: boolean
   loadingLabel: string

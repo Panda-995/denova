@@ -143,6 +143,41 @@ func (s *InteractiveAppService) UpdateInteractiveTurnNarrative(storyID string, r
 	return result, nil
 }
 
+func (a *App) UpdateInteractiveTurnBackground(storyID string, req interactive.UpdateTurnBackgroundRequest) error {
+	return a.interactiveService().UpdateInteractiveTurnBackground(storyID, req)
+}
+
+func (s *InteractiveAppService) UpdateInteractiveTurnBackground(storyID string, req interactive.UpdateTurnBackgroundRequest) error {
+	s.admission.Lock()
+	defer s.admission.Unlock()
+	store := s.store()
+	if store == nil {
+		return ErrNoWorkspace
+	}
+	storyCtx, err := store.StoryContext(storyID, req.BranchID)
+	if err != nil {
+		return err
+	}
+	fence, err := s.drainInteractiveBinding(context.Background(), storyID, storyCtx.Snapshot.BranchID)
+	if err != nil {
+		return err
+	}
+	a := s.app
+	a.mu.Lock()
+	if err := fence.validateLocked(a); err != nil {
+		a.mu.Unlock()
+		return err
+	}
+	err = store.UpdateTurnBackground(storyID, req)
+	a.mu.Unlock()
+	if err != nil {
+		slog.ErrorContext(context.Background(), fmt.Sprintf("[interactive-turn-edit] update failed story_id=%s branch_id=%s turn_id=%s err=%v", storyID, req.BranchID, req.TurnID, err))
+		return err
+	}
+	slog.InfoContext(context.Background(), "[interactive-presentation] current background updated", "story_id", storyID, "branch_id", req.BranchID, "turn_id", req.TurnID)
+	return nil
+}
+
 func (a *App) UpdateInteractiveBranchPlan(storyID string, req interactive.UpdateBranchPlanRequest) (interactive.UpdateBranchPlanResult, error) {
 	return a.interactiveService().UpdateInteractiveBranchPlan(storyID, req)
 }

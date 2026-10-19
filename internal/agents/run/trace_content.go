@@ -2,13 +2,14 @@ package agentrun
 
 import (
 	"context"
-	agenttool "denova/internal/agents/tool"
 	"fmt"
 	"log/slog"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-	"github.com/alfredxw/denova/agent/providers"
+	agenttool "denova/internal/agents/tool"
+
+	"github.com/alfredxw/denova/agent/model/providers"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 const (
@@ -23,7 +24,7 @@ type TraceContentSink interface {
 	RecordTraceContent(record TraceContentRecord) error
 }
 
-func recordLLMInputTraceContent(span *Span, callID string, cfg providers.ModelConfig, messages []*agent.Message, tools []*agent.ToolInfo) {
+func recordLLMInputTraceContent(span *Span, callID string, cfg providers.ModelConfig, messages []*agentschema.Message, tools []*agentschema.ToolInfo) {
 	if span == nil || span.sink == nil || !traceRuntimeConfigSnapshot().CaptureContent {
 		return
 	}
@@ -48,7 +49,7 @@ func recordLLMInputTraceContent(span *Span, callID string, cfg providers.ModelCo
 	})
 }
 
-func recordLLMOutputTraceContent(span *Span, callID string, message *agent.Message, runErr error) {
+func recordLLMOutputTraceContent(span *Span, callID string, message *agentschema.Message, runErr error) {
 	if span == nil || span.sink == nil || !traceRuntimeConfigSnapshot().CaptureContent {
 		return
 	}

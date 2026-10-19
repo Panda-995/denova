@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-
-	agents "denova/internal/agents"
+	"denova/internal/agents"
 	agentchat "denova/internal/agents/chat"
 	agentexecution "denova/internal/agents/execution"
 	"denova/internal/agents/prompts"
 	agentrun "denova/internal/agents/run"
 	appagentruntime "denova/internal/app/agentruntime"
+
+	"github.com/alfredxw/denova/agent"
 )
 
 // InspectedTurn is the product projection input returned by the same

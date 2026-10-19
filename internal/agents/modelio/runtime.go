@@ -10,11 +10,12 @@ import (
 	"sync"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
-	"github.com/alfredxw/denova/agent/providers"
-	"github.com/alfredxw/denova/agent/providers/builtin"
-
 	"denova/config"
+
+	agentmodel "github.com/alfredxw/denova/agent/model"
+	"github.com/alfredxw/denova/agent/model/providers"
+	"github.com/alfredxw/denova/agent/model/providers/builtin"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 // Catalog is the stable application projection of installed protocol
@@ -167,8 +168,8 @@ func (runtime *Runtime) Probe(ctx context.Context, resolved config.ResolvedModel
 	startedAt := time.Now()
 	response, err := model.Generate(
 		ctx,
-		[]*agent.Message{agent.UserMessage("Reply with exactly OK.")},
-		agent.WithMaxTokens(16),
+		[]*agentschema.Message{agentschema.UserMessage("Reply with exactly OK.")},
+		agentmodel.WithMaxTokens(16),
 	)
 	latency := time.Since(startedAt)
 	if err != nil {
@@ -245,7 +246,7 @@ func loggableModelBaseURL(value string) string {
 	return parsed.String()
 }
 
-func (runtime *Runtime) NewChatModel(ctx context.Context, modelConfig providers.ModelConfig) (agent.ToolCallingChatModel, error) {
+func (runtime *Runtime) NewChatModel(ctx context.Context, modelConfig providers.ModelConfig) (agentmodel.ToolCallingChatModel, error) {
 	registry, err := runtime.providerRegistry()
 	if err != nil {
 		return nil, err

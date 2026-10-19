@@ -1,33 +1,26 @@
 import type { ActorStateField } from '../../types'
 
-export interface NumberMeterGeometry {
-  min: number
-  max: number
-  startPercent: number
+interface NumberMeter {
   widthPercent: number
-  zeroPercent?: number
   tone: 'standard' | 'negative' | 'positive' | 'neutral'
 }
 
-/** Resolves ordinary and zero-centered bounded numbers for every state view. */
-export function resolveNumberMeter(field: ActorStateField, value: unknown): NumberMeterGeometry | null {
+/** Signed ranges show magnitude from the left; color carries the sign. */
+export function resolveNumberMeter(field: ActorStateField, value: unknown, capacity?: number): NumberMeter | null {
+  const min = field.min ?? (field.max_field ? 0 : undefined)
+  const max = field.max_field ? capacity : field.max
   if (typeof value !== 'number' || !Number.isFinite(value)
-    || typeof field.min !== 'number' || !Number.isFinite(field.min)
-    || typeof field.max !== 'number' || !Number.isFinite(field.max)
-    || field.max <= field.min) return null
+    || typeof min !== 'number' || !Number.isFinite(min)
+    || typeof max !== 'number' || !Number.isFinite(max)
+    || max <= min) return null
 
-  const position = numberPosition(value, field.min, field.max)
-  if (field.min < 0 && field.max > 0) {
-    const zero = numberPosition(0, field.min, field.max)
-    if (value < 0) {
-      return { min: field.min, max: field.max, startPercent: position, widthPercent: zero - position, zeroPercent: zero, tone: 'negative' }
+  if (min < 0 && max > 0) {
+    return {
+      widthPercent: Math.min(100, (value < 0 ? value / min : value / max) * 100),
+      tone: value < 0 ? 'negative' : value > 0 ? 'positive' : 'neutral',
     }
-    if (value > 0) {
-      return { min: field.min, max: field.max, startPercent: zero, widthPercent: position - zero, zeroPercent: zero, tone: 'positive' }
-    }
-    return { min: field.min, max: field.max, startPercent: zero, widthPercent: 0, zeroPercent: zero, tone: 'neutral' }
   }
-  return { min: field.min, max: field.max, startPercent: 0, widthPercent: position, tone: 'standard' }
+  return { widthPercent: numberPosition(value, min, max), tone: 'standard' }
 }
 
 function numberPosition(value: number, min: number, max: number) {

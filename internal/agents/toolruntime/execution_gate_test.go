@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
+
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 func TestToolExecutionGateAllowsReadOnlyCallsInParallel(t *testing.T) {
@@ -24,7 +24,7 @@ func TestToolExecutionGateAllowsReadOnlyCallsInParallel(t *testing.T) {
 	}
 	entered := make(chan string, 2)
 	release := make(chan struct{})
-	endpoint := func(ctx context.Context, args string, _ ...agent.ToolOption) (string, error) {
+	endpoint := func(ctx context.Context, args string, _ ...agenttool.ToolOption) (string, error) {
 		entered <- args
 		select {
 		case <-release:
@@ -60,7 +60,7 @@ func TestToolExecutionGateSerializesWritesAcrossMiddlewareInstances(t *testing.T
 	secondRelease := make(chan struct{})
 	var callMu sync.Mutex
 	call := 0
-	endpoint := func(ctx context.Context, _ string, _ ...agent.ToolOption) (string, error) {
+	endpoint := func(ctx context.Context, _ string, _ ...agenttool.ToolOption) (string, error) {
 		callMu.Lock()
 		call++
 		index := call
@@ -172,13 +172,13 @@ func TestToolExecutionGateHoldsExclusiveLockUntilToolRunReturns(t *testing.T) {
 	}
 	entered := make(chan string, 2)
 	releaseExecute := make(chan struct{})
-	execute := mustWrapGateTestEndpoint(t, middleware, "bash", func(context.Context, string, ...agent.ToolOption) (string, error) {
+	execute := mustWrapGateTestEndpoint(t, middleware, "bash", func(context.Context, string, ...agenttool.ToolOption) (string, error) {
 		entered <- "bash"
 		<-releaseExecute
 		return "done", nil
 	})
 	releaseWrite := make(chan struct{})
-	edit := mustWrapGateTestEndpoint(t, middleware, "edit", func(ctx context.Context, _ string, _ ...agent.ToolOption) (string, error) {
+	edit := mustWrapGateTestEndpoint(t, middleware, "edit", func(ctx context.Context, _ string, _ ...agenttool.ToolOption) (string, error) {
 		entered <- "edit"
 		select {
 		case <-releaseWrite:
@@ -211,7 +211,7 @@ func TestToolExecutionGateKeepsLockAfterCancelUntilNonCooperativeToolReturns(t *
 	}
 	entered := make(chan string, 2)
 	releaseExecute := make(chan struct{})
-	execute := mustWrapGateTestEndpoint(t, middleware, "bash", func(context.Context, string, ...agent.ToolOption) (string, error) {
+	execute := mustWrapGateTestEndpoint(t, middleware, "bash", func(context.Context, string, ...agenttool.ToolOption) (string, error) {
 		entered <- "bash"
 		<-releaseExecute
 		return "done", nil
@@ -231,7 +231,7 @@ func TestToolExecutionGateKeepsLockAfterCancelUntilNonCooperativeToolReturns(t *
 		t.Fatalf("first entry = %q", got)
 	}
 	releaseWrite := make(chan struct{})
-	edit := mustWrapGateTestEndpoint(t, middleware, "edit", func(ctx context.Context, _ string, _ ...agent.ToolOption) (string, error) {
+	edit := mustWrapGateTestEndpoint(t, middleware, "edit", func(ctx context.Context, _ string, _ ...agenttool.ToolOption) (string, error) {
 		entered <- "edit"
 		select {
 		case <-releaseWrite:

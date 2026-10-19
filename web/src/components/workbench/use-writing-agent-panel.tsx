@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { memo, useCallback, useMemo, useState } from 'react'
 import type { ComponentProps, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { createStablePortalHost, StablePortalSlot } from '@/components/layout/stable-portal-slot'
@@ -7,6 +7,8 @@ import {
   writeWritingSessionRailVisibility,
   WritingAgentWorkspace,
 } from '@/features/agent-chat/WritingAgentWorkspace'
+
+const StableWritingAgentWorkspace = memo(WritingAgentWorkspace)
 
 type WritingAgentPanelOptions = ComponentProps<typeof WritingAgentWorkspace>
 
@@ -32,7 +34,7 @@ export function useWritingAgentPanel(options: WritingAgentPanelOptions): Writing
     writeWritingSessionRailVisibility(visible)
   }, [])
   const panel = (
-    <WritingAgentWorkspace
+    <StableWritingAgentWorkspace
       key={options.projectId}
       {...options}
       sessionRailVisible={railVisible}

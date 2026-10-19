@@ -5,14 +5,18 @@ import type {
   InteractiveStoryUpdateInput,
   Snapshot,
   StorySummary,
+  PresentationMaterial,
   Teller,
 } from '../types'
 import { DirectorConsole } from './director-console/DirectorConsole'
+import type { LoreItem } from '@/lib/api-client/types'
 import { DEFAULT_STORY_STATE_DISPLAY, type StoryStateDisplayPreference } from './story-state/display-preference'
 
 interface DirectorPanelProps {
+  projectId?: string
   storyId?: string
   story?: StorySummary
+  loreItems?: LoreItem[]
   planningTemplates?: GamePlanningTemplate[]
   tellers?: Teller[]
   imagePresets?: ImagePreset[]
@@ -23,6 +27,7 @@ interface DirectorPanelProps {
   branches: BranchSummary[]
   snapshot: Snapshot | null
   branchPlanEditingDisabled?: boolean
+  onBackgroundChange?: (turnId: string, background?: PresentationMaterial) => Promise<void>
   onBranchPlanUpdate?: (markdown: string, baseRevision: string) => void | Promise<void>
   stateDisplayPreference?: StoryStateDisplayPreference
   onStateDisplayPreferenceChange?: (value: StoryStateDisplayPreference) => void
@@ -31,8 +36,10 @@ interface DirectorPanelProps {
 }
 
 export function DirectorPanel({
+  projectId,
   storyId,
   story,
+  loreItems,
   planningTemplates = [],
   tellers = [],
   imagePresets = [],
@@ -43,6 +50,7 @@ export function DirectorPanel({
   branches,
   snapshot,
   branchPlanEditingDisabled = false,
+  onBackgroundChange,
   onBranchPlanUpdate,
   stateDisplayPreference = DEFAULT_STORY_STATE_DISPLAY,
   onStateDisplayPreferenceChange = noopStateDisplayPreferenceChange,
@@ -51,8 +59,10 @@ export function DirectorPanel({
 }: DirectorPanelProps) {
   return (
     <DirectorConsole
+      projectId={projectId}
       storyId={storyId}
       story={story}
+      loreItems={loreItems}
       planningTemplates={planningTemplates}
       tellers={tellers}
       imagePresets={imagePresets}
@@ -63,6 +73,7 @@ export function DirectorPanel({
       branches={branches}
       snapshot={snapshot}
       branchPlanEditingDisabled={branchPlanEditingDisabled}
+      onBackgroundChange={onBackgroundChange}
       onBranchPlanUpdate={onBranchPlanUpdate}
       stateError={snapshot?.current_turn?.state_error || ''}
       stateDisplayPreference={stateDisplayPreference}

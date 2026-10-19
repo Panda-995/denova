@@ -2,7 +2,6 @@ package asset
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,7 +12,7 @@ import (
 	imagegen "denova/internal/image/generation"
 )
 
-func TestServiceGenerateSavesInteractiveImageAndMeta(t *testing.T) {
+func TestServiceGenerateSavesShallowInteractiveImageWithJournalProvenance(t *testing.T) {
 	workspace := t.TempDir()
 	generator := &interactiveFakeGenerator{
 		result: imagegen.Result{
@@ -33,10 +32,9 @@ func TestServiceGenerateSavesInteractiveImageAndMeta(t *testing.T) {
 	}
 	service := NewServiceWithGenerator(generator)
 	service.now = func() time.Time { return time.Date(2026, 6, 27, 1, 2, 3, 0, time.UTC) }
-	service.suffix = func() string { return "abcd1234" }
 
 	result, err := service.GenerateInteractive(context.Background(), &config.Config{}, book.NewService(workspace), InteractiveGenerateRequest{
-		StoryID:  "story/one",
+		StoryID:  "story-one",
 		BranchID: "main",
 		TurnID:   "turn-1",
 		Prompt:   "画出当前回合",
@@ -48,8 +46,7 @@ func TestServiceGenerateSavesInteractiveImageAndMeta(t *testing.T) {
 	if generator.request.Prompt != "画出当前回合" {
 		t.Fatalf("prompt = %q", generator.request.Prompt)
 	}
-	wantImagePath := "assets/interactive/images/story-one/main/turn-1/20260627-010203-abcd1234/image.png"
-	if result.Schema != InteractiveResultSchema || result.ImagePath != wantImagePath {
+	if result.Schema != InteractiveResultSchema || filepath.ToSlash(filepath.Dir(result.ImagePath)) != "assets/game/story-one" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 	imageBytes, err := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(result.ImagePath)))
@@ -59,16 +56,26 @@ func TestServiceGenerateSavesInteractiveImageAndMeta(t *testing.T) {
 	if string(imageBytes) != "image-bytes" {
 		t.Fatalf("image bytes = %q", string(imageBytes))
 	}
-	metaBytes, err := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(result.MetaPath)))
-	if err != nil {
-		t.Fatalf("read meta failed: %v", err)
+	if result.StoryID != "story-one" || result.BranchID != "main" || result.TurnID != "turn-1" || result.RevisedPrompt != "revised" {
+		t.Fatalf("journal context lost: %#v", result)
 	}
-	var meta interactiveMeta
-	if err := json.Unmarshal(metaBytes, &meta); err != nil {
-		t.Fatalf("unmarshal meta failed: %v", err)
+	if result.MetaPath != "" {
+		t.Fatalf("journaled generation returned metadata: %#v", result)
 	}
-	if meta.Schema != InteractiveResultSchema || meta.Source != interactiveSourceTool || meta.ImagePath != result.ImagePath || meta.Prompt != "画出当前回合" {
-		t.Fatalf("unexpected meta: %#v", meta)
+	if _, err := os.Stat(filepath.Join(workspace, "assets/game/story-one/meta.json")); !os.IsNotExist(err) {
+		t.Fatalf("redundant directory metadata: %v", err)
+	}
+
+	second, err := service.GenerateInteractive(context.Background(), &config.Config{}, book.NewService(workspace), InteractiveGenerateRequest{
+		StoryID: "story-two", BranchID: "main", TurnID: "turn-1", Prompt: "Another scene",
+	})
+	if err != nil || filepath.ToSlash(filepath.Dir(second.ImagePath)) != "assets/game/story-two" {
+		t.Fatalf("different stories must own separate directories: %+v %v", second, err)
+	}
+	if _, err := service.GenerateInteractive(context.Background(), &config.Config{}, book.NewService(workspace), InteractiveGenerateRequest{
+		StoryID: "../writing", BranchID: "main", TurnID: "turn-1", Prompt: "Invalid story",
+	}); err == nil {
+		t.Fatal("story ID must not escape its scene directory")
 	}
 }
 

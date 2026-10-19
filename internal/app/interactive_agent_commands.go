@@ -2,12 +2,13 @@ package app
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strings"
 
 	agentchat "denova/internal/agents/chat"
 	agentexecution "denova/internal/agents/execution"
 	agentrun "denova/internal/agents/run"
+	agentruntime "denova/internal/agents/runtime"
 	apptask "denova/internal/app/task"
 )
 
@@ -30,31 +31,40 @@ func (a *App) SubmitInteractiveAgentCommand(ctx context.Context, command Interac
 
 func (s *InteractiveAppService) SubmitAgentCommand(ctx context.Context, command InteractiveAgentCommand) (agentrun.CommandReceipt, error) {
 	target, err := s.activeAgentCommandTarget(command.StoryID, command.BranchID)
+	if errors.Is(err, ErrNoActiveAgentOperation) {
+		view := s.app.InteractiveAgentActiveView(ctx, command.StoryID, command.BranchID)
+		if view.RuntimeProjectionOK && (command.Kind == agentexecution.CommandCancelQueued || view.Runtime.Phase == agentrun.RunPhaseSuspended) {
+			s.app.mu.RLock()
+			target = interactiveAgentCommandTarget{executionRuntime: s.app.executionRuntime, info: InteractiveTaskInfo{
+				ProjectID: view.Runtime.Binding.ProjectID, Workspace: s.app.workspace,
+				StoryID: view.Runtime.Binding.StoryID, BranchID: view.Runtime.Binding.BranchID,
+			}}
+			s.app.mu.RUnlock()
+			err = nil
+		}
+	}
 	if err != nil {
 		return agentrun.CommandReceipt{}, err
 	}
 	options := interactiveAgentCommandOptions(target)
-	if command.Kind == agentexecution.CommandAbort || command.Kind == agentexecution.CommandSteerQueued || command.Kind == agentexecution.CommandCancelQueued {
-		return target.executionRuntime.SubmitCommand(ctx, agentexecution.CommandRequest{
-			Kind: command.Kind, CommandID: command.CommandID,
-			OperationID: command.OperationID, TargetCommandID: command.TargetCommandID, Reason: command.Reason,
-			Options: options,
-		})
+	var emit func(agentrun.Event)
+	if target.task != nil {
+		emit = target.task.Emit
 	}
-	if command.Kind != agentexecution.CommandFollowUp {
-		return agentrun.CommandReceipt{}, fmt.Errorf("%w: unsupported game command %q", agentrun.ErrInvalidCommand, command.Kind)
+	bound, err := s.app.agentSession(options, target.executionRuntime)
+	if err != nil {
+		return agentrun.CommandReceipt{}, err
 	}
-	return target.executionRuntime.SubmitCommand(ctx, agentexecution.CommandRequest{
-		Kind: command.Kind, CommandID: command.CommandID,
-		OperationID: command.OperationID, AfterOperationID: command.OperationID,
-		Request: command.Input, Emit: target.task.Emit,
-		Options: options,
-	})
+	return bound.Submit(ctx, agentruntime.Command{Kind: command.Kind, CommandID: command.CommandID, OperationID: command.OperationID, TargetCommandID: command.TargetCommandID, Reason: command.Reason, Input: command.Input}, emit)
 }
 
 func interactiveAgentCommandOptions(target interactiveAgentCommandTarget) agentrun.Options {
+	taskID := ""
+	if target.task != nil {
+		taskID = target.task.ID()
+	}
 	return agentrun.Options{
-		AgentKind: agentrun.AgentKindInteractiveStory, ProjectID: target.info.ProjectID, TaskID: target.task.ID(),
+		AgentKind: agentrun.AgentKindInteractiveStory, ProjectID: target.info.ProjectID, TaskID: taskID,
 		StoryID: target.info.StoryID, BranchID: target.info.BranchID,
 		Workspace: target.info.Workspace, Mode: "interactive",
 	}

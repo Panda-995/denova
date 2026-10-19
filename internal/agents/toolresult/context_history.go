@@ -3,9 +3,10 @@ package toolresult
 import (
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 // ContextPolicy controls whether bounded rich tool exchanges are
@@ -31,29 +32,29 @@ func (p ContextPolicy) Normalize() ContextPolicy {
 	return p
 }
 
-func ApplyContextPolicy(messages []*agent.Message, policy ContextPolicy) []*agent.Message {
+func ApplyContextPolicy(messages []*agentschema.Message, policy ContextPolicy) []*agentschema.Message {
 	if len(messages) == 0 {
 		return messages
 	}
 	return filterToolContextMessages(CompleteUnknownToolResults(messages), policy.Normalize())
 }
 
-func filterToolContextMessages(messages []*agent.Message, policy ContextPolicy) []*agent.Message {
+func filterToolContextMessages(messages []*agentschema.Message, policy ContextPolicy) []*agentschema.Message {
 	type callProjection struct {
 		unique      bool
 		resultIndex int
 		results     int
 	}
 
-	filtered := make([]*agent.Message, 0, len(messages))
+	filtered := make([]*agentschema.Message, 0, len(messages))
 	for index := 0; index < len(messages); {
 		message := messages[index]
 		if message == nil {
 			index++
 			continue
 		}
-		if message.Role != agent.Assistant || len(message.ToolCalls) == 0 {
-			if message.Role != agent.ToolRole {
+		if message.Role != agentschema.Assistant || len(message.ToolCalls) == 0 {
+			if message.Role != agentschema.ToolRole {
 				filtered = append(filtered, message)
 			}
 			index++
@@ -96,7 +97,7 @@ func filterToolContextMessages(messages []*agent.Message, policy ContextPolicy) 
 
 		nextAssistant := message.Clone()
 		nextAssistant.ToolCalls = nil
-		retainedResults := make(map[int]agent.ToolCall, len(message.ToolCalls))
+		retainedResults := make(map[int]agentschema.ToolCall, len(message.ToolCalls))
 		for _, call := range message.ToolCalls {
 			callID := strings.TrimSpace(call.ID)
 			projection, found := calls[callID]
@@ -108,7 +109,7 @@ func filterToolContextMessages(messages []*agent.Message, policy ContextPolicy) 
 				(!policy.Enabled && !IsUnknownEffectResult(result.Content)) {
 				continue
 			}
-			normalizedCall, err := agent.NormalizeToolCallForModelContext(call, result.ToolResult)
+			normalizedCall, err := agenttool.NormalizeToolCallForModelContext(call, result.ToolResult)
 			if err != nil {
 				continue
 			}
@@ -133,14 +134,14 @@ func filterToolContextMessages(messages []*agent.Message, policy ContextPolicy) 
 	return filtered
 }
 
-func toolResultBatchEnd(messages []*agent.Message, assistantIndex int) int {
+func toolResultBatchEnd(messages []*agentschema.Message, assistantIndex int) int {
 	end := assistantIndex + 1
 	for end < len(messages) {
 		if messages[end] == nil {
 			end++
 			continue
 		}
-		if messages[end].Role != agent.ToolRole {
+		if messages[end].Role != agentschema.ToolRole {
 			break
 		}
 		end++

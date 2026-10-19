@@ -232,6 +232,7 @@ export interface LedgerFieldEntry {
 
 export interface LedgerFieldItem extends LedgerFieldEntry {
   renderer: StateFieldRenderer
+  capacity?: number
   change: ClassifiedStateChange | null
 }
 
@@ -251,8 +252,12 @@ export interface LedgerFieldGroup {
 export function buildLedgerGroups(entries: LedgerFieldEntry[], changes: StoryStateChange[]): LedgerFieldGroup[] {
   const groups: LedgerFieldGroup[] = []
   const byKey = new Map<string, LedgerFieldGroup>()
+  const byName = new Map(entries.map((entry) => [entry.field?.name || entry.id, entry]))
+  const capacities = new Set(entries.flatMap((entry) => entry.field?.max_field ? [entry.field.max_field] : []))
   for (const entry of entries) {
-    const layout = resolveStateFieldLayout(entry.field, entry.value)
+    if (capacities.has(entry.field?.name || entry.id)) continue
+    const capacity = entry.field?.max_field ? byName.get(entry.field.max_field)?.value : undefined
+    const layout = resolveStateFieldLayout(entry.field, entry.value, capacity)
     let group = byKey.get(layout.group)
     if (!group) {
       group = { key: layout.group, custom: layout.customGroup, fields: [] }
@@ -260,10 +265,13 @@ export function buildLedgerGroups(entries: LedgerFieldEntry[], changes: StorySta
       groups.push(group)
     }
     const fieldChanges = matchFieldChanges(changes, entry)
+    const capacityEntry = entry.field?.max_field ? byName.get(entry.field.max_field) : undefined
     group.fields.push({
       ...entry,
       renderer: layout.renderer,
-      change: mergeFieldChanges(fieldChanges, typeof entry.value === 'number'),
+      capacity: typeof capacity === 'number' ? capacity : undefined,
+      change: mergeFieldChanges(fieldChanges, typeof entry.value === 'number')
+        || (capacityEntry ? mergeFieldChanges(matchFieldChanges(changes, capacityEntry), false) : null),
     })
   }
   return groups.sort((left, right) => (

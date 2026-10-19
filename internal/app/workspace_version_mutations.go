@@ -57,12 +57,11 @@ func (a *App) VersionStatus(ctx context.Context) (book.VersionStatus, error) {
 }
 
 func (s *workspaceService) VersionStatus(ctx context.Context) (book.VersionStatus, error) {
-	_ = ctx
 	versionService := s.versionService()
 	if versionService == nil {
 		return book.VersionStatus{}, ErrNoWorkspace
 	}
-	return versionService.Status(s.versionAutoSettings())
+	return versionService.Status(ctx, s.versionAutoSettings())
 }
 
 // VersionHistory 返回当前书籍 workspace 的版本历史。
@@ -125,7 +124,7 @@ func (s *workspaceService) VersionDiff(ctx context.Context, id, path string, com
 	if versionService == nil {
 		return book.VersionDiff{}, ErrNoWorkspace
 	}
-	return versionService.Diff(id, path, comparison)
+	return versionService.Diff(id, book.VersionDiffOptions{Path: path, Comparison: comparison})
 }
 
 // VersionRestorePlan 返回恢复版本前的影响预览。
@@ -257,13 +256,13 @@ func (a *App) CreateProjectVersion(ctx context.Context, projectID, message strin
 	)
 }
 
-func (a *App) ProjectVersionDiff(ctx context.Context, projectID, versionID, path string, comparison book.VersionDiffComparison) (book.VersionDiff, error) {
+func (a *App) ProjectVersionDiff(ctx context.Context, projectID, versionID string, options book.VersionDiffOptions) (book.VersionDiff, error) {
 	operation, err := a.AcquireProjectOperation(ctx, projectID)
 	if err != nil {
 		return book.VersionDiff{}, err
 	}
 	defer operation.Release()
-	return a.ProjectFiles().VersionDiff(operation.Context(), operation.Layout().ProjectID, versionID, path, comparison)
+	return a.ProjectFiles().VersionDiff(operation.Context(), operation.Layout().ProjectID, versionID, options)
 }
 
 func (a *App) ProjectVersionRestorePlan(ctx context.Context, projectID, versionID string, paths []string) (book.VersionRestorePlan, error) {

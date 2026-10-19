@@ -66,18 +66,13 @@ func normalizeLoreProvenance(value *Provenance) *Provenance {
 	return normalized
 }
 
-func firstLoreImage(value, fallback *Image) *Image {
-	if value != nil {
-		return value
-	}
-	return fallback
-}
-
 func normalizeLoreItemImage(image *Image) *Image {
 	if image == nil {
 		return nil
 	}
 	normalized := *image
+	// Remote covers are resolved from Materials; legacy images only persist files.
+	normalized.ImageURL = ""
 	normalized.Schema = strings.TrimSpace(normalized.Schema)
 	normalized.ImagePath = filepath.ToSlash(strings.TrimSpace(normalized.ImagePath))
 	normalized.MetaPath = filepath.ToSlash(strings.TrimSpace(normalized.MetaPath))
@@ -182,14 +177,13 @@ func (item Item) EffectiveKeywords() []string {
 	return normalizeLoreKeywords(append(append([]string{item.Name}, item.Tags...), item.Keywords...))
 }
 
-// NormalizeType returns one canonical lore type, falling back to other.
+// NormalizeType normalizes a category reference. Membership belongs to the
+// collection, not a global enum, so custom IDs survive all read projections.
 func NormalizeType(t string) string {
-	switch strings.TrimSpace(t) {
-	case "character", "world", "location", "faction", "rule", "item", "other":
-		return strings.TrimSpace(t)
-	default:
-		return "other"
+	if t = strings.TrimSpace(t); t == "" {
+		return "world"
 	}
+	return t
 }
 
 func normalizeOptionalLoreType(t string) string {
@@ -242,23 +236,19 @@ func normalizeLoreStringList(values []string) []string {
 	return result
 }
 
-func newLoreID(name, itemType string) string {
+// NewItemID derives a permanent, readable identity from the initial name.
+// Callers must include existing and reserved IDs and serialize allocation with
+// persistence. Renaming an existing item must never call this function.
+func NewItemID(items []Item, name string) (string, error) {
 	base := loreIDBaseFromName(name)
 	if base == "" {
-		base = NormalizeType(itemType)
+		return "", ErrNameRequiredForID
 	}
-	return base
-}
-
-func newUniqueLoreID(items []Item, name, itemType string) string {
-	return uniqueLoreIDFromBase(items, newLoreID(name, itemType))
+	return uniqueLoreIDFromBase(items, base), nil
 }
 
 func uniqueLoreIDFromBase(items []Item, base string) string {
 	base = normalizeLoreID(base)
-	if base == "" {
-		base = newLoreID("", "other")
-	}
 	if loreItemIndex(items, base) < 0 {
 		return base
 	}
@@ -393,11 +383,11 @@ func TypeLabel(t string) string {
 	case "character":
 		return "角色"
 	case "world":
-		return "世界观"
+		return "世界设定"
 	case "location":
 		return "地点"
 	case "faction":
-		return "势力"
+		return "组织"
 	case "rule":
 		return "规则"
 	case "item":

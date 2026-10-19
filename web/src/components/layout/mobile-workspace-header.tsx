@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, type ReactNode } from 'react'
+import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Menu } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -20,7 +20,8 @@ export function MobileWorkspaceHeaderScope({ visible, children }: { visible: boo
  * Keep this provider mounted across breakpoints to preserve portalled editors. */
 export function MobileWorkspaceHeaderProvider({ route, children }: { route: HeaderRoute; children: ReactNode }) {
   const [host] = useState(() => createStablePortalHost('flex min-w-0 flex-1 items-center'))
-  return <HeaderHost.Provider value={{ host, route }}>{children}</HeaderHost.Provider>
+  const value = useMemo(() => ({ host, route }), [host, route])
+  return <HeaderHost.Provider value={value}>{children}</HeaderHost.Provider>
 }
 
 export function MobileWorkspaceHeader({ route, children }: { route: HeaderRoute; children: ReactNode }) {

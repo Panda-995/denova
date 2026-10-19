@@ -7,14 +7,14 @@ import (
 	"log/slog"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/cloudwego/hertz/pkg/protocol/consts"
-
 	agentchat "denova/internal/agents/chat"
 	"denova/internal/api/sse"
 	novaApp "denova/internal/app"
 	workspacechange "denova/internal/workspace/change"
+
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
+	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/protocol/consts"
 )
 
 // handleChat 处理聊天请求：启动后台 Task，然后以 AI SDK UIMessage stream 订阅事件。
@@ -129,11 +129,11 @@ func (h *Handlers) writeChatPreparationError(c *app.RequestContext, err error) {
 // admission. A 4xx response lets clients settle the attempt instead of retaining
 // an uncertain command identity as they must for network and server failures.
 func writeAgentHistoryError(c *app.RequestContext, err error) bool {
-	if !errors.Is(err, agent.ErrInvalidCanonicalMessages) {
+	if !errors.Is(err, agentcanonical.ErrInvalidCanonicalMessages) {
 		return false
 	}
 	writeAgentRuntimeError(c, consts.StatusConflict, "agent_runtime.invalid_history",
-		messageKey(c, "api.chat.invalidHistory"), nil)
+		messageKey(c, "api.chat.invalidHistory"), map[string]any{"detail": err.Error()})
 	return true
 }
 
@@ -217,8 +217,8 @@ func (h *Handlers) HandleChatActive(ctx context.Context, c *app.RequestContext) 
 		response := map[string]interface{}{
 			"active": false,
 		}
-		if view.PendingAsk != nil {
-			response["pending_ask"] = view.PendingAsk
+		if len(view.PendingAsks) > 0 {
+			response["pending_asks"] = view.PendingAsks
 		}
 		if view.PendingInterruptionID != "" {
 			response["pending_interruption_id"] = view.PendingInterruptionID
@@ -235,8 +235,8 @@ func (h *Handlers) HandleChatActive(ctx context.Context, c *app.RequestContext) 
 		"task_id":       view.Task.ID,
 		"stream_cursor": view.Task.Cursor,
 	}
-	if view.PendingAsk != nil {
-		response["pending_ask"] = view.PendingAsk
+	if len(view.PendingAsks) > 0 {
+		response["pending_asks"] = view.PendingAsks
 	}
 	if view.PendingInterruptionID != "" {
 		response["pending_interruption_id"] = view.PendingInterruptionID

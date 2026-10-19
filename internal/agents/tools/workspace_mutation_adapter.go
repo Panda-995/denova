@@ -10,10 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-	agenttools "github.com/alfredxw/denova/agent/tools"
-
 	workspacechange "denova/internal/workspace/change"
+
+	agentexecution "github.com/alfredxw/denova/agent/engine/execution"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttools "github.com/alfredxw/denova/agent/tool/builtin"
 )
 
 const ignoredDeleteEditsWarning = `Deletion succeeded. Ignored "edits" because operation="delete" takes precedence. Do not retry.`
@@ -68,12 +69,12 @@ type workspaceMutationAdapter struct {
 	metadata  WorkspaceMetadataProvider
 }
 
-func (adapter *workspaceMutationAdapter) Identity() agent.CapabilityIdentity {
+func (adapter *workspaceMutationAdapter) Identity() agentschema.CapabilityIdentity {
 	if adapter == nil {
-		return agent.CapabilityIdentity{}
+		return agentschema.CapabilityIdentity{}
 	}
 	digest := sha256.Sum256([]byte(adapter.workspace))
-	return agent.CapabilityIdentity{
+	return agentschema.CapabilityIdentity{
 		Kind: "denova.workspace.mutation", Version: 1, ConfigHash: hex.EncodeToString(digest[:]),
 	}
 }
@@ -94,25 +95,25 @@ func newWorkspaceMutationAdapter(changes workspaceChangeService, metadataProvide
 	}, nil
 }
 
-func (adapter *workspaceMutationAdapter) Edit(ctx context.Context, request agenttools.EditRequest) (agent.ToolResult, error) {
+func (adapter *workspaceMutationAdapter) Edit(ctx context.Context, request agenttools.EditRequest) (agentschema.ToolResult, error) {
 	if adapter == nil || adapter.changes == nil {
-		return agent.ToolResult{}, fmt.Errorf("workspace mutation adapter is not configured")
+		return agentschema.ToolResult{}, fmt.Errorf("workspace mutation adapter is not configured")
 	}
 	switch request.Operation {
 	case "", agenttools.EditOperationReplace:
 		if len(request.Edits) == 0 {
-			return agent.ToolResult{}, fmt.Errorf("edit replace requires at least one edits item")
+			return agentschema.ToolResult{}, fmt.Errorf("edit replace requires at least one edits item")
 		}
 	case agenttools.EditOperationDelete:
 		if len(request.Edits) != 0 {
-			return agent.ToolResult{}, fmt.Errorf("normalized edit delete must not include edits")
+			return agentschema.ToolResult{}, fmt.Errorf("normalized edit delete must not include edits")
 		}
 	default:
-		return agent.ToolResult{}, fmt.Errorf("unsupported edit operation %q", request.Operation)
+		return agentschema.ToolResult{}, fmt.Errorf("unsupported edit operation %q", request.Operation)
 	}
 	baseRevision, err := currentWorkspaceBaseRevision(adapter.changes, request.Path)
 	if err != nil {
-		return agent.ToolResult{}, err
+		return agentschema.ToolResult{}, err
 	}
 	if request.Operation == agenttools.EditOperationDelete {
 		changeSet, deleteErr := adapter.changes.DeleteFile(ctx, workspacechange.DeleteFileRequest{
@@ -120,7 +121,7 @@ func (adapter *workspaceMutationAdapter) Edit(ctx context.Context, request agent
 			Metadata: workspaceChangeMetadata(ctx, adapter.metadata),
 		})
 		if deleteErr != nil {
-			return agent.ToolResult{}, deleteErr
+			return agentschema.ToolResult{}, deleteErr
 		}
 		if request.IgnoredEditCount > 0 {
 			return workspaceChangeToolResult(adapter.workspace, changeSet, ignoredDeleteEditsWarning)
@@ -139,18 +140,18 @@ func (adapter *workspaceMutationAdapter) Edit(ctx context.Context, request agent
 		Metadata: workspaceChangeMetadata(ctx, adapter.metadata),
 	})
 	if err != nil {
-		return agent.ToolResult{}, err
+		return agentschema.ToolResult{}, err
 	}
 	return workspaceChangeToolResult(adapter.workspace, changeSet)
 }
 
-func (adapter *workspaceMutationAdapter) Write(ctx context.Context, request agenttools.WriteRequest) (agent.ToolResult, error) {
+func (adapter *workspaceMutationAdapter) Write(ctx context.Context, request agenttools.WriteRequest) (agentschema.ToolResult, error) {
 	if adapter == nil || adapter.changes == nil {
-		return agent.ToolResult{}, fmt.Errorf("workspace mutation adapter is not configured")
+		return agentschema.ToolResult{}, fmt.Errorf("workspace mutation adapter is not configured")
 	}
 	baseRevision, err := currentWorkspaceBaseRevisionOrMissing(adapter.changes, request.Path)
 	if err != nil {
-		return agent.ToolResult{}, err
+		return agentschema.ToolResult{}, err
 	}
 	changeSet, err := adapter.changes.ReplaceFile(ctx, workspacechange.ReplaceFileRequest{
 		Path: request.Path, Content: request.Content, BaseRevision: baseRevision,
@@ -160,7 +161,7 @@ func (adapter *workspaceMutationAdapter) Write(ctx context.Context, request agen
 		if result, ok := workspaceWriteNoChangeToolResult(err); ok {
 			return result, nil
 		}
-		return agent.ToolResult{}, err
+		return agentschema.ToolResult{}, err
 	}
 	return workspaceChangeToolResult(adapter.workspace, changeSet)
 }
@@ -173,10 +174,10 @@ type workspaceWriteNoChangeReceipt struct {
 	WorkspaceMutated bool   `json:"workspace_mutated"`
 }
 
-func workspaceWriteNoChangeToolResult(err error) (agent.ToolResult, bool) {
+func workspaceWriteNoChangeToolResult(err error) (agentschema.ToolResult, bool) {
 	var changeErr *workspacechange.Error
 	if !errors.As(err, &changeErr) || changeErr == nil || changeErr.Code != workspacechange.ErrorCodeNoChange {
-		return agent.ToolResult{}, false
+		return agentschema.ToolResult{}, false
 	}
 	path, _ := changeErr.Details["path"].(string)
 	receipt := workspaceWriteNoChangeReceipt{
@@ -186,9 +187,9 @@ func workspaceWriteNoChangeToolResult(err error) (agent.ToolResult, bool) {
 	}
 	data, marshalErr := json.Marshal(receipt)
 	if marshalErr != nil {
-		return agent.ToolResult{}, false
+		return agentschema.ToolResult{}, false
 	}
-	result := agent.TextToolResult(string(data))
+	result := agentschema.TextToolResult(string(data))
 	result.Details = json.RawMessage(data)
 	return result, true
 }
@@ -243,7 +244,7 @@ func workspaceChangeMetadata(ctx context.Context, provider WorkspaceMetadataProv
 	if provider != nil {
 		return provider(ctx)
 	}
-	callID := agent.ToolExecutionID(ctx, strings.TrimSpace(agent.ToolCallID(ctx)))
+	callID := agentexecution.ToolExecutionID(ctx, strings.TrimSpace(agentexecution.ToolCallID(ctx)))
 	return workspacechange.ChangeMetadata{
 		Origin:        workspacechange.OriginAgent,
 		ChangeGroupID: callID,
@@ -251,12 +252,12 @@ func workspaceChangeMetadata(ctx context.Context, provider WorkspaceMetadataProv
 	}
 }
 
-func workspaceChangeToolResult(workspace string, changeSet workspacechange.ChangeSet, warnings ...string) (agent.ToolResult, error) {
+func workspaceChangeToolResult(workspace string, changeSet workspacechange.ChangeSet, warnings ...string) (agentschema.ToolResult, error) {
 	content, err := workspacechange.MarshalToolReceipt(changeSet, warnings...)
 	if err != nil {
-		return agent.ToolResult{}, fmt.Errorf("serialize workspace change receipt: %w", err)
+		return agentschema.ToolResult{}, fmt.Errorf("serialize workspace change receipt: %w", err)
 	}
-	result := agent.TextToolResult(content)
+	result := agentschema.TextToolResult(content)
 	result.Details = json.RawMessage(content)
 	return result, nil
 }

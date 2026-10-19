@@ -8,7 +8,9 @@ import (
 
 	"denova/config"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentcompaction "github.com/alfredxw/denova/agent/context/compaction"
+	agentmodel "github.com/alfredxw/denova/agent/model"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestAgentManagerSummaryLimitUsesTightestTargetContextLimit(t *testing.T) {
@@ -21,7 +23,7 @@ func TestAgentManagerSummaryLimitUsesTightestTargetContextLimit(t *testing.T) {
 		MaxFragmentBytes:  &fragmentBytes, MaxTotalInjectedBytes: &totalBytes,
 		MaxProviderInputBytes: &providerBytes,
 	}}}
-	manager, err := NewAgentManager(cfg, config.AgentKindIDE, nil, agent.CapabilityIdentity{Kind: "test.model", Version: 1})
+	manager, err := NewAgentManager(cfg, config.AgentKindIDE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,21 +34,23 @@ func TestAgentManagerSummaryLimitUsesTightestTargetContextLimit(t *testing.T) {
 
 func TestAgentManagerForModelSeparatesPolicyKindFromConcreteModelWindow(t *testing.T) {
 	cfg := &config.Config{OpenAIContextWindowTokens: 100_000}
-	identity := agent.CapabilityIdentity{Kind: "test.model.child-window", Version: 1}
-	small, err := NewAgentManagerForModel(cfg, config.AgentKindIDE, 12_000, nil, identity)
+	small, err := NewAgentManagerForModel(cfg, config.AgentKindIDE, 12_000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	large, err := NewAgentManagerForModel(cfg, config.AgentKindIDE, 24_000, nil, identity)
+	large, err := NewAgentManagerForModel(cfg, config.AgentKindIDE, 24_000)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if small.Identity() == large.Identity() {
 		t.Fatal("concrete model context window did not change Compaction behavior identity")
 	}
-	messages := []*agent.Message{agent.UserMessage(strings.Repeat("history ", 200)), agent.AssistantMessage("answer", nil), agent.UserMessage("continue")}
-	plan, err := small.Plan(context.Background(), agent.CompactionPlanRequest{
-		Messages: messages, ModelRequest: messages, ModelSnapshot: (&agent.ModelCall{Messages: messages}).Snapshot(), Force: true,
+	messages := []*agentschema.Message{agentschema.UserMessage(strings.Repeat("history ", 200)), agentschema.AssistantMessage("answer", nil), agentschema.UserMessage("continue")}
+	plan, err := small.Plan(context.Background(), agentcompaction.CompactionPlanRequest{
+		Groups: []agentcompaction.CompactionGroup{{Messages: messages[:2]}}, ModelSnapshot: (&agentmodel.ModelCall{Messages: messages}).Snapshot(), Force: true,
+		EstimateAfter: func(int) (agentmodel.InputSize, error) {
+			return (agentmodel.InputEstimator{}).Estimate(messages[2:], nil)
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -56,85 +60,102 @@ func TestAgentManagerForModelSeparatesPolicyKindFromConcreteModelWindow(t *testi
 	}
 }
 
+func TestElisionPolicySharesProductControlAndUsesConcreteChildBudget(t *testing.T) {
+	threshold := .5
+	enabled := false
+	cfg := &config.Config{OpenAIContextWindowTokens: 100_000, AgentContexts: config.AgentContextSettings{
+		IDE:              config.AgentContextOverride{CompactionThreshold: &threshold},
+		InteractiveStory: config.AgentContextOverride{CompactionEnabled: &enabled},
+	}}
+	policy := NewElisionPolicyForModel(cfg, config.AgentKindIDE, 12_000)
+	if policy == nil || policy.ContextWindowTokens != 12_000 || policy.TriggerRatio >= threshold || policy.ReservedTokens <= 0 {
+		t.Fatalf("child Elision policy ignored inherited control or actual budget: %+v", policy)
+	}
+	if got := NewElisionPolicyForModel(cfg, config.AgentKindInteractiveStory, 12_000); got != nil {
+		t.Fatalf("disabled automatic maintenance still enabled Elision: %+v", got)
+	}
+}
+
 func TestCompactionSummarizerIdentityIncludesCheckpointGuidance(t *testing.T) {
 	guidance := "Preserve verification evidence."
-	base := denovaSummarizer{agentKind: config.AgentKindIDE, contextWindowTokens: 100_000}
-	configured := base
-	configured.cfg = &config.Config{AgentContexts: config.AgentContextSettings{
+	base, err := NewAgentManager(&config.Config{OpenAIContextWindowTokens: 100_000}, config.AgentKindIDE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured, err := NewAgentManager(&config.Config{OpenAIContextWindowTokens: 100_000, AgentContexts: config.AgentContextSettings{
 		IDE: config.AgentContextOverride{CheckpointGuidance: &guidance},
-	}}
+	}}, config.AgentKindIDE)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if base.Identity() == configured.Identity() {
-		t.Fatal("checkpoint guidance did not change the compaction summarizer identity")
+		t.Fatal("checkpoint guidance did not change the compaction identity")
 	}
 }
 
 func TestAgentManagerAdvancesBeforeCacheSafeForkCapacityIsExhausted(t *testing.T) {
 	cfg := &config.Config{OpenAIContextWindowTokens: 100_000}
-	manager, err := NewAgentManager(
-		cfg,
-		config.AgentKindIDE,
-		&compactionForkCaptureModel{response: agent.AssistantMessage("unused", nil)},
-		agent.CapabilityIdentity{Kind: "test.model.capacity-preflight", Version: 1},
-	)
+	manager, err := NewAgentManager(cfg, config.AgentKindIDE)
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := []*agent.Message{
-		agent.UserMessage(strings.Repeat("old request ", 6_000)),
-		agent.AssistantMessage(strings.Repeat("old answer ", 6_000), nil),
-		agent.UserMessage("current request"),
+	source := []*agentschema.Message{
+		agentschema.UserMessage(strings.Repeat("old request ", 6_000)),
+		agentschema.AssistantMessage(strings.Repeat("old answer ", 6_000), nil),
+		agentschema.UserMessage("current request"),
+		agentschema.AssistantMessage("", []agentschema.ToolCall{{
+			ID: "latest-evidence", Type: "function", Function: agentschema.FunctionCall{Name: "read", Arguments: `{}`},
+		}}),
+		agentschema.ToolMessage(agentschema.TextToolResult("Latest original evidence"), "latest-evidence", agentschema.WithToolName("read")),
 	}
-	primary := append([]*agent.Message{agent.SystemMessage("stable system")}, source...)
-	call := &agent.ModelCall{
+	primary := append([]*agentschema.Message{agentschema.SystemMessage("stable system")}, source...)
+	call := &agentmodel.ModelCall{
 		Messages: primary,
-		Options:  []agent.ModelOption{agent.WithTools(nil), agent.WithMaxTokens(70_000)},
+		Options:  []agentmodel.ModelOption{agentmodel.WithTools(nil), agentmodel.WithMaxTokens(70_000)},
 	}
-	plan, err := manager.Plan(context.Background(), agent.CompactionPlanRequest{
-		Messages: source, ModelRequest: primary, ModelSnapshot: call.Snapshot(),
+	plan, err := manager.Plan(context.Background(), agentcompaction.CompactionPlanRequest{
+		Groups: []agentcompaction.CompactionGroup{{Messages: source[:2]}}, ModelSnapshot: call.Snapshot(),
+		EstimateAfter: func(int) (agentmodel.InputSize, error) {
+			return call.Snapshot().WithMessages(append(primary[:1:1], source[2:]...)).EstimateInput()
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Action != agent.CompactionCreate || plan.SourceTo <= plan.SourceFrom {
+	if plan.Action != agentcompaction.CompactionCreate || plan.GroupCount != 1 {
 		t.Fatalf("capacity preflight plan = %#v", plan)
 	}
 }
 
 func TestAgentManagerCompactionForkPreservesFinalModelRequestIdentity(t *testing.T) {
-	response := agent.AssistantMessage("## Goal\nPreserve the exact task.", nil)
+	response := agentschema.AssistantMessage("## Goal\nPreserve the exact task.", nil)
 	model := &compactionForkCaptureModel{response: response}
 	cfg := &config.Config{OpenAIContextWindowTokens: 100_000}
-	manager, err := NewAgentManager(
-		cfg,
-		config.AgentKindIDE,
-		model,
-		agent.CapabilityIdentity{Kind: "test.model.cache-fork", Version: 1},
-	)
+	manager, err := NewAgentManager(cfg, config.AgentKindIDE)
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := []*agent.Message{
-		agent.UserMessage("old request"),
-		agent.AssistantMessage("old answer", nil),
+	source := []*agentschema.Message{
+		agentschema.UserMessage("old request"),
+		agentschema.AssistantMessage("old answer", nil),
 	}
-	primary := []*agent.Message{
-		agent.SystemMessage("stable system"),
+	primary := []*agentschema.Message{
+		agentschema.SystemMessage("stable system"),
 		source[0].Clone(),
 		source[1].Clone(),
-		agent.UserMessage("current request"),
+		agentschema.UserMessage("current request"),
 	}
-	tools := []*agent.ToolInfo{{Name: "read", Desc: "read files"}}
-	call := &agent.ModelCall{
+	tools := []*agentschema.ToolInfo{{Name: "read", Desc: "read files"}}
+	call := &agentmodel.ModelCall{
 		Model: model, Messages: primary,
-		Options: []agent.ModelOption{
-			agent.WithTools(tools),
-			agent.WithMaxTokens(2048),
-			agent.WithToolChoice(agent.ToolChoiceAllowed, "read"),
+		Options: []agentmodel.ModelOption{
+			agentmodel.WithTools(tools),
+			agentmodel.WithMaxTokens(2048),
+			agentmodel.WithToolChoice(agentmodel.ToolChoiceAllowed, "read"),
 		},
 	}
-	checkpoint, err := manager.Compact(context.Background(), agent.CompactionCompactRequest{
-		Messages: source, ModelRequest: primary, ModelSnapshot: call.Snapshot(),
-		Plan: agent.CompactionPlan{Action: agent.CompactionCreate, SourceFrom: 0, SourceTo: len(source)},
+	checkpoint, err := manager.Compact(context.Background(), agentcompaction.CompactionCompactRequest{
+		Messages: source, ModelSnapshot: call.Snapshot(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +168,7 @@ func TestAgentManagerCompactionForkPreservesFinalModelRequestIdentity(t *testing
 	}
 	resolved := model.options[0]
 	if len(resolved.Tools) != 1 || resolved.Tools[0].Name != "read" || resolved.MaxTokens == nil || *resolved.MaxTokens != 4000 ||
-		resolved.ToolChoice == nil || *resolved.ToolChoice != agent.ToolChoiceAllowed ||
+		resolved.ToolChoice == nil || *resolved.ToolChoice != agentmodel.ToolChoiceAllowed ||
 		!reflect.DeepEqual(resolved.AllowedToolNames, []string{"read"}) {
 		t.Fatalf("compaction fork changed model options: %#v", resolved)
 	}
@@ -155,35 +176,31 @@ func TestAgentManagerCompactionForkPreservesFinalModelRequestIdentity(t *testing
 
 func TestAgentManagerCompactionDoesNotSummarizeModelHiddenToolHistory(t *testing.T) {
 	disabled := false
-	model := &compactionForkCaptureModel{response: agent.AssistantMessage("summary without hidden tool body", nil)}
+	model := &compactionForkCaptureModel{response: agentschema.AssistantMessage("summary without hidden tool body", nil)}
 	cfg := &config.Config{
 		OpenAIContextWindowTokens: 100_000,
 		AgentContexts: config.AgentContextSettings{IDE: config.AgentContextOverride{
 			ToolResultContextEnabled: &disabled,
 		}},
 	}
-	manager, err := NewAgentManager(
-		cfg, config.AgentKindIDE, model,
-		agent.CapabilityIdentity{Kind: "test.model.hidden-tool-compaction", Version: 1},
-	)
+	manager, err := NewAgentManager(cfg, config.AgentKindIDE)
 	if err != nil {
 		t.Fatal(err)
 	}
-	toolCall := agent.ToolCall{
+	toolCall := agentschema.ToolCall{
 		ID: "read-secret", Type: "function",
-		Function: agent.FunctionCall{Name: "read", Arguments: `{"path":"secret.md"}`},
+		Function: agentschema.FunctionCall{Name: "read", Arguments: `{"path":"secret.md"}`},
 	}
-	raw := []*agent.Message{
-		agent.UserMessage("old request"),
-		agent.AssistantMessage("", []agent.ToolCall{toolCall}),
-		{Role: agent.ToolRole, ToolCallID: "read-secret", ToolName: "read", Content: "MODEL_HIDDEN_SECRET_BODY"},
-		agent.AssistantMessage("old answer", nil),
+	raw := []*agentschema.Message{
+		agentschema.UserMessage("old request"),
+		agentschema.AssistantMessage("", []agentschema.ToolCall{toolCall}),
+		{Role: agentschema.ToolRole, ToolCallID: "read-secret", ToolName: "read", Content: "MODEL_HIDDEN_SECRET_BODY"},
+		agentschema.AssistantMessage("old answer", nil),
 	}
-	visible := []*agent.Message{raw[0].Clone(), raw[3].Clone(), agent.UserMessage("current request")}
-	checkpoint, err := manager.Compact(context.Background(), agent.CompactionCompactRequest{
-		Messages: raw, SourceMessages: raw, ModelRequest: visible,
-		ModelSnapshot: (&agent.ModelCall{Model: model, Messages: visible}).Snapshot(),
-		Plan:          agent.CompactionPlan{Action: agent.CompactionCreate, SourceFrom: 0, SourceTo: len(raw)},
+	visible := []*agentschema.Message{raw[0].Clone(), raw[3].Clone(), agentschema.UserMessage("current request")}
+	checkpoint, err := manager.Compact(context.Background(), agentcompaction.CompactionCompactRequest{
+		Messages:      raw,
+		ModelSnapshot: (&agentmodel.ModelCall{Model: model, Messages: visible}).Snapshot(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -200,13 +217,12 @@ func TestAgentManagerCompactionDoesNotSummarizeModelHiddenToolHistory(t *testing
 
 func TestAgentManagerIdentityIncludesToolContextVisibilityPolicy(t *testing.T) {
 	enabled, disabled := true, false
-	identity := agent.CapabilityIdentity{Kind: "test.model.tool-context-identity", Version: 1}
 	visible, err := NewAgentManager(&config.Config{
 		OpenAIContextWindowTokens: 100_000,
 		AgentContexts: config.AgentContextSettings{IDE: config.AgentContextOverride{
 			ToolResultContextEnabled: &enabled,
 		}},
-	}, config.AgentKindIDE, nil, identity)
+	}, config.AgentKindIDE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +231,7 @@ func TestAgentManagerIdentityIncludesToolContextVisibilityPolicy(t *testing.T) {
 		AgentContexts: config.AgentContextSettings{IDE: config.AgentContextOverride{
 			ToolResultContextEnabled: &disabled,
 		}},
-	}, config.AgentKindIDE, nil, identity)
+	}, config.AgentKindIDE)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,15 +1,16 @@
 package toolresult
 
 import (
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
-func validToolCall(call agent.ToolCall) bool {
-	_, err := agent.NormalizeToolCallForModelContext(call, nil)
+func validToolCall(call agentschema.ToolCall) bool {
+	_, err := agenttool.NormalizeToolCallForModelContext(call, nil)
 	return err == nil
 }
 
-func assistantHasIndependentContent(message *agent.Message) bool {
+func assistantHasIndependentContent(message *agentschema.Message) bool {
 	if message == nil {
 		return false
 	}

@@ -1,13 +1,14 @@
 package chat
 
 import (
-	"denova/internal/agents/run"
 	"fmt"
 	"math"
 	"strings"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentrun "denova/internal/agents/run"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 type runTokenUsage struct {
@@ -55,7 +56,7 @@ func newRunTokenUsageCollector(runID, agentKind string) *runTokenUsageCollector 
 	}
 }
 
-func (c *runTokenUsageCollector) AddMessage(msg *agent.Message) {
+func (c *runTokenUsageCollector) AddMessage(msg *agentschema.Message) {
 	if c == nil || msg == nil {
 		return
 	}
@@ -121,7 +122,7 @@ func (c *runTokenUsageCollector) EmitIfAny(emit func(agentrun.Event), generatedB
 	if stats.PromptTokens > 0 {
 		stats.CacheHitRate = roundRatio(float64(stats.CachedPromptTokens) / float64(stats.PromptTokens))
 	}
-	emit(agentrun.Event{Type: "token_usage", Data: map[string]any{
+	data := map[string]any{
 		"created_at":             time.Now().UTC().Format(time.RFC3339Nano),
 		"run_id":                 stats.RunID,
 		"agent_kind":             stats.AgentKind,
@@ -135,10 +136,11 @@ func (c *runTokenUsageCollector) EmitIfAny(emit func(agentrun.Event), generatedB
 		"model_calls":            stats.ModelCalls,
 		"generated_bytes":        stats.GeneratedBytes,
 		"usage_calls":            stats.Calls,
-	}})
+	}
+	emit(agentrun.Event{Type: "token_usage", Data: data})
 }
 
-func toolNamesFromCalls(calls []agent.ToolCall) []string {
+func toolNamesFromCalls(calls []agentschema.ToolCall) []string {
 	if len(calls) == 0 {
 		return nil
 	}

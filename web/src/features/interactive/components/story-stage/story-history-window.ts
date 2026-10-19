@@ -22,6 +22,7 @@ const storyTurnByteEstimates = new WeakMap<TurnEvent, number>()
 export interface StoryHistoryWindow {
   stageKey: string
   turns: TurnEvent[]
+  turnStart: number
   beforeCursor: string
   hasMore: boolean
   expanded: boolean
@@ -34,6 +35,7 @@ export function createStoryHistoryWindow(stageKey: string, snapshot: Snapshot | 
   return {
     stageKey,
     turns: bounded.turns,
+    turnStart: Math.max(0, (snapshot?.turn_count || snapshot?.turns.length || 0) - bounded.turns.length),
     beforeCursor: snapshot?.history_before_cursor || '',
     hasMore: snapshot?.has_earlier_turns === true || bounded.trimmed,
     expanded: false,
@@ -54,6 +56,7 @@ export function reconcileStoryHistoryWindow(
   return {
     ...current,
     turns: bounded.turns,
+    turnStart: Math.max(0, (snapshot.turn_count || snapshot.turns.length) - bounded.turns.length),
     beforeCursor: current.beforeCursor || snapshot.history_before_cursor || '',
     hasMore: current.hasMore || snapshot.has_earlier_turns === true || bounded.trimmed,
     approximateBytes: bounded.approximateBytes,
@@ -67,13 +70,15 @@ export function prependStoryHistoryPage(
 ): StoryHistoryWindow {
   if (current.stageKey !== stageKey) return current
   const currentIDs = new Set(current.turns.map((turn) => turn.id))
-  const merged = [...(page.turns || []).filter((turn) => !currentIDs.has(turn.id)), ...current.turns]
+  const earlier = (page.turns || []).filter((turn) => !currentIDs.has(turn.id))
+  const merged = [...earlier, ...current.turns]
   const newestBound = boundStoryTurns(merged, 'latest')
   const followLatest = current.followLatest && !newestBound.trimmed
   const bounded = followLatest ? newestBound : boundStoryTurns(merged, 'earliest')
   return {
     stageKey,
     turns: bounded.turns,
+    turnStart: Math.max(0, current.turnStart - earlier.length),
     beforeCursor: page.before_cursor || '',
     hasMore: page.has_more,
     expanded: true,
@@ -88,9 +93,9 @@ export function projectStoryHistorySnapshot(
   stageKey: string,
 ): Snapshot | null {
   if (!snapshot || window.stageKey !== stageKey) return snapshot
-  if (!window.followLatest) return { ...snapshot, turns: window.turns }
+  if (!window.followLatest) return { ...snapshot, turns: window.turns, turn_start: window.turnStart }
   const bounded = boundStoryTurns(mergeStoryHistoryTurns(window.turns, snapshot.turns || []), 'latest')
-  return { ...snapshot, turns: bounded.turns }
+  return { ...snapshot, turns: bounded.turns, turn_start: Math.max(0, (snapshot.turn_count || snapshot.turns.length) - bounded.turns.length) }
 }
 
 export function mergeStoryHistoryTurns(current: TurnEvent[], latest: TurnEvent[]): TurnEvent[] {

@@ -8,17 +8,18 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
 	workspacechange "denova/internal/workspace/change"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 // Manifest is the durable, bounded projection of a registered definition.
 // It deliberately excludes the concrete implementation and result payload.
 type Manifest struct {
 	Name string `json:"name"`
-	agent.ToolDescriptor
+	agenttool.ToolDescriptor
 }
 
 // UnknownManifest returns the conservative lifecycle policy used when a
@@ -30,25 +31,25 @@ func UnknownManifest(name string) Manifest {
 	}
 	return Manifest{
 		Name: normalized,
-		ToolDescriptor: agent.ToolDescriptor{
-			Source: agent.ToolSourceOther, Execution: agent.ToolExecutionWorkspaceExclusive,
-			MutationScope: agent.ToolMutationExternal, PostCheck: agent.ToolPostCheckNone,
-			Recovery: agent.ToolRecoveryNonIdempotent, ResultProjection: agent.ToolResultBoundedModelContext,
-			ResultRetention: agent.ToolResultProtected,
-			Steering:        agent.SteeringFinishCurrent, MaxResultBytes: DefaultMaxBytes,
+		ToolDescriptor: agenttool.ToolDescriptor{
+			Source: agenttool.ToolSourceOther, Execution: agenttool.ToolExecutionWorkspaceExclusive,
+			MutationScope: agenttool.ToolMutationExternal, PostCheck: agenttool.ToolPostCheckNone,
+			Recovery: agenttool.ToolRecoveryNonIdempotent, ResultProjection: agentschema.ToolResultBoundedModelContext,
+			ResultRetention: agentschema.ToolResultProtected,
+			Steering:        agenttool.SteeringFinishCurrent, MaxResultBytes: DefaultMaxBytes,
 		},
 	}
 }
 
-func ManifestForDefinition(name string, descriptor agent.ToolDescriptor) Manifest {
+func ManifestForDefinition(name string, descriptor agenttool.ToolDescriptor) Manifest {
 	return Manifest{Name: normalizeToolName(name), ToolDescriptor: descriptor}
 }
 
 // Filtered carries the normalized result together with the immutable tool
 // manifest that governed it.
 type Filtered struct {
-	Result   agent.ToolResult `json:"result"`
-	Manifest Manifest         `json:"manifest"`
+	Result   agentschema.ToolResult `json:"result"`
+	Manifest Manifest               `json:"manifest"`
 }
 
 // DefaultMaxBytes is the ordinary model-visible result budget.
@@ -60,37 +61,37 @@ func Filter(toolName, args, content string) Filtered {
 
 func FilterWithLimit(toolName, args, content string, maxBytes int) Filtered {
 	return filterWithManifest(
-		UnknownManifest(toolName), args, agent.TextToolResult(content), maxBytes,
+		UnknownManifest(toolName), args, agentschema.TextToolResult(content), maxBytes,
 	)
 }
 
-func FilterText(toolName string, descriptor agent.ToolDescriptor, args, content string, maxBytes int) Filtered {
-	return FilterStructured(toolName, descriptor, args, agent.TextToolResult(content), maxBytes)
+func FilterText(toolName string, descriptor agenttool.ToolDescriptor, args, content string, maxBytes int) Filtered {
+	return FilterStructured(toolName, descriptor, args, agentschema.TextToolResult(content), maxBytes)
 }
 
-func FilterStructured(toolName string, descriptor agent.ToolDescriptor, args string, result agent.ToolResult, maxBytes int) Filtered {
+func FilterStructured(toolName string, descriptor agenttool.ToolDescriptor, args string, result agentschema.ToolResult, maxBytes int) Filtered {
 	return filterWithManifest(ManifestForDefinition(toolName, descriptor), args, result, maxBytes)
 }
 
 // ProjectAudit creates a separately bounded ledger projection without
 // mutating the lossless result that continues to the public ResultProcessor.
-func ProjectAudit(toolName string, descriptor agent.ToolDescriptor, args string, result agent.ToolResult, maxBytes int) Filtered {
-	result.Artifacts = append([]agent.ToolArtifactRef(nil), result.Artifacts...)
-	result.Effects = append([]agent.Effect(nil), result.Effects...)
+func ProjectAudit(toolName string, descriptor agenttool.ToolDescriptor, args string, result agentschema.ToolResult, maxBytes int) Filtered {
+	result.Artifacts = append([]agentschema.ToolArtifactRef(nil), result.Artifacts...)
+	result.Effects = append([]agentschema.Effect(nil), result.Effects...)
 	return filterWithManifest(ManifestForDefinition(toolName, descriptor), args, result, maxBytes)
 }
 
-func filterWithManifest(manifest Manifest, args string, result agent.ToolResult, maxBytes int) Filtered {
+func filterWithManifest(manifest Manifest, args string, result agentschema.ToolResult, maxBytes int) Filtered {
 	prepared := PrepareStructured(manifest.Name, manifest.ToolDescriptor, args, result)
 	manifest = prepared.Manifest
 	result = prepared.Result
 	manifest.MaxResultBytes = NormalizeLimitBytes(firstPositive(maxBytes, manifest.MaxResultBytes))
 
-	normalized, err := agent.NormalizeToolResult(result, manifest.ToolDescriptor)
+	normalized, err := agenttool.NormalizeToolResult(result, manifest.ToolDescriptor)
 	if err != nil {
-		normalized = agent.ToolErrorResult("Invalid structured tool result: "+err.Error(), "Invalid structured tool result: "+err.Error())
+		normalized = agenttool.ToolErrorResult("Invalid structured tool result: "+err.Error(), "Invalid structured tool result: "+err.Error())
 		prepareToolResultProjectionMetadata(manifest, args, &normalized)
-		normalized, _ = agent.NormalizeToolResult(normalized, manifest.ToolDescriptor)
+		normalized, _ = agenttool.NormalizeToolResult(normalized, manifest.ToolDescriptor)
 	}
 	normalized = ProjectReceipt(manifest, args, normalized)
 	return Filtered{Result: normalized, Manifest: manifest}
@@ -100,14 +101,14 @@ func filterWithManifest(manifest Manifest, args string, result agent.ToolResult,
 // audit metadata without bounding or normalizing the result. The public
 // Agent ResultProcessor must receive this lossless value; callers that need a
 // bounded ledger copy must create one independently through ProjectAudit.
-func PrepareStructured(toolName string, descriptor agent.ToolDescriptor, args string, result agent.ToolResult) Filtered {
+func PrepareStructured(toolName string, descriptor agenttool.ToolDescriptor, args string, result agentschema.ToolResult) Filtered {
 	manifest := ManifestForDefinition(toolName, descriptor)
 	result.ModelContent = workspacechange.ToolReceiptForModel(manifest.Name, result.ModelContent)
 	prepareToolResultProjectionMetadata(manifest, args, &result)
 	return Filtered{Result: result, Manifest: manifest}
 }
 
-func prepareToolResultProjectionMetadata(manifest Manifest, args string, result *agent.ToolResult) {
+func prepareToolResultProjectionMetadata(manifest Manifest, args string, result *agentschema.ToolResult) {
 	if result == nil {
 		return
 	}

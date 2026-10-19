@@ -7,12 +7,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	agentcontext "denova/internal/agents/context"
+	"denova/internal/agents/conversationjournal"
+	"denova/internal/agents/sessionjournal"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
 )
 
 var (
@@ -44,7 +48,7 @@ type ContextCursor struct {
 // ContextSnapshot atomically captures every session component used to build
 // one model input. Cursor is the CAS barrier for publishing that input.
 type ContextSnapshot struct {
-	EffectiveMessages []*agent.Message
+	EffectiveMessages []*agentschema.Message
 	Cursor            ContextCursor
 }
 
@@ -52,10 +56,11 @@ type ContextSnapshot struct {
 // durable Agent actor before it reaches canonical storage.
 type DomainCommitIntent struct {
 	Identity       DomainCommitIdentity
-	Message        agent.Message
+	Message        agentschema.Message
 	Metadata       MessageMetadata
 	Hash           string
 	ExpectedCursor *ContextCursor
+	Checkpoint     agentcanonical.CanonicalCheckpoint
 }
 
 // DomainCommitReceipt proves the exact canonical message and context revision
@@ -67,7 +72,7 @@ type DomainCommitReceipt struct {
 	ContextRevision uint64               `json:"context_revision"`
 }
 
-func NewDomainCommitIntent(identity DomainCommitIdentity, message *agent.Message, metadata MessageMetadata) (DomainCommitIntent, error) {
+func NewDomainCommitIntent(identity DomainCommitIdentity, message *agentschema.Message, metadata MessageMetadata) (DomainCommitIntent, error) {
 	identity = normalizeDomainCommitIdentity(identity)
 	if err := validateDomainCommitIdentity(identity); err != nil {
 		return DomainCommitIntent{}, err
@@ -139,7 +144,10 @@ func (s *Session) CommitDomainMessageContext(ctx context.Context, intent DomainC
 		if metadata.ContextOnly {
 			kind = historyTypeContextMessage
 		}
-		if err := s.appendDomainMessageLocked(&message, metadata, kind); err != nil {
+		if err := s.appendDomainMessageLocked(&message, metadata, kind, intent.Checkpoint); err != nil {
+			if errors.Is(err, conversationjournal.ErrCommitUnknown) {
+				return err
+			}
 			recoveryErr := s.refreshCanonicalTailLocked()
 			if recoveryErr == nil {
 				reconciled, found, reconcileErr := s.findDomainCommitLocked(identity, intent.Message.Role, actualHash)
@@ -166,7 +174,7 @@ func (s *Session) CommitDomainMessageContext(ctx context.Context, intent DomainC
 // appendDomainMessageLocked publishes the canonical message and its optional
 // interruption resolution as one physical journal transaction. Callers hold
 // s.mu under the canonical journal lease.
-func (s *Session) appendDomainMessageLocked(message *agent.Message, metadata MessageMetadata, kind string) error {
+func (s *Session) appendDomainMessageLocked(message *agentschema.Message, metadata MessageMetadata, kind string, checkpoint agentcanonical.CanonicalCheckpoint) error {
 	if message == nil {
 		return errors.New("domain commit message is nil")
 	}
@@ -186,6 +194,11 @@ func (s *Session) appendDomainMessageLocked(message *agent.Message, metadata Mes
 		interruptionPatch = &patch
 		records = append(records, patch)
 	}
+	agentRecords, err := sessionjournal.CheckpointRecords(&s.projection.AgentSessions, checkpoint, strconv.FormatUint(metadata.ContextRevision, 10))
+	if err != nil {
+		return err
+	}
+	records = append(records, agentRecords...)
 	if _, err := s.appendJournalRecordsLocked(records...); err != nil {
 		return err
 	}
@@ -194,7 +207,7 @@ func (s *Session) appendDomainMessageLocked(message *agent.Message, metadata Mes
 	s.records = append(s.records, historyRecord{
 		kind: kind, message: message, messageMetadata: metadata, createdAt: now,
 	})
-	if s.title == defaultSessionTitle && message.Role == agent.User && strings.TrimSpace(message.Content) != "" {
+	if s.title == defaultSessionTitle && message.Role == agentschema.User && strings.TrimSpace(message.Content) != "" {
 		s.title = deriveTitle(message.Content)
 	}
 	s.contextRevision = metadata.ContextRevision
@@ -256,7 +269,7 @@ func (s *Session) RefreshCanonical(ctx context.Context) error {
 // FindDomainCommit performs a read-only exact receipt lookup for crash
 // recovery. A command reused with a different operation, cycle, role, or hash
 // is a conflict rather than evidence that the requested write committed.
-func (s *Session) FindDomainCommit(identity DomainCommitIdentity, role agent.RoleType, hash string) (DomainCommitReceipt, bool, error) {
+func (s *Session) FindDomainCommit(identity DomainCommitIdentity, role agentschema.RoleType, hash string) (DomainCommitReceipt, bool, error) {
 	if s == nil {
 		return DomainCommitReceipt{}, false, fmt.Errorf("session is nil")
 	}
@@ -264,7 +277,7 @@ func (s *Session) FindDomainCommit(identity DomainCommitIdentity, role agent.Rol
 	if err := validateDomainCommitIdentity(identity); err != nil {
 		return DomainCommitReceipt{}, false, err
 	}
-	if role != agent.User && role != agent.Assistant {
+	if role != agentschema.User && role != agentschema.Assistant {
 		return DomainCommitReceipt{}, false, fmt.Errorf("%w: unsupported message role %q", ErrDomainCommitIdentityConflict, role)
 	}
 	hash = strings.TrimSpace(hash)
@@ -290,7 +303,7 @@ func (s *Session) ContextCursor() ContextCursor {
 
 // GetEffectiveMessagesWithCursor snapshots both model-visible messages and
 // their revision under one lock, avoiding a check-then-read race at cycle start.
-func (s *Session) GetEffectiveMessagesWithCursor() ([]*agent.Message, ContextCursor) {
+func (s *Session) GetEffectiveMessagesWithCursor() ([]*agentschema.Message, ContextCursor) {
 	if s == nil {
 		return nil, ContextCursor{}
 	}
@@ -313,11 +326,11 @@ func (s *Session) SnapshotContext() (ContextSnapshot, error) {
 
 // SnapshotContextForDomainCommit atomically returns model-visible context and
 // the effective message index of one exact canonical commit. A commit before
-// /clear or the resident message window remains durable but returns found=false
+// a historical clear boundary or the resident message window remains durable but returns found=false
 // so the current turn can still project its accepted input once.
 func (s *Session) SnapshotContextForDomainCommit(
 	identity DomainCommitIdentity,
-	role agent.RoleType,
+	role agentschema.RoleType,
 	hash string,
 ) (ContextSnapshot, int, bool, error) {
 	if s == nil {
@@ -352,13 +365,13 @@ func (s *Session) snapshotContextLocked() (ContextSnapshot, error) {
 	return ContextSnapshot{EffectiveMessages: s.effectiveTranscriptMessagesLocked(), Cursor: s.contextCursorLocked()}, nil
 }
 
-func (s *Session) AppendContextMessageAt(expected ContextCursor, msg *agent.Message) error {
+func (s *Session) AppendContextMessageAt(expected ContextCursor, msg *agentschema.Message) error {
 	return s.AppendContextMessagesAt(expected, msg)
 }
 
 // AppendContextMessagesAt atomically publishes a context-only protocol batch
 // against the exact model-visible revision used to produce it.
-func (s *Session) AppendContextMessagesAt(expected ContextCursor, messages ...*agent.Message) error {
+func (s *Session) AppendContextMessagesAt(expected ContextCursor, messages ...*agentschema.Message) error {
 	if len(messages) == 0 {
 		return nil
 	}
@@ -375,18 +388,6 @@ func (s *Session) contextCursorLocked() ContextCursor {
 	return ContextCursor{Revision: s.contextRevision, MessageCount: s.messageCount, ClearAfterIndex: s.clearAfterIndex}
 }
 
-// AppendClearMarkerAt atomically rejects a clear based on stale model-visible
-// state. Callers that intentionally target the latest state use AppendClearMarker.
-func (s *Session) AppendClearMarkerAt(expected ContextCursor) error {
-	return s.withCanonicalMutation(context.Background(), "append clear marker with revision", func() error {
-		current := s.contextCursorLocked()
-		if current.Revision != expected.Revision {
-			return fmt.Errorf("%w: expected=%d current=%d", ErrContextRevisionConflict, expected.Revision, current.Revision)
-		}
-		return s.appendClearMarkerLocked()
-	})
-}
-
 func normalizeDomainCommitIdentity(identity DomainCommitIdentity) DomainCommitIdentity {
 	identity.CommandID = strings.TrimSpace(identity.CommandID)
 	identity.OperationID = strings.TrimSpace(identity.OperationID)
@@ -400,10 +401,10 @@ func validateDomainCommitIdentity(identity DomainCommitIdentity) error {
 	return nil
 }
 
-func domainMessageHash(message agent.Message, metadata MessageMetadata) (string, error) {
+func domainMessageHash(message agentschema.Message, metadata MessageMetadata) (string, error) {
 	metadata = sanitizeMessageMetadata(metadata)
 	payload := struct {
-		Message  agent.Message `json:"message"`
+		Message  agentschema.Message `json:"message"`
 		Metadata struct {
 			RunID                 string                       `json:"run_id,omitempty"`
 			AgentKind             string                       `json:"agent_kind,omitempty"`
@@ -439,7 +440,7 @@ func domainMessageHash(message agent.Message, metadata MessageMetadata) (string,
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-func deterministicDomainMessageID(identity DomainCommitIdentity, role agent.RoleType) string {
+func deterministicDomainMessageID(identity DomainCommitIdentity, role agentschema.RoleType) string {
 	sum := sha256.Sum256([]byte(identity.CommandID + "\x00" + identity.OperationID + "\x00" + fmt.Sprint(identity.Cycle) + "\x00" + string(role)))
 	return "agent-message-" + hex.EncodeToString(sum[:16])
 }
@@ -452,14 +453,14 @@ func domainCommitReceipt(identity DomainCommitIdentity, metadata MessageMetadata
 	}
 }
 
-func (s *Session) findDomainCommitLocked(identity DomainCommitIdentity, role agent.RoleType, hash string) (DomainCommitReceipt, bool, error) {
+func (s *Session) findDomainCommitLocked(identity DomainCommitIdentity, role agentschema.RoleType, hash string) (DomainCommitReceipt, bool, error) {
 	_, receipt, found, err := s.findDomainCommitMessageIndexLocked(identity, role, hash)
 	return receipt, found, err
 }
 
 func (s *Session) findDomainCommitMessageIndexLocked(
 	identity DomainCommitIdentity,
-	role agent.RoleType,
+	role agentschema.RoleType,
 	hash string,
 ) (int, DomainCommitReceipt, bool, error) {
 	wantedMessageID := deterministicDomainMessageID(identity, role)

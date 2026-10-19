@@ -33,7 +33,7 @@ func (registry *Registry) ReorderBooks(paths []string) error {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 
-	data, _, err := registry.loadAndDiscoverLocked()
+	data, _, err := registry.loadOrMigrateLocked()
 	if err != nil {
 		return err
 	}

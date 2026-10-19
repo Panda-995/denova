@@ -11,7 +11,7 @@ import { AGENTS } from '@/features/agents/agent-registry'
 import type { VisibleAgentKey } from '@/features/agents/agent-registry'
 import { PreviewRow, SkillAgentSelector, SkillClassificationFields } from './skill-form-fields'
 import { SkillIdentityFields } from './SkillIdentityFields'
-import { scopeLabel, skillCategoryLabel, skillFilePath, skillNamePattern, writingWorkflowCapability } from './skill-utils'
+import { isValidSkillName, scopeLabel, skillCategoryLabel, skillFilePath, writingWorkflowCapability } from './skill-utils'
 
 interface SkillCreatePanelProps {
   target: SkillCatalogTarget
@@ -34,12 +34,12 @@ export function SkillCreatePanel({ target, scopes, defaultScope, onCreated, onAs
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const trimmedName = name.trim()
-  const invalidName = trimmedName !== '' && !skillNamePattern.test(trimmedName)
+  const invalidName = trimmedName !== '' && !isValidSkillName(trimmedName)
   const targetName = trimmedName || t('skills.create.namePlaceholder')
   const targetPath = skillFilePath(scopes.find((item) => item.scope === scope), targetName)
 
   const onCreate = async () => {
-    if (!skillNamePattern.test(trimmedName)) {
+    if (!isValidSkillName(trimmedName)) {
       setError(t('skills.create.invalidName'))
       return
     }

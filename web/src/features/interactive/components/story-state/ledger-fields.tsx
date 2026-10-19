@@ -6,6 +6,7 @@ import type { ClassifiedStateChange } from './changes'
 import type { LedgerFieldItem } from './model'
 import { humanizeStateKey } from './model'
 import { resolveNumberMeter } from './number-meter'
+import { useActorReferenceNames } from './actor-reference'
 
 /** Long text beyond this length is clamped with an inline expand toggle. */
 const BLOCK_CLAMP_LENGTH = 300
@@ -55,10 +56,12 @@ function StatFieldBody({ item }: { item: LedgerFieldItem }) {
   const field = item.field
   const value = typeof item.value === 'number' ? item.value : 0
   const min = field?.min ?? 0
-  const max = field?.max ?? 100
-  const meter = field ? resolveNumberMeter(field, value) : null
-  const signed = meter?.zeroPercent !== undefined
-  const valueLabel = !meter || signed ? formatLedgerNumber(value) : `${formatLedgerNumber(value)} / ${formatLedgerNumber(max)}`
+  const max = item.capacity ?? field?.max ?? 100
+  const meter = field ? resolveNumberMeter(field, value, item.capacity) : null
+  const signed = meter !== null && meter.tone !== 'standard'
+  const valueLabel = item.capacity !== undefined || meter && !signed
+    ? `${formatLedgerNumber(value)} / ${formatLedgerNumber(max)}`
+    : formatLedgerNumber(value)
   return (
     <div>
       <div className="mb-1 flex min-w-0 items-baseline justify-between gap-2">
@@ -83,10 +86,9 @@ function StatFieldBody({ item }: { item: LedgerFieldItem }) {
           aria-valuetext={valueLabel}
           className="relative h-1.5 overflow-hidden rounded-full bg-[var(--nova-surface-3)]"
         >
-          <span className="absolute inset-y-0 w-px bg-[var(--nova-text-faint)]" style={{ left: `${meter.zeroPercent}%` }} aria-hidden="true" />
           <span
-            className={cn('absolute inset-y-0 rounded-full transition-[left,width] duration-300 motion-reduce:transition-none', meter.tone === 'negative' ? 'bg-[var(--story-state-negative)]' : 'bg-[var(--story-state-positive)]')}
-            style={{ left: `${meter.startPercent}%`, width: `${meter.widthPercent}%` }}
+            className={cn('absolute inset-y-0 left-0 rounded-full transition-[width] duration-300 motion-reduce:transition-none', meter.tone === 'negative' ? 'bg-[var(--story-state-negative)]' : 'bg-[var(--story-state-positive)]')}
+            style={{ width: `${meter.widthPercent}%` }}
             aria-hidden="true"
           />
         </div>
@@ -150,16 +152,20 @@ function BlockFieldBody({ value }: { value: unknown }) {
 
 function ListFieldBody({ value }: { value: unknown }) {
   const { t } = useTranslation()
+  const actorNames = useActorReferenceNames()
   if (!Array.isArray(value) || value.length === 0) {
     return <span className="text-xs text-[var(--nova-text-faint)]">{t('directorPanel.stateValue.empty')}</span>
   }
   return (
     <ul className="story-state-ledger__item-list">
-      {value.map((item, index) => (
-        <li key={index} className="story-state-ledger__item-row">
-          {item === null ? '—' : typeof item === 'object' ? JSON.stringify(item) : String(item)}
-        </li>
-      ))}
+      {value.map((item, index) => {
+        const displayed = typeof item === 'string' ? actorNames.get(item) ?? item : item
+        return (
+          <li key={index} className="story-state-ledger__item-row">
+            {displayed === null ? '—' : typeof displayed === 'object' ? JSON.stringify(displayed) : String(displayed)}
+          </li>
+        )
+      })}
     </ul>
   )
 }
@@ -188,10 +194,11 @@ function ObjectEntryList({ value }: { value: Record<string, unknown> }) {
 }
 
 function ObjectValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
+  const actorNames = useActorReferenceNames()
   if (value === null || value === undefined || value === '') return <span className="text-[var(--nova-text-faint)]">—</span>
   if (typeof value === 'boolean') return <span>{value ? '✓' : '—'}</span>
   if (typeof value === 'number') return <span className="font-mono tabular-nums">{formatLedgerNumber(value)}</span>
-  if (typeof value === 'string') return <span className="break-words [overflow-wrap:anywhere]">{value}</span>
+  if (typeof value === 'string') return <span className="break-words [overflow-wrap:anywhere]">{actorNames.get(value) ?? value}</span>
   if (Array.isArray(value)) {
     if (value.length === 0) return <span className="text-[var(--nova-text-faint)]">—</span>
     return (
@@ -212,13 +219,14 @@ function ObjectValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
 }
 
 function NestedObjectList({ value, depth }: { value: Record<string, unknown>; depth: number }) {
+  const actorNames = useActorReferenceNames()
   const entries = Object.entries(value).filter(([, item]) => item !== undefined)
   if (entries.length === 0) return <span className="text-[var(--nova-text-faint)]">—</span>
   return (
     <ul className={cn('story-state-ledger__nested-object-list', depth > 0 && 'story-state-ledger__nested-object-list--nested')} data-depth={depth}>
       {entries.slice(0, OBJECT_ENTRY_LIMIT).map(([key, item]) => {
         const structured = Array.isArray(item) || isRecord(item)
-        const label = humanizeStateKey(key)
+        const label = actorNames.get(key) ?? humanizeStateKey(key)
         return (
           <li key={key} className={cn('story-state-ledger__nested-object-item', structured && 'story-state-ledger__nested-object-item--branch')}>
             <span className="story-state-ledger__nested-object-key">{label}:</span>
@@ -235,6 +243,7 @@ function NestedObjectList({ value, depth }: { value: Record<string, unknown>; de
 /** FieldChangeChip renders the compact per-field turn-change marker. */
 function FieldChangeChip({ change }: { change: ClassifiedStateChange | null }) {
   const { t } = useTranslation()
+  const actorNames = useActorReferenceNames()
   if (!change) return null
   if (change.kind === 'delta' && change.delta !== null) {
     return (
@@ -245,18 +254,18 @@ function FieldChangeChip({ change }: { change: ClassifiedStateChange | null }) {
   }
   if (change.kind === 'added' || change.kind === 'removed') {
     const sign = change.kind === 'added' ? '+' : '−'
-    const text = change.text ? truncateEnd(change.text, 16) : t('storyStage.state.change.oneItem')
+    const text = change.text ? truncateEnd(actorNames.get(change.text) ?? change.text, 16) : t('storyStage.state.change.oneItem')
     return (
       <span className={cn('story-state-ledger__change-chip', `story-state-ledger__change-chip--${change.tone}`)}>
         {sign}{text}
       </span>
     )
   }
-  return (
+  return change.kind === 'cleared' ? (
     <span className="story-state-ledger__change-chip story-state-ledger__change-chip--neutral">
-      {change.kind === 'cleared' ? t('storyStage.state.change.cleared') : t('storyStage.state.change.updated')}
+      {t('storyStage.state.change.cleared')}
     </span>
-  )
+  ) : null
 }
 
 function formatLedgerNumber(value: number) {

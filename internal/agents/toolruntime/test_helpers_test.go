@@ -5,83 +5,85 @@ import (
 	"errors"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
 	agenttool "denova/internal/agents/tool"
 	"denova/internal/agents/toolresult"
 	producttools "denova/internal/agents/tools"
+
+	agentmiddleware "github.com/alfredxw/denova/agent/engine/middleware"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	sdktool "github.com/alfredxw/denova/agent/tool"
 )
 
-type testTextToolEndpoint func(context.Context, string, ...agent.ToolOption) (string, error)
+type testTextToolEndpoint func(context.Context, string, ...sdktool.ToolOption) (string, error)
 
-func wrapTextToolCallForTest(middleware agent.Middleware, endpoint testTextToolEndpoint, toolCtx *agent.ToolContext) (testTextToolEndpoint, error) {
+func wrapTextToolCallForTest(middleware agentmiddleware.Middleware, endpoint testTextToolEndpoint, toolCtx *agentmiddleware.ToolContext) (testTextToolEndpoint, error) {
 	wrapped, err := middleware.WrapToolCall(
 		context.Background(),
-		func(ctx context.Context, arguments string, options ...agent.ToolOption) (agent.ToolResult, error) {
+		func(ctx context.Context, arguments string, options ...sdktool.ToolOption) (agentschema.ToolResult, error) {
 			content, runErr := endpoint(ctx, arguments, options...)
-			return agent.TextToolResult(content), runErr
+			return agentschema.TextToolResult(content), runErr
 		},
 		toolCtx,
 	)
 	if err != nil {
 		return nil, err
 	}
-	return func(ctx context.Context, arguments string, options ...agent.ToolOption) (string, error) {
+	return func(ctx context.Context, arguments string, options ...sdktool.ToolOption) (string, error) {
 		result, runErr := wrapped(ctx, arguments, options...)
 		return result.ModelContent, runErr
 	}, nil
 }
 
-func testToolContext(name, callID string) *agent.ToolContext {
-	var descriptor agent.ToolDescriptor
+func testToolContext(name, callID string) *agentmiddleware.ToolContext {
+	var descriptor sdktool.ToolDescriptor
 	switch name {
 	case "read", "grep", "search_story_history":
-		descriptor = producttools.BoundedReadDescriptor(agent.ToolSourceRead, config.AgentToolFilesystemRead)
+		descriptor = producttools.BoundedReadDescriptor(sdktool.ToolSourceRead, config.AgentToolFilesystemRead)
 		if name == "search_story_history" {
-			descriptor = producttools.BoundedReadDescriptor(agenttool.ToolSourceHistory, "")
+			descriptor = producttools.BoundedReadDescriptor(sdktool.ToolSourceHistory, "")
 		}
 	case "write", "edit":
-		descriptor = producttools.WorkspaceWriteDescriptor(agent.ToolSourceWrite, config.AgentToolWorkspaceWrite, agent.ToolRecoveryReconcilable)
+		descriptor = producttools.WorkspaceWriteDescriptor(sdktool.ToolSourceWrite, config.AgentToolWorkspaceWrite, sdktool.ToolRecoveryReconcilable)
 	case "bash", "pwsh":
-		descriptor = agent.ToolDescriptor{
-			Source: agent.ToolSourceShell, Capability: config.AgentToolShell,
-			Execution: agent.ToolExecutionWorkspaceExclusive, MutationScope: agent.ToolMutationExternal,
-			PostCheck: agent.ToolPostCheckExternalReceipt, Recovery: agent.ToolRecoveryNonIdempotent,
-			ResultProjection: agent.ToolResultBoundedModelContext, ResultRetention: agent.ToolResultDeferred,
-			Steering: agent.SteeringFinishCurrent, MaxResultBytes: toolresult.DefaultMaxBytes,
+		descriptor = sdktool.ToolDescriptor{
+			Source: sdktool.ToolSourceShell, Capability: config.AgentToolShell,
+			Execution: sdktool.ToolExecutionWorkspaceExclusive, MutationScope: sdktool.ToolMutationExternal,
+			PostCheck: sdktool.ToolPostCheckExternalReceipt, Recovery: sdktool.ToolRecoveryNonIdempotent,
+			ResultProjection: agentschema.ToolResultBoundedModelContext, ResultRetention: agentschema.ToolResultDeferred,
+			Steering: sdktool.SteeringFinishCurrent, MaxResultBytes: toolresult.DefaultMaxBytes,
 		}
 	default:
-		return &agent.ToolContext{Name: name, ProviderCallID: callID}
+		return &agentmiddleware.ToolContext{Name: name, ProviderCallID: callID}
 	}
-	return &agent.ToolContext{
+	return &agentmiddleware.ToolContext{
 		Name: name, ProviderCallID: callID,
-		Definition: agent.ToolDefinitionSnapshot{Info: &agent.ToolInfo{Name: name}, Descriptor: descriptor},
+		Definition: sdktool.ToolDefinitionSnapshot{Info: &agentschema.ToolInfo{Name: name}, Descriptor: descriptor},
 	}
 }
 
 func processorShellTestDecision() agenttool.Decision {
 	return agenttool.Decision{
 		ToolName: "bash", ProviderCallID: "call-shell", ExecutionID: "exec-shell",
-		Descriptor: agent.ToolDescriptor{
-			Source: agent.ToolSourceShell, Execution: agent.ToolExecutionWorkspaceExclusive,
-			MutationScope: agent.ToolMutationExternal, PostCheck: agent.ToolPostCheckExternalReceipt,
-			Recovery: agent.ToolRecoveryNonIdempotent, ResultProjection: agent.ToolResultBoundedModelContext,
-			ResultRetention: agent.ToolResultProtected, Steering: agent.SteeringFinishCurrent, MaxResultBytes: 1024,
+		Descriptor: sdktool.ToolDescriptor{
+			Source: sdktool.ToolSourceShell, Execution: sdktool.ToolExecutionWorkspaceExclusive,
+			MutationScope: sdktool.ToolMutationExternal, PostCheck: sdktool.ToolPostCheckExternalReceipt,
+			Recovery: sdktool.ToolRecoveryNonIdempotent, ResultProjection: agentschema.ToolResultBoundedModelContext,
+			ResultRetention: agentschema.ToolResultProtected, Steering: sdktool.SteeringFinishCurrent, MaxResultBytes: 1024,
 		},
 	}
 }
 
 type processorArtifactStore struct {
-	request         agent.ToolArtifactRequest
+	request         sdktool.ToolArtifactRequest
 	content         strings.Builder
 	beginErr        error
 	beginCalls      int
-	returnedPurpose agent.ToolArtifactPurpose
+	returnedPurpose agentschema.ToolArtifactPurpose
 	verified        bool
 }
 
-func (store *processorArtifactStore) BeginToolArtifact(_ context.Context, request agent.ToolArtifactRequest) (agent.ToolArtifactWriter, error) {
+func (store *processorArtifactStore) BeginToolArtifact(_ context.Context, request sdktool.ToolArtifactRequest) (sdktool.ToolArtifactWriter, error) {
 	store.beginCalls++
 	store.request = request
 	if store.beginErr != nil {
@@ -91,7 +93,7 @@ func (store *processorArtifactStore) BeginToolArtifact(_ context.Context, reques
 	return &processorArtifactWriter{store: store}, nil
 }
 
-func (store *processorArtifactStore) VerifyToolArtifact(_ context.Context, _ agent.ToolArtifactRef, _ agent.ToolArtifactRequest) error {
+func (store *processorArtifactStore) VerifyToolArtifact(_ context.Context, _ agentschema.ToolArtifactRef, _ sdktool.ToolArtifactRequest) error {
 	if !store.verified {
 		return errors.New("artifact was not issued by this store")
 	}
@@ -110,13 +112,13 @@ func (writer *processorArtifactWriter) Write(data []byte) (int, error) {
 	return writer.store.content.Write(data)
 }
 
-func (writer *processorArtifactWriter) Commit() (agent.ToolArtifactRef, error) {
+func (writer *processorArtifactWriter) Commit() (agentschema.ToolArtifactRef, error) {
 	writer.terminal = true
 	purpose := writer.store.returnedPurpose
 	if purpose == "" {
 		purpose = writer.store.request.Purpose
 	}
-	return agent.ToolArtifactRef{
+	return agentschema.ToolArtifactRef{
 		ID: "artifact-call-42", Purpose: purpose,
 		ReadablePath: ".denova/artifacts/session/call-42.log",
 		ContentType:  "text/plain; charset=utf-8", EstimatedBytes: int64(writer.store.content.Len()),

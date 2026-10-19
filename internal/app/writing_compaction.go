@@ -2,13 +2,17 @@ package app
 
 import (
 	"context"
+	"denova/config"
 	"fmt"
 	"strings"
 
+	agentchat "denova/internal/agents/chat"
 	agentcompaction "denova/internal/agents/context/compaction"
 	agentstructural "denova/internal/agents/context/structural"
+	agentexecution "denova/internal/agents/execution"
 	agentrun "denova/internal/agents/run"
 	compactionapp "denova/internal/app/compaction"
+	conversationapp "denova/internal/app/conversation"
 )
 
 func (s *ChatAppService) executeWritingContextCompaction(ctx context.Context, requestedCommandID string) (agentcompaction.Result, error) {
@@ -34,14 +38,35 @@ func (s *ChatAppService) executeWritingContextCompaction(ctx context.Context, re
 	if err != nil {
 		return agentcompaction.Result{}, err
 	}
-	result, err := fence.chat.ExecuteStructuralOperation(ctx, agentstructural.Spec{
+	runtime, _, err := s.prepareIDEChatRuntime(ctx, agentchat.ChatRequest{})
+	if err != nil {
+		return agentcompaction.Result{}, err
+	}
+	if runtime.cfg.ActiveAgentRuntime != nil && runtime.cfg.ActiveAgentRuntime.Kind != config.RuntimeNative {
+		s.app.mu.RLock()
+		err = fence.validateLocked(s.app, true)
+		s.app.mu.RUnlock()
+		if err != nil {
+			return agentcompaction.Result{}, err
+		}
+		host, err := s.app.AgentHostCapabilities(ctx, &runtime.cfg, agentrun.AgentKindIDE)
+		if err != nil {
+			return agentcompaction.Result{}, err
+		}
+		executor, err := conversationapp.BuildExecution(ctx, sharedConversationRuntime(runtime), host, s.app.AgentEngines(), "")
+		if err != nil {
+			return agentcompaction.Result{}, err
+		}
+		return executor.Compact(ctx, commandID, runtime.agentOptions(""))
+	}
+	cycle, err := s.prepareWritingStructuralCycle(ctx, fence)
+	if err != nil {
+		return agentcompaction.Result{}, err
+	}
+	result, err := fence.chat.ExecuteStructuralOperation(ctx, cycle, agentstructural.Spec{
 		CommandID: commandID,
 		Action:    agentstructural.Compact,
 		Ref:       agentrun.ContextCompactionRef{Force: true},
-		Options: agentrun.Options{
-			AgentKind: agentrun.AgentKindIDE, ProjectID: fence.projectID, StateRoot: fence.stateRoot,
-			Workspace: fence.workspace, SessionID: fence.selected.ID, Mode: "ide",
-		},
 	})
 	if err != nil {
 		return result.Compaction, err
@@ -75,13 +100,31 @@ func (s *ChatAppService) executeWritingContextCompactionRemoval(ctx context.Cont
 	if err != nil {
 		return false, err
 	}
-	result, err := fence.chat.ExecuteStructuralOperation(ctx, agentstructural.Spec{
+	cycle, err := s.prepareWritingStructuralCycle(ctx, fence)
+	if err != nil {
+		return false, err
+	}
+	result, err := fence.chat.ExecuteStructuralOperation(ctx, cycle, agentstructural.Spec{
 		CommandID: commandID,
 		Action:    agentstructural.Remove,
-		Options: agentrun.Options{
-			AgentKind: agentrun.AgentKindIDE, ProjectID: fence.projectID, StateRoot: fence.stateRoot,
-			Workspace: fence.workspace, SessionID: fence.selected.ID, Mode: "ide",
-		},
 	})
 	return result.Removed, err
+}
+
+func (s *ChatAppService) prepareWritingStructuralCycle(ctx context.Context, fence writingStructuralFence) (agentexecution.Cycle, error) {
+	cycle, runtime, err := s.prepareWritingCycle(ctx, agentchat.ChatRequest{}, "")
+	if err != nil {
+		return agentexecution.Cycle{}, err
+	}
+	s.app.mu.RLock()
+	err = fence.validateLocked(s.app, true)
+	s.app.mu.RUnlock()
+	if err != nil {
+		return agentexecution.Cycle{}, err
+	}
+	if runtime.projectID != fence.projectID || runtime.workspace != fence.workspace ||
+		runtime.sess != fence.selected || runtime.executionRuntime != fence.chat {
+		return agentexecution.Cycle{}, ErrAgentContextChanged
+	}
+	return cycle, nil
 }

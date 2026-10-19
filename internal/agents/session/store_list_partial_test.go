@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestListKeepsHealthySessionsWhenAnotherJournalIsUnreadable(t *testing.T) {
@@ -23,7 +23,7 @@ func TestListKeepsHealthySessionsWhenAnotherJournalIsUnreadable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := healthy.Append(agent.UserMessage("healthy conversation")); err != nil {
+	if err := healthy.Append(agentschema.UserMessage("healthy conversation")); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {

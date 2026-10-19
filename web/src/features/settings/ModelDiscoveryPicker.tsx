@@ -10,6 +10,7 @@ import { discoverModels } from './api'
 import {
   MODEL_PROTOCOL_ANTHROPIC_MESSAGES,
   MODEL_PROTOCOL_CHAT_COMPLETIONS,
+  MODEL_PROTOCOL_GOOGLE_GENERATIVE_AI,
   MODEL_PROTOCOL_RESPONSES,
 } from './model-profiles'
 import type { ModelEndpointSettings, ModelInfo } from './types'
@@ -36,6 +37,7 @@ export function ModelDiscoveryPicker({ endpoint, defaultProtocol, existingModels
   const supported = protocol === MODEL_PROTOCOL_CHAT_COMPLETIONS
     || protocol === MODEL_PROTOCOL_RESPONSES
     || protocol === MODEL_PROTOCOL_ANTHROPIC_MESSAGES
+    || protocol === MODEL_PROTOCOL_GOOGLE_GENERATIVE_AI
   const routeFingerprint = useMemo(() => JSON.stringify({ ...endpoint, protocol }), [endpoint, protocol])
   const existing = useMemo(() => new Set(existingModels.map((model) => model.trim()).filter(Boolean)), [existingModels])
   const visibleModels = useMemo(() => {

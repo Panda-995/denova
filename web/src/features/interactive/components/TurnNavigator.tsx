@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { History, X } from 'lucide-react'
+import { Virtuoso } from 'react-virtuoso'
 import { useIsMobile } from '@/hooks/useIsMobile'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
@@ -17,6 +18,9 @@ export interface TurnNavigatorProps {
   items: TurnNavigationItem[]
   activeAnchorId?: string
   onSelect: (anchorId: string) => void
+  earlierCount?: number
+  loadingEarlier?: boolean
+  onSelectEarlier?: (index: number) => void
   /** Keep the history sheet mounted when a title menu closes after selection. */
   renderTrigger?: (openHistory: () => void) => ReactNode
 }
@@ -24,18 +28,18 @@ export interface TurnNavigatorProps {
 const MAX_TURN_NAVIGATION_MARKS = 28
 
 interface AggregatedTurnNavigationItem {
-  item: TurnNavigationItem
+  item?: TurnNavigationItem
   sourceIndex: number
 }
 
-export function TurnNavigator({ items, activeAnchorId = '', onSelect, renderTrigger }: TurnNavigatorProps) {
+export function TurnNavigator({ items, activeAnchorId = '', onSelect, earlierCount = 0, loadingEarlier = false, onSelectEarlier, renderTrigger }: TurnNavigatorProps) {
   const { t } = useTranslation()
   const [previewAnchorId, setPreviewAnchorId] = useState('')
   const isMobile = useIsMobile()
   const [historyOpen, setHistoryOpen] = useState(false)
   const navigationItems = useMemo(
-    () => aggregateTurnNavigationItems(items, activeAnchorId),
-    [activeAnchorId, items],
+    () => aggregateTurnNavigationItems(items, activeAnchorId, MAX_TURN_NAVIGATION_MARKS, earlierCount),
+    [activeAnchorId, earlierCount, items],
   )
   if (items.length === 0 && !renderTrigger) return null
 
@@ -51,19 +55,21 @@ export function TurnNavigator({ items, activeAnchorId = '', onSelect, renderTrig
               <SheetTitle>{t('storyStage.turnNavigator.label')}</SheetTitle>
               <Button variant="ghost" size="icon" aria-label={t('common.close')} onClick={() => setHistoryOpen(false)}><X /></Button>
             </header>
-            <div className="flex flex-col gap-1 overflow-y-auto p-3">
-              {items.map((item, index) => (
-                <button key={item.anchorId} type="button" aria-label={t('storyStage.turnNavigator.goto', { index: index + 1 })} aria-current={item.anchorId === activeAnchorId ? 'true' : undefined}
-                  className="flex min-w-0 items-start gap-3 rounded-xl p-3 text-left text-sm active:bg-accent aria-current:bg-accent"
-                  onClick={() => { setHistoryOpen(false); onSelect(item.anchorId) }}>
+            <Virtuoso className="p-3" style={{ height: 'min(65dvh, 640px)' }} totalCount={earlierCount + items.length}
+              computeItemKey={index => items[index - earlierCount]?.anchorId || `earlier-${index}`}
+              itemContent={index => {
+                const item = items[index - earlierCount]
+                return <button type="button" aria-label={t('storyStage.turnNavigator.goto', { index: index + 1 })} aria-current={item?.anchorId === activeAnchorId ? 'true' : undefined}
+                  disabled={!item && loadingEarlier}
+                  className="flex w-full min-w-0 items-start gap-3 rounded-xl p-3 text-left text-sm active:bg-accent aria-current:bg-accent"
+                  onClick={() => { setHistoryOpen(false); if (item) onSelect(item.anchorId); else onSelectEarlier?.(index) }}>
                   <span className="shrink-0 tabular-nums text-muted-foreground">{index + 1}</span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{item.contextOnly ? t('storyStage.turnNavigator.autonomousContinuation') : item.user.trim() || t('storyStage.turnNavigator.emptyUser')}</span>
-                    <span className="mt-1 line-clamp-2 break-words text-muted-foreground">{item.narrative.trim() || t(item.pending ? 'storyStage.turnNavigator.generating' : 'storyStage.turnNavigator.emptyAgent')}</span>
+                    <span className="block truncate font-medium">{!item ? t('storyStage.turnNavigator.loadTurn') : item.contextOnly ? t('storyStage.turnNavigator.autonomousContinuation') : item.user.trim() || t('storyStage.turnNavigator.emptyUser')}</span>
+                    {item ? <span className="mt-1 line-clamp-2 break-words text-muted-foreground">{item.narrative.trim() || t(item.pending ? 'storyStage.turnNavigator.generating' : 'storyStage.turnNavigator.emptyAgent')}</span> : null}
                   </span>
                 </button>
-              ))}
-            </div>
+              }} />
           </SheetContent>
         </Sheet>
       </>
@@ -74,26 +80,28 @@ export function TurnNavigator({ items, activeAnchorId = '', onSelect, renderTrig
     <aside className="nova-turn-navigator" aria-label={t('storyStage.turnNavigator.label')}>
       <div className="nova-turn-navigator-track" role="list">
         {navigationItems.map(({ item, sourceIndex }) => {
-          const active = item.anchorId === activeAnchorId
-          const previewVisible = previewAnchorId === item.anchorId
-          const user = item.contextOnly
+          const anchorId = item?.anchorId || `earlier-${sourceIndex}`
+          const active = item?.anchorId === activeAnchorId
+          const previewVisible = previewAnchorId === anchorId
+          const user = !item ? t('storyStage.turnNavigator.loadTurn') : item.contextOnly
             ? t('storyStage.turnNavigator.autonomousContinuation')
             : item.user.trim() || t('storyStage.turnNavigator.emptyUser')
-          const narrative = item.narrative.trim() || (item.pending ? t('storyStage.turnNavigator.generating') : t('storyStage.turnNavigator.emptyAgent'))
+          const narrative = item ? item.narrative.trim() || (item.pending ? t('storyStage.turnNavigator.generating') : t('storyStage.turnNavigator.emptyAgent')) : ''
           return (
-            <div key={item.anchorId} className="nova-turn-nav-slot" role="listitem" aria-posinset={sourceIndex + 1} aria-setsize={items.length}>
+            <div key={anchorId} className="nova-turn-nav-slot" role="listitem" aria-posinset={sourceIndex + 1} aria-setsize={earlierCount + items.length}>
               <button
                 type="button"
                 className="nova-turn-nav-button"
                 aria-current={active ? 'true' : undefined}
                 aria-label={t('storyStage.turnNavigator.goto', { index: sourceIndex + 1 })}
                 data-active={active ? 'true' : undefined}
-                data-pending={item.pending ? 'true' : undefined}
-                onClick={() => onSelect(item.anchorId)}
-                onMouseEnter={() => setPreviewAnchorId(item.anchorId)}
-                onMouseLeave={() => setPreviewAnchorId((current) => (current === item.anchorId ? '' : current))}
-                onFocus={() => setPreviewAnchorId(item.anchorId)}
-                onBlur={() => setPreviewAnchorId((current) => (current === item.anchorId ? '' : current))}
+                data-pending={item?.pending ? 'true' : undefined}
+                disabled={!item && loadingEarlier}
+                onClick={() => { if (item) onSelect(item.anchorId); else onSelectEarlier?.(sourceIndex) }}
+                onMouseEnter={() => setPreviewAnchorId(anchorId)}
+                onMouseLeave={() => setPreviewAnchorId((current) => (current === anchorId ? '' : current))}
+                onFocus={() => setPreviewAnchorId(anchorId)}
+                onBlur={() => setPreviewAnchorId((current) => (current === anchorId ? '' : current))}
               >
                 <span className="nova-turn-nav-mark" aria-hidden="true" />
                 {previewVisible ? (
@@ -115,20 +123,22 @@ export function aggregateTurnNavigationItems(
   items: TurnNavigationItem[],
   activeAnchorId = '',
   maxMarks = MAX_TURN_NAVIGATION_MARKS,
+  earlierCount = 0,
 ): AggregatedTurnNavigationItem[] {
-  if (items.length <= maxMarks || maxMarks < 3) {
-    return items.map((item, sourceIndex) => ({ item, sourceIndex }))
+  const total = earlierCount + items.length
+  if (total <= maxMarks || maxMarks < 3) {
+    return Array.from({ length: total }, (_, sourceIndex) => ({ item: items[sourceIndex - earlierCount], sourceIndex }))
   }
-  const selected = new Set<number>([0, items.length - 1])
+  const selected = new Set<number>([0, total - 1])
   const activeIndex = items.findIndex((item) => item.anchorId === activeAnchorId)
-  if (activeIndex >= 0) selected.add(activeIndex)
+  if (activeIndex >= 0) selected.add(earlierCount + activeIndex)
   items.forEach((item, index) => {
-    if (item.pending) selected.add(index)
+    if (item.pending) selected.add(earlierCount + index)
   })
   for (let slot = 0; slot < maxMarks; slot += 1) {
-    selected.add(Math.round((slot * (items.length - 1)) / (maxMarks - 1)))
+    selected.add(Math.round((slot * (total - 1)) / (maxMarks - 1)))
   }
   return [...selected]
     .sort((left, right) => left - right)
-    .map((sourceIndex) => ({ item: items[sourceIndex], sourceIndex }))
+    .map((sourceIndex) => ({ item: items[sourceIndex - earlierCount], sourceIndex }))
 }

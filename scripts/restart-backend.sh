@@ -76,6 +76,8 @@ else
     echo "==> Stopping the Denova backend (PID: ${backend_pids[*]})"
     for pid in "${backend_pids[@]}"; do
         if kill -0 "${pid}" 2>/dev/null; then
+            # Resume suspended processes before requesting graceful shutdown.
+            kill -CONT "${pid}" 2>/dev/null || true
             if ! kill -TERM "${pid}" 2>/dev/null && kill -0 "${pid}" 2>/dev/null; then
                 echo "Error: failed to stop Denova backend process ${pid}." >&2
                 exit 1

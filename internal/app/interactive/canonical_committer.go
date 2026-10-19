@@ -9,7 +9,7 @@ import (
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
 )
 
 type CanonicalCommitterConfig struct {
@@ -39,17 +39,18 @@ func (conversation *Conversation) NewAgentConversationCommitter(
 
 func (committer *canonicalConversationCommitter) MaterializeInput(
 	ctx context.Context,
-	request agent.InputCommitRequest,
-) (agent.CommitReceipt, error) {
+	request agentcanonical.InputCommitRequest,
+) (agentcanonical.CommitReceipt, error) {
 	receipt, err := committer.config.Conversation.MaterializeAgentCanonicalInput(
 		ctx,
 		request.Input.Text,
 		request.Input.Attachments,
+		request.Checkpoint,
 	)
 	if err != nil {
-		return agent.CommitReceipt{}, err
+		return agentcanonical.CommitReceipt{}, err
 	}
-	return agent.CommitReceipt{Revision: receipt.Revision}, nil
+	return agentcanonical.CommitReceipt{Revision: receipt.Revision}, nil
 }
 
 func (committer *canonicalConversationCommitter) ApplyPreparedContext(
@@ -61,20 +62,20 @@ func (committer *canonicalConversationCommitter) ApplyPreparedContext(
 
 func (committer *canonicalConversationCommitter) CommitContext(
 	ctx context.Context,
-	request agent.ContextCommitRequest,
-) (agent.CommitReceipt, error) {
+	request agentcanonical.ContextCommitRequest,
+) (agentcanonical.CommitReceipt, error) {
 	revision, err := committer.config.Conversation.CommitAgentCanonicalContext(ctx, request)
 	if err != nil {
-		return agent.CommitReceipt{}, err
+		return agentcanonical.CommitReceipt{}, err
 	}
-	return agent.CommitReceipt{Revision: revision}, nil
+	return agentcanonical.CommitReceipt{Revision: revision}, nil
 }
 
 func (committer *canonicalConversationCommitter) CommitOutput(
 	ctx context.Context,
 	prepared agentchat.AgentContextPreparation,
-	request agent.OutputCommitRequest,
-) (agent.OutputCommitReceipt, error) {
+	request agentcanonical.OutputCommitRequest,
+) (agentcanonical.OutputCommitReceipt, error) {
 	options := committer.config.Options
 	metadata := session.MessageMetadata{
 		RunID: request.Identity.RunID, AgentKind: options.AgentKind,
@@ -84,20 +85,24 @@ func (committer *canonicalConversationCommitter) CommitOutput(
 		metadata.RunPath = []string{options.RootAgentName}
 	}
 	receipt, err := committer.config.Conversation.CommitAgentCanonicalOutput(
-		ctx, request.Message.Clone(), metadata,
+		ctx, request.Message.Clone(), metadata, request.Checkpoint,
 	)
 	if err != nil {
-		return agent.OutputCommitReceipt{}, err
+		return agentcanonical.OutputCommitReceipt{}, err
 	}
 	if prepared.ResumeInterruption != nil {
 		if err := committer.config.Conversation.ResolveInterruption(prepared.ResumeInterruption.ID); err != nil {
-			return agent.OutputCommitReceipt{}, err
+			return agentcanonical.OutputCommitReceipt{}, err
 		}
 	}
-	return agent.OutputCommitReceipt{
+	canonical, err := settledTurnContextWindow(request.ContextMessages, request.ActiveUserIndex, receipt.Turn.Narrative, request.Message.Extra)
+	if err != nil {
+		return agentcanonical.OutputCommitReceipt{}, err
+	}
+	return agentcanonical.OutputCommitReceipt{
 		Revision: receipt.Revision,
-		Transcript: &agent.OutputProjection{
-			Content: receipt.Turn.Narrative, Thinking: receipt.Turn.Thinking,
+		Transcript: &agentcanonical.OutputProjection{
+			Content: receipt.Turn.Narrative, Thinking: receipt.Turn.Thinking, ContextMessages: canonical,
 		},
 	}, nil
 }

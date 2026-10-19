@@ -9,7 +9,9 @@ import (
 
 	"denova/config"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentinteraction "github.com/alfredxw/denova/agent/lifecycle/interaction"
+	agenttool "github.com/alfredxw/denova/agent/tool"
+	agentpermission "github.com/alfredxw/denova/agent/tool/permission"
 )
 
 func TestDenovaPermissionPolicyPersistsRememberedRuleBeforeAllowing(t *testing.T) {
@@ -26,22 +28,22 @@ func TestDenovaPermissionPolicyPersistsRememberedRuleBeforeAllowing(t *testing.T
 		t.Fatal(err)
 	}
 	arguments := json.RawMessage(`{"command":"go test ./..."}`)
-	request := agent.PermissionRequest{
+	request := agentpermission.PermissionRequest{
 		Tool: "bash", Arguments: arguments,
-		Descriptor: agent.ToolDescriptor{
-			Source: agent.ToolSourceShell, MutationScope: agent.ToolMutationWorkspace,
-			Recovery: agent.ToolRecoveryNonIdempotent,
+		Descriptor: agenttool.ToolDescriptor{
+			Source: agenttool.ToolSourceShell, MutationScope: agenttool.ToolMutationWorkspace,
+			Recovery: agenttool.ToolRecoveryNonIdempotent,
 		},
 	}
 	decision, err := policy.Evaluate(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Kind != agent.PermissionAsk || decision.Reason.Chinese == "" || decision.Reason.English == "" {
+	if decision.Kind != agentpermission.PermissionAsk || decision.Reason.Chinese == "" || decision.Reason.English == "" {
 		t.Fatalf("decision=%#v", decision)
 	}
-	resolved, err := policy.Resolve(context.Background(), agent.PermissionResolveRequest{
-		Request: request, Resolution: agent.InteractionResolution{Permission: agent.PermissionRemember},
+	resolved, err := policy.Resolve(context.Background(), agentpermission.PermissionResolveRequest{
+		Request: request, Resolution: agentinteraction.InteractionResolution{Permission: agentinteraction.PermissionRemember},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -58,14 +60,14 @@ func TestDenovaPermissionPolicyBlocksCriticalShellCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	decision, err := policy.Evaluate(context.Background(), agent.PermissionRequest{
+	decision, err := policy.Evaluate(context.Background(), agentpermission.PermissionRequest{
 		Tool: "bash", Arguments: json.RawMessage(`{"command":"rm -rf /"}`),
-		Descriptor: agent.ToolDescriptor{Source: agent.ToolSourceShell, MutationScope: agent.ToolMutationExternal},
+		Descriptor: agenttool.ToolDescriptor{Source: agenttool.ToolSourceShell, MutationScope: agenttool.ToolMutationExternal},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Kind != agent.PermissionBlock {
+	if decision.Kind != agentpermission.PermissionBlock {
 		t.Fatalf("decision=%#v", decision)
 	}
 }
@@ -81,7 +83,7 @@ func TestNonInteractivePermissionPolicyBlocksApprovalPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Kind != agent.PermissionBlock || decision.Details.CanRemember ||
+	if decision.Kind != agentpermission.PermissionBlock || decision.Details.CanRemember ||
 		decision.Reason.Chinese == "" || decision.Reason.English == "" {
 		t.Fatalf("decision=%#v", decision)
 	}
@@ -107,17 +109,17 @@ func TestDenovaPermissionRememberIsVisibleImmediatelyAndDoesNotChangeIdentity(t 
 	request := permissionTestRequest(`{"command":"go test ./..."}`)
 	before := policy.Identity()
 	decision, err := policy.Evaluate(context.Background(), request)
-	if err != nil || decision.Kind != agent.PermissionAsk {
+	if err != nil || decision.Kind != agentpermission.PermissionAsk {
 		t.Fatalf("initial decision=%#v err=%v", decision, err)
 	}
-	resolved, err := policy.Resolve(context.Background(), agent.PermissionResolveRequest{
-		Request: request, Resolution: agent.InteractionResolution{Permission: agent.PermissionRemember},
+	resolved, err := policy.Resolve(context.Background(), agentpermission.PermissionResolveRequest{
+		Request: request, Resolution: agentinteraction.InteractionResolution{Permission: agentinteraction.PermissionRemember},
 	})
 	if err != nil || !resolved.Allowed || !resolved.Remembered {
 		t.Fatalf("resolved=%#v err=%v", resolved, err)
 	}
 	decision, err = policy.Evaluate(context.Background(), request)
-	if err != nil || decision.Kind != agent.PermissionAllow {
+	if err != nil || decision.Kind != agentpermission.PermissionAllow {
 		t.Fatalf("same-run decision=%#v err=%v", decision, err)
 	}
 	if after := policy.Identity(); after != before {
@@ -135,7 +137,7 @@ func TestDenovaPermissionRememberIsVisibleImmediatelyAndDoesNotChangeIdentity(t 
 		t.Fatalf("persisted rules changed cold Definition identity: before=%#v reopened=%#v", before, reopened.Identity())
 	}
 	decision, err = reopened.Evaluate(context.Background(), request)
-	if err != nil || decision.Kind != agent.PermissionAllow {
+	if err != nil || decision.Kind != agentpermission.PermissionAllow {
 		t.Fatalf("reopened decision=%#v err=%v", decision, err)
 	}
 }
@@ -149,13 +151,13 @@ func TestDenovaPermissionPersistFailureDoesNotAuthorizeProcessState(t *testing.T
 		t.Fatal(err)
 	}
 	request := permissionTestRequest(`{"command":"go test ./..."}`)
-	if _, err := policy.Resolve(context.Background(), agent.PermissionResolveRequest{
-		Request: request, Resolution: agent.InteractionResolution{Permission: agent.PermissionRemember},
+	if _, err := policy.Resolve(context.Background(), agentpermission.PermissionResolveRequest{
+		Request: request, Resolution: agentinteraction.InteractionResolution{Permission: agentinteraction.PermissionRemember},
 	}); err == nil {
 		t.Fatal("remember unexpectedly succeeded")
 	}
 	decision, err := policy.Evaluate(context.Background(), request)
-	if err != nil || decision.Kind != agent.PermissionAsk {
+	if err != nil || decision.Kind != agentpermission.PermissionAsk {
 		t.Fatalf("decision after failed persist=%#v err=%v", decision, err)
 	}
 }
@@ -174,8 +176,8 @@ func TestDenovaPermissionRejectsConflictingRememberedRuleBeforePersistence(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := seed.Resolve(context.Background(), agent.PermissionResolveRequest{
-		Request: request, Resolution: agent.InteractionResolution{Permission: agent.PermissionRemember},
+	if _, err := seed.Resolve(context.Background(), agentpermission.PermissionResolveRequest{
+		Request: request, Resolution: agentinteraction.InteractionResolution{Permission: agentinteraction.PermissionRemember},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -192,8 +194,8 @@ func TestDenovaPermissionRejectsConflictingRememberedRuleBeforePersistence(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := policy.Resolve(context.Background(), agent.PermissionResolveRequest{
-		Request: request, Resolution: agent.InteractionResolution{Permission: agent.PermissionRemember},
+	if _, err := policy.Resolve(context.Background(), agentpermission.PermissionResolveRequest{
+		Request: request, Resolution: agentinteraction.InteractionResolution{Permission: agentinteraction.PermissionRemember},
 	}); err == nil {
 		t.Fatal("conflicting deterministic rule id unexpectedly succeeded")
 	}
@@ -209,20 +211,20 @@ func TestTrajectoryResourcesAreLowRiskReadOnlyEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	decision, err := policy.Evaluate(context.Background(), agent.PermissionRequest{
+	decision, err := policy.Evaluate(context.Background(), agentpermission.PermissionRequest{
 		Tool: "read", Arguments: json.RawMessage(`{"path":"trajectory://index"}`),
 	})
-	if err != nil || decision.Kind != agent.PermissionAllow {
+	if err != nil || decision.Kind != agentpermission.PermissionAllow {
 		t.Fatalf("trajectory decision=%#v err=%v", decision, err)
 	}
 }
 
-func permissionTestRequest(arguments string) agent.PermissionRequest {
-	return agent.PermissionRequest{
+func permissionTestRequest(arguments string) agentpermission.PermissionRequest {
+	return agentpermission.PermissionRequest{
 		Tool: "bash", Arguments: json.RawMessage(arguments),
-		Descriptor: agent.ToolDescriptor{
-			Source: agent.ToolSourceShell, MutationScope: agent.ToolMutationWorkspace,
-			Recovery: agent.ToolRecoveryNonIdempotent,
+		Descriptor: agenttool.ToolDescriptor{
+			Source: agenttool.ToolSourceShell, MutationScope: agenttool.ToolMutationWorkspace,
+			Recovery: agenttool.ToolRecoveryNonIdempotent,
 		},
 	}
 }

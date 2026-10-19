@@ -5,25 +5,27 @@ import (
 	"strings"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
 	producttools "denova/internal/agents/tools"
+
+	agentmiddleware "github.com/alfredxw/denova/agent/engine/middleware"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 func TestPlanReadOnlyAccessFiltersModelToolSurface(t *testing.T) {
-	definitions := []agent.ToolDefinition{
-		accessPolicyDefinition(t, "read", producttools.BoundedReadDescriptor(agent.ToolSourceRead, config.AgentToolFilesystemRead)),
-		accessPolicyDefinition(t, "task", accessPolicyDescriptor(agent.ToolExecutionChild, agent.ToolMutationNone, config.AgentToolDelegation)),
-		accessPolicyDefinition(t, "task_wait", accessPolicyDescriptor(agent.ToolExecutionInteractiveWait, agent.ToolMutationNone, config.AgentToolDelegation)),
-		accessPolicyDefinition(t, "ask", accessPolicyDescriptor(agent.ToolExecutionInteractiveWait, agent.ToolMutationSession, config.AgentToolAsk)),
-		accessPolicyDefinition(t, "todo", accessPolicyDescriptor(agent.ToolExecutionSessionExclusive, agent.ToolMutationSession, config.AgentToolTodo)),
-		accessPolicyDefinition(t, "submit_domain_state", accessPolicyDescriptor(agent.ToolExecutionSessionExclusive, agent.ToolMutationSession, "domain_commit")),
-		accessPolicyDefinition(t, "write", producttools.WorkspaceWriteDescriptor(agent.ToolSourceWrite, config.AgentToolWorkspaceWrite, agent.ToolRecoveryReconcilable)),
-		accessPolicyDefinition(t, "apply_config", accessPolicyDescriptor(agent.ToolExecutionConfigExclusive, agent.ToolMutationConfig, config.AgentToolConfigApply)),
-		accessPolicyDefinition(t, "browser", accessPolicyDescriptor(agent.ToolExecutionSessionExclusive, agent.ToolMutationExternal, config.AgentToolBrowser)),
+	definitions := []agenttool.ToolDefinition{
+		accessPolicyDefinition(t, "read", producttools.BoundedReadDescriptor(agenttool.ToolSourceRead, config.AgentToolFilesystemRead)),
+		accessPolicyDefinition(t, "send", accessPolicyDescriptor(agenttool.ToolExecutionChild, agenttool.ToolMutationNone, config.AgentToolDelegation)),
+		accessPolicyDefinition(t, "await", accessPolicyDescriptor(agenttool.ToolExecutionInteractiveWait, agenttool.ToolMutationNone, config.AgentToolDelegation)),
+		accessPolicyDefinition(t, "ask", accessPolicyDescriptor(agenttool.ToolExecutionInteractiveWait, agenttool.ToolMutationSession, config.AgentToolAsk)),
+		accessPolicyDefinition(t, "todo", accessPolicyDescriptor(agenttool.ToolExecutionSessionExclusive, agenttool.ToolMutationSession, config.AgentToolTodo)),
+		accessPolicyDefinition(t, "submit_domain_state", accessPolicyDescriptor(agenttool.ToolExecutionSessionExclusive, agenttool.ToolMutationSession, "domain_commit")),
+		accessPolicyDefinition(t, "write", producttools.WorkspaceWriteDescriptor(agenttool.ToolSourceWrite, config.AgentToolWorkspaceWrite, agenttool.ToolRecoveryReconcilable)),
+		accessPolicyDefinition(t, "apply_config", accessPolicyDescriptor(agenttool.ToolExecutionConfigExclusive, agenttool.ToolMutationConfig, config.AgentToolConfigApply)),
+		accessPolicyDefinition(t, "browser", accessPolicyDescriptor(agenttool.ToolExecutionSessionExclusive, agenttool.ToolMutationExternal, config.AgentToolBrowser)),
 	}
-	original := &agent.RunContext{Instruction: "keep", Tools: definitions}
+	original := &agentmiddleware.RunContext{Instruction: "keep", Tools: definitions}
 	middleware := NewOrchestratorMiddleware(OrchestratorConfig{})
 
 	_, filtered, err := middleware.BeforeAgent(
@@ -39,7 +41,7 @@ func TestPlanReadOnlyAccessFiltersModelToolSurface(t *testing.T) {
 	if len(original.Tools) != len(definitions) {
 		t.Fatalf("original tool surface was mutated: got %d tools, want %d", len(original.Tools), len(definitions))
 	}
-	if got, want := accessPolicyToolNames(t, filtered.Tools), []string{"read", "task", "task_wait", "ask", "todo"}; strings.Join(got, ",") != strings.Join(want, ",") {
+	if got, want := accessPolicyToolNames(t, filtered.Tools), []string{"read", "send", "await", "ask", "todo"}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("filtered tools = %v, want %v", got, want)
 	}
 }
@@ -50,13 +52,13 @@ func TestPlanReadOnlyAccessBlocksForgedMutationAtExecution(t *testing.T) {
 
 	for _, test := range []struct {
 		name       string
-		descriptor agent.ToolDescriptor
+		descriptor agenttool.ToolDescriptor
 		allowed    bool
 	}{
-		{name: "read", descriptor: producttools.BoundedReadDescriptor(agent.ToolSourceRead, config.AgentToolFilesystemRead), allowed: true},
-		{name: "ask", descriptor: accessPolicyDescriptor(agent.ToolExecutionInteractiveWait, agent.ToolMutationSession, config.AgentToolAsk), allowed: true},
-		{name: "submit_domain_state", descriptor: accessPolicyDescriptor(agent.ToolExecutionSessionExclusive, agent.ToolMutationSession, "domain_commit")},
-		{name: "write", descriptor: producttools.WorkspaceWriteDescriptor(agent.ToolSourceWrite, config.AgentToolWorkspaceWrite, agent.ToolRecoveryReconcilable)},
+		{name: "read", descriptor: producttools.BoundedReadDescriptor(agenttool.ToolSourceRead, config.AgentToolFilesystemRead), allowed: true},
+		{name: "ask", descriptor: accessPolicyDescriptor(agenttool.ToolExecutionInteractiveWait, agenttool.ToolMutationSession, config.AgentToolAsk), allowed: true},
+		{name: "submit_domain_state", descriptor: accessPolicyDescriptor(agenttool.ToolExecutionSessionExclusive, agenttool.ToolMutationSession, "domain_commit")},
+		{name: "write", descriptor: producttools.WorkspaceWriteDescriptor(agenttool.ToolSourceWrite, config.AgentToolWorkspaceWrite, agenttool.ToolRecoveryReconcilable)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			definition := accessPolicyDefinition(t, test.name, test.descriptor)
@@ -65,12 +67,12 @@ func TestPlanReadOnlyAccessBlocksForgedMutationAtExecution(t *testing.T) {
 				t.Fatal(err)
 			}
 			called := false
-			wrapped, err := middleware.WrapToolCall(context.Background(), func(context.Context, string, ...agent.ToolOption) (agent.ToolResult, error) {
+			wrapped, err := middleware.WrapToolCall(context.Background(), func(context.Context, string, ...agenttool.ToolOption) (agentschema.ToolResult, error) {
 				called = true
-				return agent.TextToolResult("executed"), nil
-			}, &agent.ToolContext{
+				return agentschema.TextToolResult("executed"), nil
+			}, &agentmiddleware.ToolContext{
 				Name: test.name,
-				Definition: agent.ToolDefinitionSnapshot{
+				Definition: agenttool.ToolDefinitionSnapshot{
 					Info: info, Descriptor: definition.Descriptor,
 				},
 			})
@@ -99,15 +101,15 @@ func TestPlanReadOnlyAccessBlocksForgedMutationAtExecution(t *testing.T) {
 
 type accessPolicyTool struct{ name string }
 
-func (tool accessPolicyTool) Info(context.Context) (*agent.ToolInfo, error) {
-	return &agent.ToolInfo{Name: tool.name}, nil
+func (tool accessPolicyTool) Info(context.Context) (*agentschema.ToolInfo, error) {
+	return &agentschema.ToolInfo{Name: tool.name}, nil
 }
 
-func (accessPolicyTool) Run(context.Context, string, ...agent.ToolOption) (agent.ToolResult, error) {
-	return agent.TextToolResult("executed"), nil
+func (accessPolicyTool) Run(context.Context, string, ...agenttool.ToolOption) (agentschema.ToolResult, error) {
+	return agentschema.TextToolResult("executed"), nil
 }
 
-func accessPolicyDefinition(t *testing.T, name string, descriptor agent.ToolDescriptor) agent.ToolDefinition {
+func accessPolicyDefinition(t *testing.T, name string, descriptor agenttool.ToolDescriptor) agenttool.ToolDefinition {
 	t.Helper()
 	definition, err := producttools.Define(accessPolicyTool{name: name}, descriptor)
 	if err != nil {
@@ -116,33 +118,33 @@ func accessPolicyDefinition(t *testing.T, name string, descriptor agent.ToolDesc
 	return definition
 }
 
-func accessPolicyDescriptor(execution agent.ToolExecutionClass, mutation agent.ToolMutationScope, capability string) agent.ToolDescriptor {
-	descriptor := agent.ToolDescriptor{
-		Source: agent.ToolSourceOther, Capability: capability,
+func accessPolicyDescriptor(execution agenttool.ToolExecutionClass, mutation agenttool.ToolMutationScope, capability string) agenttool.ToolDescriptor {
+	descriptor := agenttool.ToolDescriptor{
+		Source: agenttool.ToolSourceOther, Capability: capability,
 		Execution: execution, MutationScope: mutation,
-		ResultProjection: agent.ToolResultBoundedModelContext,
-		ResultRetention:  agent.ToolResultProtected,
-		Steering:         agent.SteeringFinishCurrent,
+		ResultProjection: agentschema.ToolResultBoundedModelContext,
+		ResultRetention:  agentschema.ToolResultProtected,
+		Steering:         agenttool.SteeringFinishCurrent,
 		MaxResultBytes:   1024,
 	}
 	switch mutation {
-	case agent.ToolMutationNone:
-		descriptor.PostCheck = agent.ToolPostCheckNone
-		descriptor.Recovery = agent.ToolRecoveryReadOnly
-	case agent.ToolMutationSession:
-		descriptor.PostCheck = agent.ToolPostCheckSessionState
-		descriptor.Recovery = agent.ToolRecoveryReconcilable
-	case agent.ToolMutationConfig:
-		descriptor.PostCheck = agent.ToolPostCheckConfigRevision
-		descriptor.Recovery = agent.ToolRecoveryReconcilable
-	case agent.ToolMutationExternal:
-		descriptor.PostCheck = agent.ToolPostCheckExternalReceipt
-		descriptor.Recovery = agent.ToolRecoveryNonIdempotent
+	case agenttool.ToolMutationNone:
+		descriptor.PostCheck = agenttool.ToolPostCheckNone
+		descriptor.Recovery = agenttool.ToolRecoveryReadOnly
+	case agenttool.ToolMutationSession:
+		descriptor.PostCheck = agenttool.ToolPostCheckSessionState
+		descriptor.Recovery = agenttool.ToolRecoveryReconcilable
+	case agenttool.ToolMutationConfig:
+		descriptor.PostCheck = agenttool.ToolPostCheckConfigRevision
+		descriptor.Recovery = agenttool.ToolRecoveryReconcilable
+	case agenttool.ToolMutationExternal:
+		descriptor.PostCheck = agenttool.ToolPostCheckExternalReceipt
+		descriptor.Recovery = agenttool.ToolRecoveryNonIdempotent
 	}
 	return descriptor
 }
 
-func accessPolicyToolNames(t *testing.T, definitions []agent.ToolDefinition) []string {
+func accessPolicyToolNames(t *testing.T, definitions []agenttool.ToolDefinition) []string {
 	t.Helper()
 	names := make([]string, 0, len(definitions))
 	for _, definition := range definitions {

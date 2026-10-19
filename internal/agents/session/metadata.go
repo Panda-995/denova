@@ -9,13 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"denova/internal/agents/conversationconfig"
 	"denova/internal/agents/conversationjournal"
 )
 
 type sessionFileStamp struct {
-	size       int64
-	modifiedNS int64
+	Size       int64 `json:"size"`
+	ModifiedNS int64 `json:"modified_ns"`
 }
 
 type cachedSessionMetadata struct {
@@ -32,12 +31,24 @@ func (s *Store) metadataLocked(id, filePath, activeID string) (SessionMeta, erro
 		// stamp captured after releasing Session.mu could otherwise cache stale
 		// metadata under the newly appended file size.
 		sess.mu.Lock()
-		meta := sess.metadataLocked(activeID)
-		if stamp, err := currentSessionFileStamp(filePath); err == nil {
+		stamp, err := currentSessionFileStamp(filePath)
+		if err != nil {
+			sess.mu.Unlock()
+			return SessionMeta{}, err
+		}
+		// Another Store can append without taking this Session's mutex. Only
+		// stamp a resident summary when it covers the observed canonical file;
+		// otherwise read the bounded metadata projection below.
+		if stamp.Size == sess.journalOffset {
+			meta := sess.metadataLocked(activeID)
+			if cached, found := s.metadata[id]; !found || cached.stamp != stamp {
+				s.metadataDirty = true
+			}
 			s.metadata[id] = cachedSessionMetadata{stamp: stamp, meta: withoutActiveSession(meta)}
+			sess.mu.Unlock()
+			return meta, nil
 		}
 		sess.mu.Unlock()
-		return meta, nil
 	}
 	stamp, err := currentSessionFileStamp(filePath)
 	if err != nil {
@@ -53,6 +64,7 @@ func (s *Store) metadataLocked(id, filePath, activeID string) (SessionMeta, erro
 		return SessionMeta{}, err
 	}
 	s.metadata[id] = cachedSessionMetadata{stamp: stamp, meta: withoutActiveSession(meta)}
+	s.metadataDirty = true
 	return meta, nil
 }
 
@@ -61,7 +73,7 @@ func currentSessionFileStamp(path string) (sessionFileStamp, error) {
 	if err != nil {
 		return sessionFileStamp{}, err
 	}
-	return sessionFileStamp{size: info.Size(), modifiedNS: info.ModTime().UnixNano()}, nil
+	return sessionFileStamp{Size: info.Size(), ModifiedNS: info.ModTime().UnixNano()}, nil
 }
 
 func withoutActiveSession(meta SessionMeta) SessionMeta {
@@ -73,6 +85,7 @@ func (s *Store) discardMissingMetadataLocked(visible map[string]struct{}) {
 	for id := range s.metadata {
 		if _, ok := visible[id]; !ok {
 			delete(s.metadata, id)
+			s.metadataDirty = true
 		}
 	}
 }
@@ -83,7 +96,7 @@ func (s *Session) metadataLocked(activeID string) SessionMeta {
 		Active: s.ID == activeID, MessageCount: s.visibleMessageCountLocked(),
 	}
 	if snapshot, ok := s.runtimeConfigLocked(); ok {
-		meta.RuntimeConfig = &snapshot
+		meta.RuntimeConfig = &snapshot.Config
 	}
 	return meta
 }
@@ -130,8 +143,8 @@ func loadSessionMetadata(filePath, activeID string) (SessionMeta, error) {
 		Active: id == activeID, MessageCount: projection.VisibleMessageCount,
 	}
 	if projection.RuntimeConfig != nil && projection.RuntimeConfigRevision > 0 {
-		snapshot := conversationconfig.Snapshot{Config: *projection.RuntimeConfig, Revision: projection.RuntimeConfigRevision}
-		meta.RuntimeConfig = &snapshot
+		selection := *projection.RuntimeConfig
+		meta.RuntimeConfig = &selection
 	}
 	return meta, nil
 }

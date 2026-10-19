@@ -30,6 +30,8 @@ const editor = {
   'editor.currentLine': '行 {{line}}',
   'editor.selectedWords': '已选：{{count}} 字',
   'editor.lineHeight': '行间距',
+  'editor.firstLineIndent': '自动首行缩进',
+  'editor.firstLineIndentDescription': '正文首行缩进两个字宽，仅影响显示。',
   'editor.dialogueHighlightColor': '对白高亮',
   'editor.dialogueHighlightReset': '恢复默认',
   'editor.dialogueHighlightField': '选择对白高亮颜色',

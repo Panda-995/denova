@@ -1,4 +1,4 @@
-import type { InitialActorTraitRoll, StoryCheckSettings, StoryDirectorModuleRefs, StoryImageSettings, StoryOpeningConfig, StoryPlanningMode, StoryProtagonist, StoryStateSchemaPolicy } from './types'
+import type { InitialActorTraitRoll, StoryPresentationSettings, StoryCheckSettings, StoryDirectorModuleRefs, StoryImageSettings, StoryOpeningConfig, StoryPlanningMode, StoryProtagonist, StoryStateSchemaPolicy } from './types'
 import type { ThinkingLevel } from '@/features/settings/thinking-levels'
 
 export interface StoryCreateInput {
@@ -14,6 +14,7 @@ export interface StoryCreateInput {
   module_refs?: StoryDirectorModuleRefs
   reply_target_chars: number
   choice_count: number
+  presentation_settings?: StoryPresentationSettings
   image_settings?: StoryImageSettings
   check_settings?: StoryCheckSettings
   opening?: StoryOpeningConfig

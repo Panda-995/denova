@@ -36,7 +36,7 @@ export function StreamingToolInput({ rawInput, streamKey }: StreamingToolInputPr
   return (
     <CodeBlockContainer
       language="json"
-      className="rounded-none border-x-0 border-b-0 border-[var(--nova-border)] bg-[var(--nova-surface-2)] text-[var(--nova-accent-green)]"
+      className="nova-tool-surface rounded-none border-x-0 border-b-0 border-[var(--nova-border)] bg-[var(--nova-surface-2)] text-[var(--nova-accent-green)]"
     >
       <pre
         ref={scrollLock.ref}

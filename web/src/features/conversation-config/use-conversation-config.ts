@@ -31,7 +31,7 @@ interface BoundError {
 
 /**
  * Owns one conversation's compare-and-swap configuration snapshot.
- * The backend also remembers explicit Writing/Game model choices in Settings.
+ * The backend also remembers explicit runtime and Writing/Game model choices in Settings.
  * Existing conversations keep their own snapshots; uncommitted drafts refresh.
  */
 export function useConversationConfig(binding?: ConversationConfigBinding): ConversationConfigController {
@@ -109,9 +109,12 @@ export function useConversationConfig(binding?: ConversationConfigBinding): Conv
   }, [bindingKey, source])
 
   useEffect(() => {
-    if (snapshot?.revision !== 0) return
+    // Settings can repair a failed load, but cannot dismiss a durable
+    // conversation's failed save before the user retries it.
+    if (snapshot !== null && snapshot.revision !== 0) return
+    if (snapshot === null && !error) return
     return subscribeSettingsTarget(GLOBAL_SETTINGS_TARGET, () => { void reload() })
-  }, [reload, snapshot?.revision])
+  }, [error, reload, snapshot?.revision])
 
   const patch = useCallback(async (changes: ConversationConfigChanges) => {
     if (!normalizedBinding || savingRef.current || !hasChanges(changes)) return false
@@ -127,7 +130,9 @@ export function useConversationConfig(binding?: ConversationConfigBinding): Conv
       try {
         next = await patchConversationConfig(normalizedBinding, changes, base.revision)
       } catch (reason) {
-        if (!(reason instanceof APIError) || reason.status !== 409) throw reason
+        // Applying an engine is an explicit review of one exact revision.
+        // A conflict must be shown, never silently retried against new state.
+        if (changes.runtime || !(reason instanceof APIError) || reason.status !== 409) throw reason
         const latest = await fetchConversationConfig(normalizedBinding)
         next = await patchConversationConfig(normalizedBinding, changes, latest.revision)
       }
@@ -152,15 +157,16 @@ export function useConversationConfig(binding?: ConversationConfigBinding): Conv
     } finally {
       savingRef.current = false
       setSaving(false)
-      if ((changes.profile_id !== undefined || changes.thinking_level !== undefined)
-        && (base.agent_kind === 'ide' || base.agent_kind === 'interactive_story')) {
+      if (changes.runtime !== undefined || ((changes.profile_id !== undefined || changes.thinking_level !== undefined)
+        && (base.agent_kind === 'ide' || base.agent_kind === 'interactive_story'))) {
         void queryClient.invalidateQueries({ queryKey: settingsQueryKeys.all, refetchType: 'all' })
-          .catch((reason) => console.warn('[conversation-config] refresh remembered model settings failed', { reason }))
+          .catch((reason) => console.warn('[conversation-config] refresh remembered selection settings failed', { reason }))
       }
     }
   }, [bindingKey, normalizedBinding, reload, snapshot, source])
 
   return {
+    binding: normalizedBinding,
     snapshot,
     initialized: snapshot !== null,
     loading: Boolean(normalizedBinding) && (loading || (snapshot === null && error === null)),
@@ -173,7 +179,9 @@ export function useConversationConfig(binding?: ConversationConfigBinding): Conv
 
 export function conversationConfigBindingKey(binding: ConversationConfigBinding) {
   return [
-    binding.mode,
+    // Writing and AgentChat address the same product Session journal. Applying
+    // its runtime on Agents must also refresh an already open Writing composer.
+    binding.mode === 'writing' || binding.mode === 'agent_chat' ? 'project_conversation' : binding.mode,
     binding.project_id ?? '',
     binding.session_id ?? '',
     binding.story_id ?? '',

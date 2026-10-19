@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"denova/internal/agents/conversationjournal"
 	"denova/internal/agents/sessionjournal"
 	"denova/internal/localfs"
 
@@ -77,4 +78,17 @@ func AgentSessionKeys(filePath string) ([]agentsession.Key, error) {
 	}
 	defer sess.Close()
 	return sess.projection.AgentSessions.Keys(), nil
+}
+
+// OpenStoreAgentReader observes lifecycle facts without the execution lease.
+func OpenStoreAgentReader(ctx context.Context, sessionsDir, sessionID string, key agentsession.Key) (agentsession.Log, error) {
+	if err := validateSessionID(sessionID); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(sessionsDir, sessionID+".jsonl")
+	generation, err := readSessionJournalIncarnation(path)
+	if err != nil {
+		return nil, err
+	}
+	return sessionjournal.OpenCurrent(ctx, path, conversationjournal.Identity{ID: sessionID, Generation: generation}, key)
 }

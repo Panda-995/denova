@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import { Node, mergeAttributes } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
@@ -7,6 +7,7 @@ import type { Editor } from '@tiptap/react'
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { measureLongestLineWidth, parseCssPixels, resolveCompactTextWidth } from '@/lib/text-input-measurement'
 import { workspaceFileName } from '@/lib/workspace-path'
+import { deleteSafariComposerText } from './composer-text-deletion'
 
 type ComposerTokenKind = 'skill' | 'file' | 'lore' | 'style'
 type ComposerTriggerKind = 'slash' | 'reference' | 'style'
@@ -246,7 +247,9 @@ export const ComposerTokenInput = forwardRef<ComposerTokenInputHandle, ComposerT
     else dom.removeAttribute('autocapitalize')
   }, [autoCapitalize, editor, enterKeyHint, inputMode, placeholder, rows])
 
-  useEffect(() => {
+  // Apply the committed value before another input can reach the editor. A
+  // delayed passive effect can otherwise overwrite a newly entered draft.
+  useLayoutEffect(() => {
     if (!editor || editor.isDestroyed) return
     const current = serializeComposerDoc(editor.state.doc)
     if (current === value) {
@@ -387,10 +390,10 @@ export const ComposerTokenInput = forwardRef<ComposerTokenInputHandle, ComposerT
   }, [editor, maxRows, minRows, multilineMode, value])
   syncHeightRef.current = syncHeight
 
-  function handleDefaultKeyDown(event: KeyboardEvent) {
+  function handleDefaultKeyDown(event: KeyboardEvent): boolean {
     if (event.key === 'Backspace' && deleteAdjacentToken(editor, 'before')) return true
     if (event.key === 'Delete' && deleteAdjacentToken(editor, 'after')) return true
-    return false
+    return editor ? deleteSafariComposerText(editor.view, event) : false
   }
 
   function emitTrigger(target: Editor) {

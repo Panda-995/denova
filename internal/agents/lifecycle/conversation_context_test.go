@@ -10,7 +10,11 @@ import (
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
 
-	agent "github.com/alfredxw/denova/agent"
+	"github.com/alfredxw/denova/agent"
+	sdkcontext "github.com/alfredxw/denova/agent/context"
+	agentcompaction "github.com/alfredxw/denova/agent/context/compaction"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
 )
 
 type contextTestConversation struct {
@@ -26,7 +30,7 @@ func (conversation *contextTestConversation) AssembleModelContext(
 ) (agentcontext.ModelContextResult, error) {
 	conversation.assemblies++
 	assembled, err := agentcontext.NewAssembler(agentcontext.Budget{}).Assemble(context.Background(), agentcontext.AssembleRequest{
-		Messages: []*agent.Message{agent.UserMessage("精确的 Denova 用户消息 / exact Denova user message")},
+		Messages: []*agentschema.Message{agentschema.UserMessage("精确的 Denova 用户消息 / exact Denova user message")},
 		Fragments: []agentcontext.Fragment{
 			{
 				ID: "stable", Source: "workspace.stable", Title: "稳定状态", Purpose: "cache prefix",
@@ -45,11 +49,11 @@ func (conversation *contextTestConversation) AssembleModelContext(
 type boundaryCommitterProbe struct {
 	preparedContext   agentchat.AgentContextPreparation
 	outputPreparation agentchat.AgentContextPreparation
-	outputRequest     agent.OutputCommitRequest
+	outputRequest     agentcanonical.OutputCommitRequest
 }
 
-func (probe *boundaryCommitterProbe) MaterializeInput(_ context.Context, request agent.InputCommitRequest) (agent.CommitReceipt, error) {
-	return agent.CommitReceipt{Revision: "input:1"}, nil
+func (probe *boundaryCommitterProbe) MaterializeInput(_ context.Context, request agentcanonical.InputCommitRequest) (agentcanonical.CommitReceipt, error) {
+	return agentcanonical.CommitReceipt{Revision: "input:1"}, nil
 }
 
 func (probe *boundaryCommitterProbe) ApplyPreparedContext(_ context.Context, prepared agentchat.AgentContextPreparation) error {
@@ -57,10 +61,10 @@ func (probe *boundaryCommitterProbe) ApplyPreparedContext(_ context.Context, pre
 	return nil
 }
 
-func (probe *boundaryCommitterProbe) CommitOutput(_ context.Context, prepared agentchat.AgentContextPreparation, request agent.OutputCommitRequest) (agent.OutputCommitReceipt, error) {
+func (probe *boundaryCommitterProbe) CommitOutput(_ context.Context, prepared agentchat.AgentContextPreparation, request agentcanonical.OutputCommitRequest) (agentcanonical.OutputCommitReceipt, error) {
 	probe.outputPreparation = prepared
 	probe.outputRequest = request
-	return agent.OutputCommitReceipt{Revision: "output:1"}, nil
+	return agentcanonical.OutputCommitReceipt{Revision: "output:1"}, nil
 }
 
 func (*contextTestConversation) AppendAssistant(string) error                 { return nil }
@@ -79,7 +83,7 @@ func TestConversationContextSourcePreservesExactDenovaRenderingAndCycleIdentity(
 		Conversation: conversation,
 		Request:      agentchat.ChatRequest{Message: "raw request"},
 		Options:      agentrun.Options{AgentKind: agentrun.AgentKindIDE, Workspace: "/book"},
-		Identity:     agent.CapabilityIdentity{Kind: "context.denova-test", Version: 1},
+		Identity:     agentschema.CapabilityIdentity{Kind: "context.denova-test", Version: 1},
 		OnPrepared: func(agentchat.AgentContextPreparation) {
 			preparedCalled = true
 		},
@@ -87,8 +91,8 @@ func TestConversationContextSourcePreservesExactDenovaRenderingAndCycleIdentity(
 	if err != nil {
 		t.Fatal(err)
 	}
-	fragments, err := source.Materialize(context.Background(), agent.ContextRequest{
-		Run:   agent.RunView{ID: "run-1", CommandID: "command-1", Cycle: 2},
+	fragments, err := source.Materialize(context.Background(), sdkcontext.ContextRequest{
+		Run:   agentschema.RunView{ID: "run-1", CommandID: "command-1", Cycle: 2},
 		Input: agent.Input{Text: "raw request"},
 	})
 	if err != nil {
@@ -104,15 +108,15 @@ func TestConversationContextSourcePreservesExactDenovaRenderingAndCycleIdentity(
 		t.Fatalf("fragments=%#v", fragments)
 	}
 	leading := fragments[0]
-	if leading.Placement != agent.ContextLeadingMessage || leading.Rendering != agent.ContextRenderVerbatim ||
-		leading.Role != agent.User || !strings.Contains(leading.Content, "stable body") || leading.HardLimit < minimumDenovaContextHardLimit {
+	if leading.Placement != agentschema.ContextLeadingMessage || leading.Rendering != agentschema.ContextRenderVerbatim ||
+		leading.Role != agentschema.User || !strings.Contains(leading.Content, "stable body") || leading.HardLimit < minimumDenovaContextHardLimit {
 		t.Fatalf("leading fragment=%#v", leading)
 	}
-	if fragments[1].Placement != agent.ContextAuditOnly || fragments[1].Content != "turn body" {
+	if fragments[1].Placement != agentschema.ContextAuditOnly || fragments[1].Content != "turn body" {
 		t.Fatalf("audit fragment=%#v", fragments[1])
 	}
 	final := fragments[2]
-	if final.Placement != agent.ContextFinalUserMessage || final.Rendering != agent.ContextRenderVerbatim ||
+	if final.Placement != agentschema.ContextFinalUserMessage || final.Rendering != agentschema.ContextRenderVerbatim ||
 		final.Content != "精确的 Denova 用户消息 / exact Denova user message" || final.HardLimit < minimumDenovaContextHardLimit {
 		t.Fatalf("final fragment=%#v", final)
 	}
@@ -122,12 +126,12 @@ func TestConversationContextSourceRejectsInexactCycleIdentity(t *testing.T) {
 	source, err := NewConversationContextSource(ConversationContextConfig{
 		Conversation: &contextTestConversation{},
 		Request:      agentchat.ChatRequest{Message: "raw request"},
-		Identity:     agent.CapabilityIdentity{Kind: "context.denova-test", Version: 1},
+		Identity:     agentschema.CapabilityIdentity{Kind: "context.denova-test", Version: 1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = source.Materialize(context.Background(), agent.ContextRequest{Run: agent.RunView{ID: "run-1", Cycle: 1}})
+	_, err = source.Materialize(context.Background(), sdkcontext.ContextRequest{Run: agentschema.RunView{ID: "run-1", Cycle: 1}})
 	if err == nil || !strings.Contains(err.Error(), "exact Agent cycle identity") {
 		t.Fatalf("error=%v", err)
 	}
@@ -140,21 +144,21 @@ func TestConversationBoundarySharesExactPreparationAcrossCanonicalAndContext(t *
 		Conversation:      conversation,
 		Request:           agentchat.ChatRequest{Message: "raw request"},
 		Options:           agentrun.Options{AgentKind: agentrun.AgentKindIDE, Workspace: "/book"},
-		ContextIdentity:   agent.CapabilityIdentity{Kind: "context.boundary-test", Version: 1},
-		CanonicalIdentity: agent.CapabilityIdentity{Kind: "canonical.boundary-test", Version: 1},
+		ContextIdentity:   agentschema.CapabilityIdentity{Kind: "context.boundary-test", Version: 1},
+		CanonicalIdentity: agentschema.CapabilityIdentity{Kind: "canonical.boundary-test", Version: 1},
 		Committer:         committer,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity := agent.CommitIdentity{CommandID: "command-1", RunID: "run-1", Cycle: 1, Stage: agent.CommitInput}
-	if _, err := boundary.CanonicalAdapter().MaterializeInput(context.Background(), agent.InputCommitRequest{
+	identity := agentcanonical.CommitIdentity{CommandID: "command-1", RunID: "run-1", Cycle: 1, Stage: agentcanonical.CommitInput}
+	if _, err := boundary.CanonicalAdapter().MaterializeInput(context.Background(), agentcanonical.InputCommitRequest{
 		Identity: identity, Hash: "input-hash", Input: agent.Text("raw request"),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	fragments, err := boundary.ContextSource().Materialize(context.Background(), agent.ContextRequest{
-		Run: agent.RunView{ID: "run-1", CommandID: "command-1", Cycle: 1}, Input: agent.Text("raw request"),
+	fragments, err := boundary.ContextSource().Materialize(context.Background(), sdkcontext.ContextRequest{
+		Run: agentschema.RunView{ID: "run-1", CommandID: "command-1", Cycle: 1}, Input: agent.Text("raw request"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -163,9 +167,9 @@ func TestConversationBoundarySharesExactPreparationAcrossCanonicalAndContext(t *
 		t.Fatalf("assemblies=%d fragments=%#v", conversation.assemblies, fragments)
 	}
 	outputIdentity := identity
-	outputIdentity.Stage = agent.CommitOutput
-	if _, err := boundary.CanonicalAdapter().CommitOutput(context.Background(), agent.OutputCommitRequest{
-		Identity: outputIdentity, Hash: "output-hash", Message: *agent.AssistantMessage("answer", nil),
+	outputIdentity.Stage = agentcanonical.CommitOutput
+	if _, err := boundary.CanonicalAdapter().CommitOutput(context.Background(), agentcanonical.OutputCommitRequest{
+		Identity: outputIdentity, Hash: "output-hash", Message: *agentschema.AssistantMessage("answer", nil),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -182,25 +186,25 @@ func TestConversationBoundaryCommitsProductProjectedOutputWithRawAgentHash(t *te
 		Conversation:      conversation,
 		Request:           agentchat.ChatRequest{Message: "continue"},
 		Options:           agentrun.Options{AgentKind: agentrun.AgentKindInteractiveStory},
-		ContextIdentity:   agent.CapabilityIdentity{Kind: "context.output-projection-test", Version: 1},
-		CanonicalIdentity: agent.CapabilityIdentity{Kind: "canonical.output-projection-test", Version: 1},
+		ContextIdentity:   agentschema.CapabilityIdentity{Kind: "context.output-projection-test", Version: 1},
+		CanonicalIdentity: agentschema.CapabilityIdentity{Kind: "canonical.output-projection-test", Version: 1},
 		Committer:         committer,
-		ProjectOutput: func(message *agent.Message) (*agent.Message, *agent.OutputProjection) {
+		ProjectOutput: func(message *agentschema.Message) (*agentschema.Message, *agentcanonical.OutputProjection) {
 			if message == nil || message.Content != "" {
 				t.Fatalf("raw Agent output = %#v", message)
 			}
 			projected := message.Clone()
 			projected.Content = "durable story narrative"
-			return projected, &agent.OutputProjection{Content: projected.Content}
+			return projected, &agentcanonical.OutputProjection{Content: projected.Content}
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipt, err := boundary.CanonicalAdapter().CommitOutput(context.Background(), agent.OutputCommitRequest{
-		Identity: agent.CommitIdentity{CommandID: "command-1", RunID: "run-1", Cycle: 1, Stage: agent.CommitOutput},
+	receipt, err := boundary.CanonicalAdapter().CommitOutput(context.Background(), agentcanonical.OutputCommitRequest{
+		Identity: agentcanonical.CommitIdentity{CommandID: "command-1", RunID: "run-1", Cycle: 1, Stage: agentcanonical.CommitOutput},
 		Hash:     "raw-agent-output-hash",
-		Message:  *agent.AssistantMessage("", nil),
+		Message:  *agentschema.AssistantMessage("", nil),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -220,20 +224,20 @@ func TestConversationBoundaryRematerializesSameCycleAfterAgentCompaction(t *test
 		Conversation:      conversation,
 		Request:           agentchat.ChatRequest{Message: "raw request"},
 		Options:           agentrun.Options{AgentKind: agentrun.AgentKindIDE, Workspace: "/book"},
-		ContextIdentity:   agent.CapabilityIdentity{Kind: "context.boundary-compaction-test", Version: 1},
-		CanonicalIdentity: agent.CapabilityIdentity{Kind: "canonical.boundary-compaction-test", Version: 1},
+		ContextIdentity:   agentschema.CapabilityIdentity{Kind: "context.boundary-compaction-test", Version: 1},
+		CanonicalIdentity: agentschema.CapabilityIdentity{Kind: "canonical.boundary-compaction-test", Version: 1},
 		Committer:         committer,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	run := agent.RunView{ID: "run-compaction", CommandID: "command-compaction", Cycle: 1}
-	request := agent.ContextRequest{Run: run, Input: agent.Text("raw request")}
+	run := agentschema.RunView{ID: "run-compaction", CommandID: "command-compaction", Cycle: 1}
+	request := sdkcontext.ContextRequest{Run: run, Input: agent.Text("raw request")}
 	if _, err := boundary.ContextSource().Materialize(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
-	request.Compaction = &agent.CompactionState{
-		ID: "checkpoint-1", Revision: 1, Summary: "summary", ReplacementFrom: 0, ReplacementTo: 1,
+	request.Compaction = &agentcompaction.CompactionState{
+		ID: "checkpoint-1", Revision: 1, Summary: "summary", SourceMessageCount: 1,
 	}
 	if _, err := boundary.ContextSource().Materialize(context.Background(), request); err != nil {
 		t.Fatal(err)
@@ -241,9 +245,9 @@ func TestConversationBoundaryRematerializesSameCycleAfterAgentCompaction(t *test
 	if conversation.assemblies != 2 {
 		t.Fatalf("same-cycle compaction assemblies=%d, want 2", conversation.assemblies)
 	}
-	identity := agent.CommitIdentity{CommandID: run.CommandID, RunID: run.ID, Cycle: run.Cycle, Stage: agent.CommitOutput}
-	if _, err := boundary.CanonicalAdapter().CommitOutput(context.Background(), agent.OutputCommitRequest{
-		Identity: identity, Hash: "output-hash", Message: *agent.AssistantMessage("answer", nil),
+	identity := agentcanonical.CommitIdentity{CommandID: run.CommandID, RunID: run.ID, Cycle: run.Cycle, Stage: agentcanonical.CommitOutput}
+	if _, err := boundary.CanonicalAdapter().CommitOutput(context.Background(), agentcanonical.OutputCommitRequest{
+		Identity: identity, Hash: "output-hash", Message: *agentschema.AssistantMessage("answer", nil),
 	}); err != nil {
 		t.Fatal(err)
 	}

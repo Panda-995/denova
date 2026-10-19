@@ -1,0 +1,333 @@
+package lifecycle
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+
+	agentengine "github.com/alfredxw/denova/agent/engine"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentsession "github.com/alfredxw/denova/agent/session"
+)
+
+const maxTaskCompletionIDBytes = 1024
+
+type taskCompletionMailbox struct {
+	pending     map[string]agentschema.TaskCompletion
+	order       []string
+	delivered   map[string]struct{}
+	outstanding map[string]struct{}
+	activity    chan struct{}
+}
+
+func newTaskCompletionMailbox() taskCompletionMailbox {
+	return taskCompletionMailbox{
+		pending:     make(map[string]agentschema.TaskCompletion),
+		delivered:   make(map[string]struct{}),
+		outstanding: make(map[string]struct{}),
+		activity:    make(chan struct{}),
+	}
+}
+
+// TrackTaskCompletion registers one attached child task before send delegate
+// returns. A parent model loop may not settle while any registered child has
+// not yet published a terminal completion.
+func (session *Session) TrackTaskCompletion(ctx context.Context, id string) (bool, error) {
+	if session == nil {
+		return false, agentschema.ErrSessionClosed
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false, errors.New("task completion tracking requires an ID")
+	}
+	if len(id) > maxTaskCompletionIDBytes {
+		return false, fmt.Errorf("task completion ID exceeds %d bytes", maxTaskCompletionIDBytes)
+	}
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.closed {
+		return false, agentschema.ErrSessionClosed
+	}
+	if _, ok := session.taskCompletions.delivered[id]; ok {
+		return false, nil
+	}
+	if _, ok := session.taskCompletions.pending[id]; ok {
+		return false, nil
+	}
+	if _, ok := session.taskCompletions.outstanding[id]; ok {
+		return false, nil
+	}
+	session.taskCompletions.outstanding[id] = struct{}{}
+	session.signalTaskCompletionActivityLocked()
+	return true, nil
+}
+
+// UntrackTaskCompletion detaches a paused child from a live synchronization
+// wait. It creates no completion or delivery fact; Resume registers it again.
+func (session *Session) UntrackTaskCompletion(ctx context.Context, id string) error {
+	if _, err := commandContext(ctx); err != nil {
+		return err
+	}
+	if session == nil {
+		return agentschema.ErrSessionClosed
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.closed {
+		return agentschema.ErrSessionClosed
+	}
+	delete(session.taskCompletions.outstanding, id)
+	session.signalTaskCompletionActivityLocked()
+	return nil
+}
+
+// EnqueueTaskCompletion queues a completion without starting or steering a
+// parent Run. It returns false when the same completion is already pending or
+// durably delivered.
+func (session *Session) EnqueueTaskCompletion(ctx context.Context, completion agentschema.TaskCompletion) (bool, error) {
+	if session == nil {
+		return false, agentschema.ErrSessionClosed
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+	}
+	completion.ID = strings.TrimSpace(completion.ID)
+	if err := validateTaskCompletion(completion); err != nil {
+		return false, err
+	}
+	completion.Message = completion.Message.Clone()
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.closed {
+		return false, agentschema.ErrSessionClosed
+	}
+	if _, ok := session.taskCompletions.delivered[completion.ID]; ok {
+		delete(session.taskCompletions.outstanding, completion.ID)
+		return false, nil
+	}
+	if _, ok := session.taskCompletions.pending[completion.ID]; ok {
+		delete(session.taskCompletions.outstanding, completion.ID)
+		return false, nil
+	}
+	delete(session.taskCompletions.outstanding, completion.ID)
+	session.taskCompletions.pending[completion.ID] = completion
+	session.taskCompletions.order = append(session.taskCompletions.order, completion.ID)
+	session.signalTaskCompletionActivityLocked()
+	return true, nil
+}
+
+func (session *Session) signalTaskCompletionActivityLocked() {
+	close(session.taskCompletions.activity)
+	session.taskCompletions.activity = make(chan struct{})
+}
+
+// WatchTaskCompletions atomically checks the requested IDs and subscribes to
+// future mailbox activity. Activity is intentionally broader than the filter;
+// callers re-check PendingIDs after every wakeup.
+func (session *Session) WatchTaskCompletions(ctx context.Context, ids []string) (agentschema.TaskCompletionWatch, error) {
+	if session == nil {
+		return agentschema.TaskCompletionWatch{}, agentschema.ErrSessionClosed
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return agentschema.TaskCompletionWatch{}, err
+		}
+	}
+	session.mu.RLock()
+	defer session.mu.RUnlock()
+	if session.closed {
+		return agentschema.TaskCompletionWatch{}, agentschema.ErrSessionClosed
+	}
+	pending := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
+		if _, ok := session.taskCompletions.pending[id]; ok {
+			pending = append(pending, id)
+		}
+	}
+	return agentschema.TaskCompletionWatch{PendingIDs: pending, Activity: session.taskCompletions.activity}, nil
+}
+
+func validateTaskCompletion(completion agentschema.TaskCompletion) error {
+	if completion.ID == "" {
+		return errors.New("task completion requires an ID")
+	}
+	if len(completion.ID) > maxTaskCompletionIDBytes {
+		return fmt.Errorf("task completion ID exceeds %d bytes", maxTaskCompletionIDBytes)
+	}
+	message := completion.Message
+	if message == nil || message.Role != agentschema.User || message.TaskCompletion == nil {
+		return errors.New("task completion requires a typed user message")
+	}
+	if strings.TrimSpace(message.TaskCompletion.CompletionID) != completion.ID {
+		return errors.New("task completion message ID does not match its envelope")
+	}
+	if strings.TrimSpace(message.TaskCompletion.Author) == "" || strings.TrimSpace(message.TaskCompletion.Recipient) == "" {
+		return errors.New("task completion message requires author and recipient")
+	}
+	if len(message.ToolCalls) != 0 || message.ToolCallID != "" || message.ToolResult != nil {
+		return errors.New("task completion cannot carry tool protocol fields")
+	}
+	return nil
+}
+
+func (session *Session) pendingTaskCompletions() []agentschema.TaskCompletion {
+	if session == nil {
+		return nil
+	}
+	session.mu.RLock()
+	defer session.mu.RUnlock()
+	if session.closed || len(session.taskCompletions.pending) == 0 {
+		return nil
+	}
+	result := make([]agentschema.TaskCompletion, 0, len(session.taskCompletions.pending))
+	for _, id := range session.taskCompletions.order {
+		completion, ok := session.taskCompletions.pending[id]
+		if !ok {
+			continue
+		}
+		completion.Message = completion.Message.Clone()
+		result = append(result, completion)
+	}
+	return result
+}
+
+func (session *Session) commitTaskCompletionCheckpoint(
+	ctx context.Context,
+	state json.RawMessage,
+	ids []string,
+) error {
+	if len(state) == 0 || len(ids) == 0 {
+		return errors.New("task completion checkpoint requires state and delivery IDs")
+	}
+	unique := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || len(id) > maxTaskCompletionIDBytes {
+			return errors.New("task completion checkpoint contains an invalid delivery ID")
+		}
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	if len(unique) == 0 {
+		return errors.New("task completion checkpoint contains no delivery IDs")
+	}
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	allDelivered := true
+	for _, id := range unique {
+		if _, delivered := session.taskCompletions.delivered[id]; delivered {
+			continue
+		}
+		allDelivered = false
+		if _, pending := session.taskCompletions.pending[id]; !pending {
+			return fmt.Errorf("task completion %q is no longer pending", id)
+		}
+	}
+	if allDelivered {
+		return nil
+	}
+	if session.canonicalMessages {
+		previous := session.engineState
+		session.engineState = append(json.RawMessage(nil), state...)
+		if err := session.persistTranscriptLocked(ctx); err != nil {
+			session.engineState = previous
+			return err
+		}
+	} else {
+		transcript, err := json.Marshal(persistedSessionTranscript{
+			EngineState: append(json.RawMessage(nil), state...),
+		})
+		if err != nil {
+			return fmt.Errorf("encode Agent Session transcript: %w", err)
+		}
+		delivery, err := json.Marshal(persistedTaskCompletionDelivery{IDs: append([]string(nil), unique...)})
+		if err != nil {
+			return fmt.Errorf("encode Agent task completion delivery: %w", err)
+		}
+		if err := session.appendRecordsLocked(ctx,
+			agentsession.Record{Kind: sessionTranscriptRecord, Version: sessionRecordVersion, Data: transcript},
+			agentsession.Record{Kind: sessionTaskCompletionDeliveryRecord, Version: sessionRecordVersion, Data: delivery},
+		); err != nil {
+			return err
+		}
+	}
+
+	session.engineState = append(json.RawMessage(nil), state...)
+	for _, id := range unique {
+		session.taskCompletions.delivered[id] = struct{}{}
+		delete(session.taskCompletions.pending, id)
+	}
+	retained := session.taskCompletions.order[:0]
+	for _, id := range session.taskCompletions.order {
+		if _, delivered := seen[id]; !delivered {
+			retained = append(retained, id)
+		}
+	}
+	session.taskCompletions.order = retained
+	return nil
+}
+
+type sessionTaskCompletions struct{ session *Session }
+
+func (reader sessionTaskCompletions) PendingCompletions() []agentschema.TaskCompletion {
+	return reader.session.pendingTaskCompletions()
+}
+
+func (reader sessionTaskCompletions) HasCompletions() bool {
+	session := reader.session
+	session.mu.RLock()
+	defer session.mu.RUnlock()
+	return len(session.taskCompletions.outstanding) != 0 || len(session.taskCompletions.pending) != 0
+}
+
+func (reader sessionTaskCompletions) WaitCompletions(ctx context.Context, interrupt <-chan struct{}) (bool, error) {
+	session := reader.session
+	for {
+		session.mu.RLock()
+		if session.closed {
+			session.mu.RUnlock()
+			return false, agentschema.ErrSessionClosed
+		}
+		if len(session.taskCompletions.outstanding) == 0 {
+			ready := len(session.taskCompletions.pending) != 0
+			session.mu.RUnlock()
+			return ready, nil
+		}
+		activity := session.taskCompletions.activity
+		session.mu.RUnlock()
+
+		select {
+		case <-activity:
+			continue
+		case <-interrupt:
+			return false, agentengine.ErrTaskCompletionWaitInterrupted
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+}

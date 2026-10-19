@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils'
 import { AgentActivityShimmer, MessageItem, type AssistantMessagePresentation } from './MessageItem'
 import { AgentMessageItem } from './AgentMessageItem'
 import { AgentExecutionProcess } from './AgentExecutionProcess'
-import type { AgentRunPresentationSection } from './agent-run-presentation'
+import { VirtualizedMessageRow } from './VirtualizedMessageState'
 import { AgentRunActions } from './AgentRunActions'
 
 export type AgentChatListItem =
@@ -16,20 +16,20 @@ export type AgentChatListItem =
   | { kind: 'typing'; key: string }
   | { kind: 'activity'; key: string; content: string; runId?: string }
   | { kind: 'clear'; key: string; createdAt?: string }
-  | { kind: 'message'; key: string; view: AgentMessageView; sourceIndex: number }
-  | { kind: 'legacy-message'; key: string; message: ChatMessage; sourceIndex: number; openView?: AgentMessageView }
-  | { kind: 'trace'; key: string; views: AgentMessageView[]; activeStreamingTrace: boolean }
-  | { kind: 'run'; key: string; runId: string; sections: AgentRunPresentationSection[]; sourceIndex: number }
+  | { kind: 'message'; key: string; view: AgentMessageView; sourceIndex: number; processKey?: string; depth?: number; ownerRunId?: string; navigationAnchor?: string }
+  | { kind: 'legacy-message'; key: string; message: ChatMessage; sourceIndex: number; openView?: AgentMessageView; processKey?: string; depth?: number; ownerRunId?: string; navigationAnchor?: string }
+  | { kind: 'process'; key: string; views: AgentMessageView[]; runId: string; running: boolean; expanded: boolean; showTiming: boolean; navigationAnchor: string }
+  | { kind: 'run-actions'; key: string; runId: string }
   | { kind: 'attachment'; key: string; runId: string; content: ReactNode }
 
-export function AgentChatListRow({ projectId, item, nextItem, executionTimings, isStreaming, tailFollowActive, activeTraceDisplay, subAgentPresentation, highlightDialogue, messageStyle, contentClassName, canMutateMessage, onEditMessage, onEditAssistantReply, onCreateBranch, onRegenerateMessage, onSwitchMessageVersion, onOpenSubAgentSession, onInsertIllustration, onGenerateInteractiveImage, generatingInteractiveImageTurnId, activeSubAgentSessionKey, onApprovePlan, onContinuePlan, onExitPlanMode, onResolveAsk, onInteractiveCardLayoutChange, streamingRowRef, syncStreamingTailLayout }: {
+export function AgentChatListRow({ projectId, item, nextItem, executionTimings, isStreaming, tailFollowActive, onProcessExpandedChange, subAgentPresentation, highlightDialogue, messageStyle, contentClassName, canMutateMessage, onEditMessage, onEditAssistantReply, onCreateBranch, onRegenerateMessage, onSwitchMessageVersion, onOpenSubAgentSession, onInsertIllustration, onReadAloud, onGenerateInteractiveImage, generatingInteractiveImageTurnId, activeSubAgentSessionKey, onApprovePlan, onContinuePlan, onExitPlanMode, onResolveAsk, onInteractiveCardLayoutChange, streamingRowRef, syncStreamingTailLayout }: {
   projectId?: string
   item: AgentChatListItem
   executionTimings: ReadonlyMap<string, AgentExecutionTiming>
   nextItem?: AgentChatListItem
   isStreaming: boolean
   tailFollowActive: boolean
-  activeTraceDisplay: 'expanded' | 'collapsed'
+  onProcessExpandedChange?: (key: string, running: boolean, expanded: boolean, navigationAnchor: string) => void | Promise<void>
   subAgentPresentation: 'card' | 'content'
   highlightDialogue: boolean
   messageStyle?: CSSProperties
@@ -42,6 +42,7 @@ export function AgentChatListRow({ projectId, item, nextItem, executionTimings, 
   onSwitchMessageVersion?: (view: AgentMessageView, direction: -1 | 1) => void
   onOpenSubAgentSession?: (view: AgentMessageView) => void
   onInsertIllustration?: (illustration: ChapterIllustration) => void
+  onReadAloud?: (message: AgentMessageView) => void
   onGenerateInteractiveImage?: (view: AgentMessageView) => void
   generatingInteractiveImageTurnId?: string
   activeSubAgentSessionKey?: string
@@ -76,7 +77,8 @@ export function AgentChatListRow({ projectId, item, nextItem, executionTimings, 
         onSwitchMessageVersion={isStreaming || !mutationsAllowed ? undefined : onSwitchMessageVersion}
         onOpenSubAgentSession={onOpenSubAgentSession}
         onInsertIllustration={onInsertIllustration}
-        onGenerateInteractiveImage={isStreaming || !mutationsAllowed ? undefined : onGenerateInteractiveImage}
+        onReadAloud={onReadAloud}
+        onGenerateInteractiveImage={isStreaming ? undefined : onGenerateInteractiveImage}
         generatingInteractiveImageTurnId={generatingInteractiveImageTurnId}
         activeSubAgentSessionKey={activeSubAgentSessionKey}
         subAgentPresentation={subAgentPresentation}
@@ -88,46 +90,23 @@ export function AgentChatListRow({ projectId, item, nextItem, executionTimings, 
       />
     )
   }
-  const renderExecutionProcess = (key: string, views: AgentMessageView[], active: boolean, timing?: AgentExecutionTiming) => views.length > 0 ? (
-    <AgentExecutionProcess
-      projectId={projectId}
-      key={key}
-      views={views}
-      active={active}
-      activeSubAgentSessionKey={activeSubAgentSessionKey}
-      activeTraceDisplay={activeTraceDisplay}
-      highlightDialogue={highlightDialogue}
-      messageStyle={messageStyle}
-      onInsertIllustration={onInsertIllustration}
-      onGenerateInteractiveImage={onGenerateInteractiveImage}
-      onOpenSubAgentSession={onOpenSubAgentSession}
-      onInteractiveCardLayoutChange={onInteractiveCardLayoutChange}
-      onResolveAsk={onResolveAsk}
-      timing={timing}
-    />
-  ) : null
-  const timedProcessKey = item.kind === 'run'
-    ? (item.sections.find(section => section.kind === 'process' && section.active)?.key ||
-      item.sections.find(section => section.kind === 'process')?.key)
-    : undefined
-  // Terminal replies own their actions. A run with only progress/tools still
-  // needs an accessible reference while running, cancelled, or awaiting input.
-  const needsRunActions = item.kind === 'run'
-    && !item.sections.some(section => section.kind === 'message' && section.view.kind === 'assistant')
-    && !(nextItem?.kind === 'message' && nextItem.view.kind === 'error' && nextItem.view.metadata.run_id === item.runId)
   useLayoutEffect(() => {
     if (isLast && tailFollowActive) syncStreamingTailLayout?.()
   }, [isLast, item, syncStreamingTailLayout, tailFollowActive])
 
   // A translated active tail would visibly move after its bottom anchor is captured.
   return (
+    <VirtualizedMessageRow value={item.key}>
     <motion.div
       ref={isLast ? streamingRowRef : undefined}
       data-nova-chat-item={item.kind}
-      data-nova-chat-tail-row
+      data-agent-execution-content={'processKey' in item ? item.processKey : undefined}
+      data-tool-call-depth={'depth' in item ? item.depth : undefined}
+      data-nova-chat-tail-row={isLast ? '' : undefined}
       data-nova-chat-row-key={item.key}
       data-nova-chat-turn-anchor={turnAnchor}
-      className={cn('min-w-0 px-6', contentClassName, isLast ? 'pb-0' : continuesTrace ? 'pb-2' : 'pb-4')}
+      style={'depth' in item && item.depth ? { paddingInlineStart: `${24 + Math.min(item.depth, 4) * 12}px` } : undefined}
+      className={cn('min-w-0 px-6', contentClassName, isLast ? 'pb-0' : continuesTrace || ('processKey' in item && item.processKey) || item.kind === 'process' ? 'pb-2' : 'pb-4')}
       variants={item.kind === 'attachment' ? timelineAttachment : listItem}
       initial={isLast && isStreaming ? false : 'initial'}
       animate="animate"
@@ -146,48 +125,15 @@ export function AgentChatListRow({ projectId, item, nextItem, executionTimings, 
           </div>
         </div>
       ) : item.kind === 'activity' ? (
-        <div>
-          <AgentActivityShimmer content={item.content} />
-          {item.runId ? (
-            <div className="mt-2 flex flex-wrap items-center gap-2 px-1">
-              <AgentRunActions projectId={projectId} runID={item.runId} />
-            </div>
-          ) : null}
-        </div>
+        <AgentActivityShimmer content={item.content} />
       ) : item.kind === 'clear' ? (
         <ContextClearDivider createdAt={item.createdAt} />
-      ) : item.kind === 'trace' ? (
-        <AgentExecutionProcess
-          projectId={projectId}
-          views={item.views}
-          active={item.activeStreamingTrace}
-          activeSubAgentSessionKey={activeSubAgentSessionKey}
-          activeTraceDisplay={activeTraceDisplay}
-          highlightDialogue={highlightDialogue}
-          messageStyle={messageStyle}
-          onInsertIllustration={onInsertIllustration}
-          onGenerateInteractiveImage={onGenerateInteractiveImage}
-          onOpenSubAgentSession={onOpenSubAgentSession}
-          onInteractiveCardLayoutChange={onInteractiveCardLayoutChange}
-          onResolveAsk={onResolveAsk}
-          timing={executionTimings.get(chatListItemRunID(item))}
-        />
-      ) : item.kind === 'run' ? (
-        <div className="space-y-2">
-          {item.sections.map(section => section.kind === 'process'
-            ? renderExecutionProcess(
-                section.key,
-                section.views,
-                section.active,
-                section.key === timedProcessKey ? executionTimings.get(item.runId) : undefined,
-              )
-            : renderMessageView(section.view, section.key))}
-          {needsRunActions ? (
-            <div className="flex flex-wrap items-center gap-2 px-1">
-              <AgentRunActions projectId={projectId} runID={item.runId} />
-            </div>
-          ) : null}
-        </div>
+      ) : item.kind === 'process' ? (
+        <AgentExecutionProcess views={item.views} running={item.running} expanded={item.expanded}
+          onExpandedChange={expanded => onProcessExpandedChange?.(item.key, item.running, expanded, item.navigationAnchor)}
+          timing={item.showTiming ? executionTimings.get(item.runId) : undefined} />
+      ) : item.kind === 'run-actions' ? (
+        <div className="flex flex-wrap items-center gap-2 px-1"><AgentRunActions projectId={projectId} runID={item.runId} /></div>
       ) : item.kind === 'attachment' ? (
         item.content
       ) : item.kind === 'legacy-message' ? (
@@ -201,41 +147,29 @@ export function AgentChatListRow({ projectId, item, nextItem, executionTimings, 
           onResolveAsk={item.openView && onResolveAsk ? (_message, action) => onResolveAsk(item.openView as AgentMessageView, action) : undefined}
         />
       ) : (
-        renderMessageView(item.view)
+        renderMessageView(item.view, undefined, item.processKey && item.view.kind === 'assistant' ? 'progress' : 'message')
       )}
     </motion.div>
+    </VirtualizedMessageRow>
   )
 }
 
 export function chatListItemRunID(item: AgentChatListItem): string {
+  if ('ownerRunId' in item && item.ownerRunId) return item.ownerRunId
   if (item.kind === 'activity') return item.runId || ''
   if (item.kind === 'message') return item.view.metadata.run_id || ''
   if (item.kind === 'legacy-message') return item.message.run_id || item.openView?.metadata.run_id || ''
-  if (item.kind === 'run') return item.runId
-  if (item.kind === 'trace') {
-    for (let index = item.views.length - 1; index >= 0; index -= 1) {
-      const runID = item.views[index]?.metadata.run_id
-      if (runID) return runID
-    }
-  }
+  if (item.kind === 'process' || item.kind === 'run-actions') return item.runId
   if (item.kind === 'attachment') return item.runId
   return ''
 }
 
 export function chatListItemNavigationAnchor(item?: AgentChatListItem) {
   if (!item) return ''
+  if ('navigationAnchor' in item && item.navigationAnchor) return item.navigationAnchor
   if (item.kind === 'message') return agentViewNavigationAnchor(item.view)
   if (item.kind === 'legacy-message') return item.message.navigation_turn_id || item.message.turn_id || ''
-  if (item.kind === 'run') {
-    for (let sectionIndex = item.sections.length - 1; sectionIndex >= 0; sectionIndex -= 1) {
-      const section = item.sections[sectionIndex]
-      const views = section.kind === 'process' ? section.views : [section.view]
-      for (let viewIndex = views.length - 1; viewIndex >= 0; viewIndex -= 1) {
-        const anchor = agentViewNavigationAnchor(views[viewIndex])
-        if (anchor) return anchor
-      }
-    }
-  }
+  if (item.kind === 'process') return item.navigationAnchor
   return ''
 }
 

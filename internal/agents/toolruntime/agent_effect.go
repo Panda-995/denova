@@ -7,7 +7,7 @@ import (
 
 	agenttool "denova/internal/agents/tool"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 const AgentToolMutationEffectKind = "denova.tool_mutation.v1"
@@ -19,19 +19,19 @@ type agentToolMutationEffect struct {
 
 // AgentToolMutationEffect converts a Denova mutation receipt into Agent's
 // canonical effect format. The trusted Adapter adds product identity.
-func AgentToolMutationEffect(record agenttool.ExecutionRecord) (agent.Effect, bool, error) {
+func AgentToolMutationEffect(record agenttool.ExecutionRecord) (agentschema.Effect, bool, error) {
 	mutation, ok := agenttool.MutationFromExecutionRecord(record)
 	if !ok {
-		return agent.Effect{}, false, nil
+		return agentschema.Effect{}, false, nil
 	}
 	payload, err := json.Marshal(agentToolMutationEffect{Version: 1, Mutation: mutation})
 	if err != nil {
-		return agent.Effect{}, false, fmt.Errorf("encode Denova Agent Tool mutation effect: %w", err)
+		return agentschema.Effect{}, false, fmt.Errorf("encode Denova Agent Tool mutation effect: %w", err)
 	}
-	return agent.Effect{Kind: AgentToolMutationEffectKind, Data: payload}, true, nil
+	return agentschema.Effect{Kind: AgentToolMutationEffectKind, Data: payload}, true, nil
 }
 
-func DecodeAgentToolMutationEffect(effect agent.Effect) (agenttool.Mutation, error) {
+func DecodeAgentToolMutationEffect(effect agentschema.Effect) (agenttool.Mutation, error) {
 	if strings.TrimSpace(effect.Kind) != AgentToolMutationEffectKind {
 		return agenttool.Mutation{}, fmt.Errorf("unsupported Denova Agent Tool effect %q", effect.Kind)
 	}

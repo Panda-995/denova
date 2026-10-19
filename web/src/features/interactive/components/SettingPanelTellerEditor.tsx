@@ -19,7 +19,7 @@ import { rebaseText } from '@/lib/three-way-rebase'
 import { MessageList } from '@/components/Chat/MessageList'
 import { AutosaveStatusIndicator } from '@/components/forms/autosave-status'
 import { agentViewContent, buildAgentMessageViews } from '@/lib/agent-message-view'
-import { AgentUIMessageNormalizer, normalizeAgentUIMessages, type AgentUIMessage } from '@/lib/agent-ui'
+import { normalizeAgentUIMessages, type AgentUIMessage } from '@/lib/agent-ui'
 import { createAgentDataMessage, createAgentTextMessage } from '@/lib/agent-ui-message'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -359,8 +359,6 @@ function StyleReferenceControls({ projectId, references, refreshReferences, refs
   const editContentRef = useRef('')
   const editPathRef = useRef('')
   const extractionCommandIDsRef = useRef(new Map<string, string>())
-  const extractionMessageNormalizerRef = useRef<AgentUIMessageNormalizer | null>(null)
-  extractionMessageNormalizerRef.current ??= new AgentUIMessageNormalizer()
   editContentRef.current = editContent
   editPathRef.current = editPath
   const summary = refs.length === 0 && contents.length === 0 ? t('settingPanel.style.noSelected') : t('settingPanel.style.button', { count: refs.length + contents.length })
@@ -584,7 +582,7 @@ function StyleReferenceControls({ projectId, references, refreshReferences, refs
       let generated = ''
       for await (const message of readUIMessageStream<AgentUIMessage>({ stream, terminateOnError: true })) {
         const normalized = normalizeAgentUIMessages([message])[0] || message
-        setExtractMessages(current => extractionMessageNormalizerRef.current!.normalize(upsertAgentUIMessage(current, normalized)))
+        setExtractMessages(current => normalizeAgentUIMessages(upsertAgentUIMessage(current, normalized)))
         for (const view of buildAgentMessageViews([normalized])) {
           if (view.kind === 'assistant') {
             generated = agentViewContent(view)

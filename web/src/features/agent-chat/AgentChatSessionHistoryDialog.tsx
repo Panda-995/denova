@@ -6,12 +6,13 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from '@/components/ui/input'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { InlineErrorNotice } from '@/components/common/inline-error-notice'
-import { getAgentChatHistory, type AgentChatHistoryItem, type AgentChatProject } from './api'
+import { exportAgentChatMarkdown, getAgentChatHistory, type AgentChatHistoryItem, type AgentChatProject } from './api'
+import { toast } from '@/lib/toast'
 import { AgentChatHistoryProjectSelect, AgentChatHistoryProjectSidebar, currentProjectFirst } from './AgentChatHistoryProjectNav'
 import { AgentChatHistoryRow } from './AgentChatHistoryRow'
 
 const HISTORY_PAGE_SIZE = 80
-const HISTORY_SEARCH_DELAY_MS = 180
+const HISTORY_SEARCH_DELAY_MS = 100
 const HISTORY_SEARCH_MAX_LENGTH = 200
 
 interface AgentChatSessionHistoryDialogProps {
@@ -47,6 +48,7 @@ export function AgentChatSessionHistoryDialog({
   const [hasMore, setHasMore] = useState(false)
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [error, setError] = useState('')
   const [reloadVersion, setReloadVersion] = useState(0)
   const [editing, setEditing] = useState<AgentChatHistoryItem | null>(null)
@@ -162,6 +164,23 @@ export function AgentChatSessionHistoryDialog({
     editingRef.current = item
     setEditing(item)
     setDraftTitle(item.session.title || '')
+  }
+
+  const exportSession = async (item: AgentChatHistoryItem) => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      await exportAgentChatMarkdown(item.project_id, item.session.id)
+    } catch (exportError) {
+      console.error('[features/agent-chat/AgentChatSessionHistoryDialog.tsx] exporting conversation failed', {
+        projectId: item.project_id, sessionId: item.session.id, error: exportError,
+      })
+      toast.error(t('agentChat.history.exportFailed'), {
+        description: exportError instanceof Error ? exportError.message : String(exportError),
+      })
+    } finally {
+      setExporting(false)
+    }
   }
 
   const cancelRename = () => {
@@ -313,12 +332,15 @@ export function AgentChatSessionHistoryDialog({
                         <AgentChatHistoryRow
                           key={key}
                           item={item}
+                          query={debouncedQuery}
+                          exporting={exporting}
                           onOpen={() => {
                             onOpenSession(item)
                             onOpenChange(false)
                           }}
                           onRename={() => beginRename(item)}
                           onDelete={() => setPendingDelete(item)}
+                          onExport={() => void exportSession(item)}
                         />
                       )
                     })}

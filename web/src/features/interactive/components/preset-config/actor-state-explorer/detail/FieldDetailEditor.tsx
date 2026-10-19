@@ -41,12 +41,21 @@ export function FieldDetailEditor({
     const tpl = { ...templates[templateIndex] }
     const fields = [...(tpl.fields || [])]
     const nextField = { ...field, ...patch }
+    if (nextField.type !== 'number') nextField.max_field = undefined
     fields[fieldIndex] = nextField
-    tpl.fields = fields
+    tpl.fields = fields.map((candidate) => candidate.max_field === field.name
+      ? { ...candidate, max_field: nextField.type === 'number' ? nextField.name : undefined }
+      : candidate)
     templates[templateIndex] = tpl
     const nextNodeId = fieldNodeId(template.id, nextField, fieldIndex)
     if (nextNodeId !== fieldNodeId(template.id, field, fieldIndex)) onIdChange(nextNodeId)
-    onChange({ ...value, templates })
+    const initialActors = (value.initial_actors || []).map((actor) => {
+      if (actor.template_id !== template.id || nextField.name === field.name || !actor.state || !(field.name in actor.state)) return actor
+      const state = { ...actor.state, [nextField.name]: actor.state[field.name] }
+      delete state[field.name]
+      return { ...actor, state }
+    })
+    onChange({ ...value, templates, initial_actors: initialActors })
   }
 
   const isEnum = field.type === 'enum'
@@ -178,11 +187,31 @@ export function FieldDetailEditor({
                     <Input
                       className="nova-field h-8 text-xs focus-visible:ring-0"
                       inputMode="decimal"
+                      disabled={Boolean(field.max_field)}
                       value={field.max !== undefined ? String(field.max) : ''}
                       onChange={(e) => updateField({ max: parseNumberInput(e.target.value) })}
                     />
                   </FormField>
                 </div>
+                <FormField label={t('settingPanel.actorState.explorer.capacityField')}>
+                  <Select
+                    value={field.max_field ? `field:${field.max_field}` : 'none'}
+                    onValueChange={(name) => updateField({ max_field: name === 'none' ? undefined : name.slice('field:'.length), max: undefined })}
+                  >
+                    <SelectTrigger className="nova-field h-8 text-xs focus:ring-0" aria-label={t('settingPanel.actorState.explorer.capacityField')}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="none">{t('settingPanel.actorState.explorer.capacityFieldNone')}</SelectItem>
+                        {(template.fields || []).filter((candidate, index) => index !== fieldIndex && candidate.name && candidate.type === 'number' && !candidate.max_field).map((candidate) => (
+                          <SelectItem key={candidate.name} value={`field:${candidate.name}`}>{candidate.name}</SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">{t('settingPanel.actorState.explorer.capacityFieldHelp')}</p>
+                </FormField>
               </motion.div>
             ) : null}
           </AnimatePresence>
@@ -235,6 +264,7 @@ export function FieldDetailEditor({
               options={field.options}
               min={field.min}
               max={field.max}
+              maxLabel={field.max_field}
             />
           </section>
 

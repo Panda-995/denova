@@ -10,19 +10,21 @@ import (
 	"fmt"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
+
+	agentcontext "github.com/alfredxw/denova/agent/context"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 const generalPurposeAgentID = "general-purpose"
 
-func ContextSource(cfg *config.Config, runtimeKind string) agent.ContextSource {
+func ContextSource(cfg *config.Config, runtimeKind string) agentcontext.ContextSource {
 	definition, ok := activeDefinition(cfg, runtimeKind)
 	if !ok || len(definition.ContextBindings) == 0 {
 		return nil
 	}
-	fragments := make([]agent.ContextFragment, 0, len(definition.ContextBindings))
+	fragments := make([]agentschema.ContextFragment, 0, len(definition.ContextBindings))
 	sourceIdentity := identity("denova.custom_agent.context", struct {
 		ID       string
 		Bindings []config.AgentContextBinding
@@ -31,24 +33,24 @@ func ContextSource(cfg *config.Config, runtimeKind string) agent.ContextSource {
 		if strings.TrimSpace(binding.Content) == "" {
 			continue
 		}
-		fragment := agent.ContextFragment{
+		fragment := agentschema.ContextFragment{
 			Source: "Custom Agent", Purpose: binding.Purpose,
 			Resource:  fmt.Sprintf("agent://%s/context/%s", definition.ID, binding.ID),
 			Revision:  identity("denova.custom_agent.context.fragment", binding).ConfigHash,
-			Rendering: agent.ContextRenderAttributed, Content: binding.Content, HardLimit: binding.HardLimitBytes,
+			Rendering: agentschema.ContextRenderAttributed, Content: binding.Content, HardLimit: binding.HardLimitBytes,
 		}
 		switch binding.Slot {
 		case config.AgentContextSlotSession:
-			fragment.Stability = agent.ContextSessionState
-			fragment.Placement = agent.ContextStateMessage
+			fragment.Stability = agentschema.ContextSessionState
+			fragment.Placement = agentschema.ContextStateMessage
 			fragment.StateID = "custom-agent:" + definition.ID + ":" + binding.ID
 		case config.AgentContextSlotTurn:
-			fragment.Stability = agent.ContextTurn
-			fragment.Placement = agent.ContextFinalUserPrefix
+			fragment.Stability = agentschema.ContextTurn
+			fragment.Placement = agentschema.ContextFinalUserPrefix
 		default:
-			fragment.Stability = agent.ContextStablePrefix
-			fragment.Placement = agent.ContextLeadingMessage
-			fragment.Role = agent.System
+			fragment.Stability = agentschema.ContextStablePrefix
+			fragment.Placement = agentschema.ContextLeadingMessage
+			fragment.Role = agentschema.System
 		}
 		fragments = append(fragments, fragment)
 	}
@@ -63,13 +65,13 @@ func ContextSource(cfg *config.Config, runtimeKind string) agent.ContextSource {
 
 // ApplyToolGuidance wraps only provider-visible descriptions. Implementations,
 // schemas, descriptors, permissions, and the enabled set stay unchanged.
-func ApplyToolGuidance(ctx context.Context, cfg *config.Config, runtimeKind string, definitions []agent.ToolDefinition) ([]agent.ToolDefinition, error) {
+func ApplyToolGuidance(ctx context.Context, cfg *config.Config, runtimeKind string, definitions []agenttool.ToolDefinition) ([]agenttool.ToolDefinition, error) {
 	profile, ok := activeDefinition(cfg, runtimeKind)
 	if !ok || len(profile.ToolGuidance) == 0 {
-		return append([]agent.ToolDefinition(nil), definitions...), nil
+		return append([]agenttool.ToolDefinition(nil), definitions...), nil
 	}
 	limit := config.ResolveAgentContext(cfg, runtimeKind).MaxFragmentBytes
-	result := make([]agent.ToolDefinition, len(definitions))
+	result := make([]agenttool.ToolDefinition, len(definitions))
 	for index, definition := range definitions {
 		result[index] = definition
 		if definition.Tool == nil {
@@ -140,11 +142,11 @@ func activeDefinition(cfg *config.Config, runtimeKind string) (config.CustomAgen
 }
 
 type describedTool struct {
-	agent.Tool
+	agenttool.Tool
 	guidance string
 }
 
-func (tool describedTool) Info(ctx context.Context) (*agent.ToolInfo, error) {
+func (tool describedTool) Info(ctx context.Context) (*agentschema.ToolInfo, error) {
 	info, err := tool.Tool.Info(ctx)
 	if err != nil || info == nil {
 		return info, err
@@ -160,18 +162,18 @@ func (tool describedTool) Info(ctx context.Context) (*agent.ToolInfo, error) {
 }
 
 type staticContextSource struct {
-	identity  agent.CapabilityIdentity
-	fragments []agent.ContextFragment
+	identity  agentschema.CapabilityIdentity
+	fragments []agentschema.ContextFragment
 }
 
-func (source staticContextSource) Identity() agent.CapabilityIdentity { return source.identity }
+func (source staticContextSource) Identity() agentschema.CapabilityIdentity { return source.identity }
 
-func (source staticContextSource) Materialize(context.Context, agent.ContextRequest) ([]agent.ContextFragment, error) {
-	return append([]agent.ContextFragment(nil), source.fragments...), nil
+func (source staticContextSource) Materialize(context.Context, agentcontext.ContextRequest) ([]agentschema.ContextFragment, error) {
+	return append([]agentschema.ContextFragment(nil), source.fragments...), nil
 }
 
-func identity(kind string, configuration any) agent.CapabilityIdentity {
+func identity(kind string, configuration any) agentschema.CapabilityIdentity {
 	encoded, _ := json.Marshal(configuration)
 	digest := sha256.Sum256(encoded)
-	return agent.CapabilityIdentity{Kind: kind, Version: 1, ConfigHash: hex.EncodeToString(digest[:])}
+	return agentschema.CapabilityIdentity{Kind: kind, Version: 1, ConfigHash: hex.EncodeToString(digest[:])}
 }

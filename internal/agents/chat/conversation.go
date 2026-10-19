@@ -1,10 +1,11 @@
 package chat
 
 import (
-	agent "github.com/alfredxw/denova/agent"
-
 	agentcontext "denova/internal/agents/context"
 	"denova/internal/agents/session"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 // Conversation is the stable orchestration boundary used by chat and execution.
@@ -27,7 +28,7 @@ type ContextSourceReporter interface {
 // store as Definition.Artifacts. Product middleware must not inject a second
 // process-local storage authority.
 type ToolArtifactStoreProvider interface {
-	ToolArtifactStore() agent.ToolArtifactBackend
+	ToolArtifactStore() agenttool.ToolArtifactBackend
 }
 
 // ContextLedgerReporter reports bounded metadata for assembled domain context.
@@ -39,7 +40,7 @@ type ContextLedgerReporter interface {
 // FinalContextLedgerReporter rebuilds audit metadata from the exact messages
 // sent after context maintenance without retaining message bodies.
 type FinalContextLedgerReporter interface {
-	ContextLedgerPartsForMessages(messages []*agent.Message) []agentcontext.AuditPart
+	ContextLedgerPartsForMessages(messages []*agentschema.Message) []agentcontext.AuditPart
 }
 
 // InteractiveNarrativeReadinessReporter marks successful hidden TurnResult

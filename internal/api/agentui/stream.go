@@ -21,7 +21,7 @@ type StreamEncoder struct {
 	started  bool
 	finished bool
 
-	// Root and SubAgent content can interleave while task_wait is active. Each
+	// Root and SubAgent content can interleave during child execution. Each
 	// source therefore owns its open AI SDK content segments independently.
 	textIDs       map[string]string
 	textSeq       int
@@ -55,6 +55,25 @@ func (e *StreamEncoder) WriteEvent(ev appsvc.AgentEvent) error {
 	data := eventDataMap(ev.Data)
 	meta := providerMetadataFromData(data)
 	contentSource := contentSourceKey(data)
+	// Match the durable display recorder's segment boundaries. Notifications
+	// do not end prose, and an event without a source never closes other Agents.
+	switch ev.Type {
+	case "tool_call", "tool_result", "ask_pending", "ask_resolved", "proposed_plan", "subagent_settled":
+		if err := e.closeOpenContentFor(contentSource); err != nil {
+			return err
+		}
+	case "token_usage", "execution_summary":
+		if err := e.closeOpenContent(); err != nil {
+			return err
+		}
+	case "context_compaction":
+		status := readString(data, "status")
+		if data["runtime_managed"] == true && (status == "completed" || status == "failed") {
+			if err := e.closeOpenContent(); err != nil {
+				return err
+			}
+		}
+	}
 
 	switch ev.Type {
 	case "chunk":
@@ -68,21 +87,12 @@ func (e *StreamEncoder) WriteEvent(ev appsvc.AgentEvent) error {
 		}
 		return e.writeReasoningDelta(readString(data, "content"), meta, readString(data, "display_segment_id"), contentSource)
 	case "tool_call":
-		if err := e.closeOpenContentFor(contentSource); err != nil {
-			return err
-		}
 		return e.writeToolCall(data, meta)
 	case "tool_args_delta":
 		return e.writeToolArgsDelta(data)
 	case "tool_started":
-		if err := e.closeOpenContentFor(contentSource); err != nil {
-			return err
-		}
 		return e.writeToolStarted(data, meta)
 	case "tool_result":
-		if err := e.closeOpenContentFor(contentSource); err != nil {
-			return err
-		}
 		if err := e.writeToolResult(data, meta); err != nil {
 			return err
 		}
@@ -91,48 +101,40 @@ func (e *StreamEncoder) WriteEvent(ev appsvc.AgentEvent) error {
 		}
 		return nil
 	case "ask_pending", "ask_resolved":
-		if err := e.closeOpenContentFor(contentSource); err != nil {
-			return err
-		}
 		return e.writeData(DataTypeAsk, eventID(data, "ask"), data)
 	case "workspace_change":
-		if err := e.closeOpenContentFor(contentSource); err != nil {
-			return err
-		}
 		return e.writeData(DataTypeWorkspaceChange, eventID(data, "workspace-change"), data)
 	case "context_compaction":
-		if err := e.closeOpenContentFor(contentSource); err != nil {
-			return err
-		}
 		return e.writeData(DataTypeContextCompaction, eventID(data, "context-compaction"), data)
-	case "interactive_image":
-		if err := e.closeOpenContentFor(contentSource); err != nil {
-			return err
+	case "todo_updated":
+		// Native already supplies an inspectable Todo tool card. Provider plans
+		// have no host tool call, so only those need a separate display snapshot.
+		if data["runtime_managed"] != true {
+			return nil
 		}
+		return e.writeData(DataTypeTodo, eventID(data, "todo"), data)
+	case "interactive_image":
 		return e.writeData(DataTypeInteractiveImage, eventID(data, "interactive-image"), data)
 	case "proposed_plan":
-		if err := e.closeOpenContentFor(contentSource); err != nil {
-			return err
-		}
 		return e.writeData(DataTypeProposedPlan, eventID(data, "proposed-plan"), data)
 	case "rule_roll":
-		if err := e.closeOpenContentFor(contentSource); err != nil {
-			return err
-		}
 		return e.writeData(DataTypeRuleRoll, eventID(data, "rule-roll"), data)
 	case "token_usage":
 		return e.writeData(DataTypeTokenUsage, eventID(data, "token-usage"), data)
 	case "execution_summary":
-		if err := e.closeOpenContentFor(contentSource); err != nil {
-			return err
-		}
 		return e.writeData(DataTypeExecutionSummary, eventID(data, "execution-summary"), data)
 	case "error":
 		if err := e.closeOpenContent(); err != nil {
 			return err
 		}
+		diagnostic := ev.WithErrorDiagnostics(e.requestID, "")
+		data = diagnostic.Data.(map[string]any)
+		data["terminal"] = true
+		if err := e.writeData(DataTypeError, eventID(data, "error"), data); err != nil {
+			return err
+		}
 		message := firstNonEmpty(readString(data, "message"), readString(data, "error"), "Agent request failed")
-		return e.writeChunk(map[string]any{"type": "error", "errorText": CorrelatedErrorMessage(message, e.requestID)})
+		return e.writeChunk(map[string]any{"type": "error", "errorText": message})
 	case "aborted":
 		if err := e.closeOpenContent(); err != nil {
 			return err
@@ -142,27 +144,18 @@ func (e *StreamEncoder) WriteEvent(ev appsvc.AgentEvent) error {
 			return e.Finish("stop")
 		}
 		return e.writeChunk(map[string]any{"type": "abort", "reason": reason})
+	case "suspended":
+		if err := e.writeData(DataTypeActivity, eventID(data, "suspended"), map[string]any{"event": "suspended"}); err != nil {
+			return err
+		}
+		return e.Finish("stop")
 	case "done":
 		return e.Finish("stop")
 	default:
-		if err := e.closeOpenContentFor(contentSource); err != nil {
-			return err
-		}
 		payload := cloneMap(data)
 		payload["event"] = ev.Type
 		return e.writeData(DataTypeActivity, eventID(data, ev.Type), payload)
 	}
-}
-
-// CorrelatedErrorMessage appends the server-issued request ID to a user-visible
-// streaming error. The bilingual label keeps the transport usable before the
-// client-side locale is available.
-func CorrelatedErrorMessage(message, requestID string) string {
-	requestID = strings.TrimSpace(requestID)
-	if requestID == "" {
-		return message
-	}
-	return message + " · 日志 ID / Log ID: " + requestID
 }
 
 func (e *StreamEncoder) Finish(reason string) error {
@@ -278,9 +271,6 @@ func (e *StreamEncoder) closeOpenContent() error {
 }
 
 func (e *StreamEncoder) closeOpenContentFor(source string) error {
-	if source == "default" {
-		return e.closeOpenContent()
-	}
 	if err := e.closeText(source); err != nil {
 		return err
 	}

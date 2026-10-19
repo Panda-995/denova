@@ -5,7 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "${ROOT_DIR}"
 
 OUTPUT_DIR="output"
-VERSION="${DENOVA_VERSION:-${NOVA_VERSION:-$(node -p "require('./web/package.json').version" 2>/dev/null || echo dev)}}"
+# Source builds use the development contract; release packaging injects its tag.
+VERSION="${DENOVA_VERSION:-${NOVA_VERSION:-dev}}"
 
 echo "==> 清理 output 目录"
 rm -rf "${OUTPUT_DIR}"
@@ -21,8 +22,8 @@ if [ -d "web" ]; then
     fi
     pnpm build
     cd ..
-    echo "  复制前端产物到 ${OUTPUT_DIR}/web/"
-    cp -r web/dist "${OUTPUT_DIR}/web"
+    # Keep the directory required by v0.5.1 package validation.
+    mkdir -p "${OUTPUT_DIR}/web"
     echo "  准备内嵌前端资源（go:embed，构建标签 embedweb）"
     rm -rf internal/webfs/dist
     cp -r web/dist internal/webfs/dist

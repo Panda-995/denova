@@ -9,7 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 func TestStateStorePublishesPortablePathInsideStateScope(t *testing.T) {
@@ -18,8 +19,8 @@ func TestStateStorePublishesPortablePathInsideStateScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := agent.ToolArtifactRequest{
-		ToolName: "read", ToolCallID: "call/../../42", Purpose: agent.ToolArtifactPurposeCompleteModelOutput,
+	request := agenttool.ToolArtifactRequest{
+		ToolName: "read", ToolCallID: "call/../../42", Purpose: agentschema.ToolArtifactPurposeCompleteModelOutput,
 		MIMEType: "text/plain; charset=utf-8", Extension: "log",
 	}
 	writer, err := store.BeginToolArtifact(context.Background(), request)
@@ -38,7 +39,7 @@ func TestStateStorePublishesPortablePathInsideStateScope(t *testing.T) {
 	}
 	if strings.Contains(reference.ReadablePath, "sensitive-title") || strings.Contains(reference.ReadablePath, "../") ||
 		!strings.HasPrefix(reference.ReadablePath, "artifacts/scope-") || !reference.Complete ||
-		reference.Purpose != agent.ToolArtifactPurposeCompleteModelOutput {
+		reference.Purpose != agentschema.ToolArtifactPurposeCompleteModelOutput {
 		t.Fatalf("unsafe or incomplete artifact reference: %#v", reference)
 	}
 	runtimePath, err := store.ResolveToolArtifactPath(context.Background(), reference.ReadablePath)
@@ -64,7 +65,7 @@ func TestStateStoreDefaultsUnspecifiedArtifactPurposeToAttachment(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	writer, err := store.BeginToolArtifact(context.Background(), agent.ToolArtifactRequest{
+	writer, err := store.BeginToolArtifact(context.Background(), agenttool.ToolArtifactRequest{
 		ToolName: "render", ToolCallID: "attachment-call", MIMEType: "image/png", Extension: "png",
 	})
 	if err != nil {
@@ -77,7 +78,7 @@ func TestStateStoreDefaultsUnspecifiedArtifactPurposeToAttachment(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reference.Purpose != agent.ToolArtifactPurposeAttachment {
+	if reference.Purpose != agentschema.ToolArtifactPurposeAttachment {
 		t.Fatalf("default artifact purpose = %q", reference.Purpose)
 	}
 }
@@ -93,8 +94,8 @@ func TestStateStoreReferenceSurvivesDataRootMove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := agent.ToolArtifactRequest{
-		ToolName: "read", ToolCallID: "portable-call", Purpose: agent.ToolArtifactPurposeCompleteModelOutput,
+	request := agenttool.ToolArtifactRequest{
+		ToolName: "read", ToolCallID: "portable-call", Purpose: agentschema.ToolArtifactPurposeCompleteModelOutput,
 		MIMEType: "text/plain", Extension: "txt",
 	}
 	writer, err := store.BeginToolArtifact(context.Background(), request)
@@ -145,8 +146,8 @@ func TestStateStoreSeparatesArtifactPurposesForOneToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	commit := func(purpose agent.ToolArtifactPurpose, content string) agent.ToolArtifactRef {
-		writer, beginErr := store.BeginToolArtifact(context.Background(), agent.ToolArtifactRequest{
+	commit := func(purpose agentschema.ToolArtifactPurpose, content string) agentschema.ToolArtifactRef {
+		writer, beginErr := store.BeginToolArtifact(context.Background(), agenttool.ToolArtifactRequest{
 			ToolName: "render", ToolCallID: "same-call", Purpose: purpose,
 			MIMEType: "text/plain", Extension: "txt",
 		})
@@ -162,14 +163,14 @@ func TestStateStoreSeparatesArtifactPurposesForOneToolCall(t *testing.T) {
 		}
 		return reference
 	}
-	attachment := commit(agent.ToolArtifactPurposeAttachment, "attachment")
-	output := commit(agent.ToolArtifactPurposeCompleteModelOutput, "complete output")
-	raw := commit(agent.ToolArtifactPurposeCompleteToolOutput, "raw output")
+	attachment := commit(agentschema.ToolArtifactPurposeAttachment, "attachment")
+	output := commit(agentschema.ToolArtifactPurposeCompleteModelOutput, "complete output")
+	raw := commit(agentschema.ToolArtifactPurposeCompleteToolOutput, "raw output")
 	if attachment.ID == output.ID || attachment.ID == raw.ID || output.ID == raw.ID ||
 		attachment.ReadablePath == output.ReadablePath || output.ReadablePath == raw.ReadablePath ||
-		attachment.Purpose != agent.ToolArtifactPurposeAttachment ||
-		output.Purpose != agent.ToolArtifactPurposeCompleteModelOutput ||
-		raw.Purpose != agent.ToolArtifactPurposeCompleteToolOutput {
+		attachment.Purpose != agentschema.ToolArtifactPurposeAttachment ||
+		output.Purpose != agentschema.ToolArtifactPurposeCompleteModelOutput ||
+		raw.Purpose != agentschema.ToolArtifactPurposeCompleteToolOutput {
 		t.Fatalf("artifact purposes collided: attachment=%#v output=%#v raw=%#v", attachment, output, raw)
 	}
 }
@@ -188,15 +189,15 @@ func TestStateStoreConcurrentReplayIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	const writers = 8
-	references := make(chan agent.ToolArtifactRef, writers)
+	references := make(chan agentschema.ToolArtifactRef, writers)
 	errors := make(chan error, writers)
 	var group sync.WaitGroup
 	for range writers {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			writer, beginErr := store.BeginToolArtifact(context.Background(), agent.ToolArtifactRequest{
-				ToolName: "read", ToolCallID: "same-call", Purpose: agent.ToolArtifactPurposeCompleteModelOutput,
+			writer, beginErr := store.BeginToolArtifact(context.Background(), agenttool.ToolArtifactRequest{
+				ToolName: "read", ToolCallID: "same-call", Purpose: agentschema.ToolArtifactPurposeCompleteModelOutput,
 				MIMEType: "text/plain", Extension: "txt",
 			})
 			if beginErr != nil {
@@ -222,7 +223,7 @@ func TestStateStoreConcurrentReplayIsIdempotent(t *testing.T) {
 	for err := range errors {
 		t.Fatal(err)
 	}
-	var first agent.ToolArtifactRef
+	var first agentschema.ToolArtifactRef
 	count := 0
 	for reference := range references {
 		if count == 0 {
@@ -263,9 +264,9 @@ func TestStateStoreRepairsOwnedArtifactPermissionsWithoutChangingParents(t *test
 		t.Fatal(err)
 	}
 
-	request := agent.ToolArtifactRequest{
+	request := agenttool.ToolArtifactRequest{
 		ToolName: "read", ToolCallID: "legacy-permission-call",
-		Purpose:  agent.ToolArtifactPurposeCompleteToolOutput,
+		Purpose:  agentschema.ToolArtifactPurposeCompleteToolOutput,
 		MIMEType: "text/plain", Extension: "txt",
 	}
 	writer, err := store.BeginToolArtifact(context.Background(), request)

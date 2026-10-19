@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"denova/internal/concurrency"
 	projectdomain "denova/internal/project"
@@ -70,7 +72,7 @@ func (operation *ProjectOperation) Release() {
 }
 
 func (a *App) initializeLifecycleLocked() error {
-	if a == nil || a.closed {
+	if a == nil || a.closed || a.updateRestarting {
 		return concurrency.ErrClosed
 	}
 	if a.rootScope == nil {
@@ -283,6 +285,12 @@ func (a *App) RelinkProject(ctx context.Context, projectID, path string) (projec
 // User files and durable Project Stores are never deleted.
 func (a *App) ArchiveProject(ctx context.Context, projectID string) (projectdomain.Record, error) {
 	projectID = strings.TrimSpace(projectID)
+	started := time.Now()
+	slog.InfoContext(ctx, "project_archive_started", "project_id", projectID)
+	archived := false
+	defer func() {
+		slog.InfoContext(ctx, "project_archive_finished", "project_id", projectID, "archived", archived, "duration", time.Since(started))
+	}()
 	record, layout, err := a.resolveProject(projectID, false)
 	if err != nil {
 		return projectdomain.Record{}, err
@@ -299,7 +307,6 @@ func (a *App) ArchiveProject(ctx context.Context, projectID string) (projectdoma
 	if err := a.beginProjectTransition(ctx, projectID); err != nil {
 		return projectdomain.Record{}, err
 	}
-	archived := false
 	defer func() { a.finishProjectTransition(projectID, !archived) }()
 	if a.terminals != nil {
 		if err := a.terminals.CloseProject(projectID); err != nil {

@@ -3,12 +3,15 @@ package handlers
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 
+	"denova/internal/agents/conversationconfig"
 	novaApp "denova/internal/app"
+	"denova/internal/observability"
 )
 
 type chatAgentCommandRequest struct {
@@ -56,11 +59,11 @@ func (h *Handlers) HandleChatCommand(ctx context.Context, c *app.RequestContext)
 		writeAgentRuntimeError(c, consts.StatusBadRequest, "agent_runtime.invalid_command", "target_command_id 为必填项 / target_command_id is required", nil)
 		return
 	}
-	if kind != novaApp.CommandAbort && !queueControl && strings.TrimSpace(body.Input.Message) == "" && len(body.Input.AttachmentUploads) == 0 {
+	if kind != novaApp.CommandAbort && kind != novaApp.CommandSuspend && !queueControl && strings.TrimSpace(body.Input.Message) == "" && len(body.Input.AttachmentUploads) == 0 {
 		writeAgentRuntimeError(c, consts.StatusBadRequest, "agent_runtime.invalid_command", "消息不能为空 / Message is required", nil)
 		return
 	}
-	if kind != novaApp.CommandAbort && !queueControl {
+	if kind != novaApp.CommandAbort && kind != novaApp.CommandSuspend && !queueControl {
 		if err := h.app.MaterializeWritingAttachments(sessionID, body.CommandID, &body.Input); err != nil {
 			writeErrorKey(c, consts.StatusBadRequest, "api.common.invalidRequestWithDetail", "detail", err.Error())
 			return
@@ -74,7 +77,7 @@ func (h *Handlers) HandleChatCommand(ctx context.Context, c *app.RequestContext)
 		Reason:          body.Reason, Input: body.Input,
 	})
 	if err != nil {
-		h.writeAgentCommandError(c, err, body.TargetOperationID)
+		h.writeAgentCommandError(ctx, c, err, body.TargetOperationID)
 		return
 	}
 	c.JSON(consts.StatusAccepted, agentCommandReceiptResponse{
@@ -92,6 +95,8 @@ func writingAgentCommandKind(value string) (novaApp.CommandKind, error) {
 		return novaApp.CommandNextTurn, nil
 	case string(novaApp.CommandAbort):
 		return novaApp.CommandAbort, nil
+	case string(novaApp.CommandSuspend):
+		return novaApp.CommandSuspend, nil
 	case string(novaApp.CommandSteerQueued):
 		return novaApp.CommandSteerQueued, nil
 	case string(novaApp.CommandCancelQueued):
@@ -101,9 +106,13 @@ func writingAgentCommandKind(value string) (novaApp.CommandKind, error) {
 	}
 }
 
-func (h *Handlers) writeAgentCommandError(c *app.RequestContext, err error, target string) {
+func (h *Handlers) writeAgentCommandError(ctx context.Context, c *app.RequestContext, err error, target string) {
 	details := map[string]any{"target_operation_id": strings.TrimSpace(target)}
+	details["detail"] = observability.DiagnosticText(err.Error())
 	switch {
+	case errors.Is(err, conversationconfig.ErrRuntimeCapabilityUnsupported):
+		slog.WarnContext(ctx, "agent_command_unsupported", "target_operation_id", target, "error", err)
+		writeAgentRuntimeError(c, consts.StatusBadRequest, "agent_runtime.capability_unsupported", messageKey(c, "agentRuntime.capabilityUnsupported"), details)
 	case errors.Is(err, novaApp.ErrNoActiveAgentOperation):
 		writeAgentRuntimeError(c, consts.StatusConflict, "agent_runtime.invalid_phase", "当前没有运行中的 Agent / No agent operation is running", details)
 	case errors.Is(err, novaApp.ErrStaleAgentOperation):
@@ -123,10 +132,14 @@ func (h *Handlers) writeAgentCommandError(c *app.RequestContext, err error, targ
 	case errors.Is(err, novaApp.ErrNoWorkspace):
 		writeAgentRuntimeError(c, consts.StatusConflict, "agent_runtime.no_workspace", "尚未选择工作区 / No workspace is open", nil)
 	default:
-		writeAgentRuntimeError(c, consts.StatusInternalServerError, "agent_runtime.failed", "Agent 命令提交失败 / Failed to submit agent command", details)
+		slog.ErrorContext(ctx, "agent_command_submit_failed", "target_operation_id", target, "error", err)
+		writeAgentRuntimeError(c, consts.StatusInternalServerError, "agent_runtime.failed", messageKey(c, "api.agent.commandFailed"), details)
 	}
 }
 
 func writeAgentRuntimeError(c *app.RequestContext, status int, code, message string, details map[string]any) {
-	c.JSON(status, agentRuntimeErrorResponse{Error: message, Code: code, Details: details})
+	if detail, ok := details["detail"].(string); ok {
+		details["detail"] = observability.DiagnosticText(detail)
+	}
+	c.JSON(status, agentRuntimeErrorResponse{Error: observability.DiagnosticText(message), Code: code, Details: details})
 }

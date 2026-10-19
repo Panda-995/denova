@@ -6,12 +6,12 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestAssemblerRejectsUnknownPlacement(t *testing.T) {
 	_, err := NewAssembler(Budget{}).Assemble(stdcontext.Background(), AssembleRequest{
-		Messages: []*agent.Message{agent.UserMessage("继续写")},
+		Messages: []*agentschema.Message{agentschema.UserMessage("继续写")},
 		Fragments: []Fragment{{
 			Source:    "workspace.invalid",
 			Purpose:   "test invalid placement",
@@ -28,7 +28,7 @@ func TestAssemblerRejectsUnknownPlacement(t *testing.T) {
 func TestAssemblerBoundsInvalidPlacementDiagnosticAsMetadata(t *testing.T) {
 	const tail = "UNBOUNDED_PLACEMENT_TAIL"
 	_, err := NewAssembler(Budget{MaxMetadataFieldBytes: 7}).Assemble(stdcontext.Background(), AssembleRequest{
-		Messages: []*agent.Message{agent.UserMessage("继续写")},
+		Messages: []*agentschema.Message{agentschema.UserMessage("继续写")},
 		Fragments: []Fragment{{
 			Content:   "payload",
 			Placement: Placement(strings.Repeat("界", 100) + tail),
@@ -44,7 +44,7 @@ func TestAssemblerBoundsInvalidPlacementDiagnosticAsMetadata(t *testing.T) {
 
 func TestAssemblerRejectsTotalBudgetThatCannotFitOneRune(t *testing.T) {
 	_, err := NewAssembler(Budget{MaxFragmentBytes: 8, MaxTotalBytes: 1}).Assemble(stdcontext.Background(), AssembleRequest{
-		Messages: []*agent.Message{agent.UserMessage("继续写")},
+		Messages: []*agentschema.Message{agentschema.UserMessage("继续写")},
 		Fragments: []Fragment{{
 			Source:    "workspace.unicode",
 			Purpose:   "verify UTF-8 budget safety",
@@ -66,7 +66,7 @@ func TestAssemblerTotalBudgetIncludesRenderedWrapperAndTitle(t *testing.T) {
 		MaxFragmentBytes: 64,
 		MaxTotalBytes:    maxInjectedBytes,
 	}).Assemble(stdcontext.Background(), AssembleRequest{
-		Messages: []*agent.Message{agent.UserMessage(userMessage)},
+		Messages: []*agentschema.Message{agentschema.UserMessage(userMessage)},
 		Fragments: []Fragment{{
 			Source:    "workspace.progress",
 			Title:     "动态状态",
@@ -96,7 +96,7 @@ func TestAssemblerTotalBudgetIncludesLeadingMessageWrapper(t *testing.T) {
 		MaxFragmentBytes: 64,
 		MaxTotalBytes:    len(wantLeading),
 	}).Assemble(stdcontext.Background(), AssembleRequest{
-		Messages: []*agent.Message{agent.UserMessage("继续写")},
+		Messages: []*agentschema.Message{agentschema.UserMessage("继续写")},
 		Fragments: []Fragment{{
 			Source:    "workspace.stable",
 			Title:     "稳定标题",
@@ -134,7 +134,7 @@ func TestAssemblerRejectsFragmentCountAboveExplicitLimit(t *testing.T) {
 		MaxFragmentBytes: 64,
 		MaxTotalBytes:    256,
 	}).Assemble(stdcontext.Background(), AssembleRequest{
-		Messages: []*agent.Message{agent.UserMessage("继续写")},
+		Messages: []*agentschema.Message{agentschema.UserMessage("继续写")},
 		Fragments: []Fragment{
 			{Content: "one", Placement: PlacementAuditOnly},
 			{Content: "two", Placement: PlacementAuditOnly},
@@ -154,7 +154,7 @@ func TestAssemblerBoundsMetadataFieldsAndLedgerPreviewAtUTF8Boundaries(t *testin
 		MaxFragmentBytes:      12,
 		MaxTotalBytes:         1024,
 	}).Assemble(stdcontext.Background(), AssembleRequest{
-		Messages: []*agent.Message{agent.UserMessage("继续写")},
+		Messages: []*agentschema.Message{agentschema.UserMessage("继续写")},
 		Fragments: []Fragment{{
 			ID:        "标识标识",
 			Source:    "来源来源",
@@ -190,7 +190,7 @@ func TestAssemblerBoundsMetadataFieldsAndLedgerPreviewAtUTF8Boundaries(t *testin
 
 func TestAuditOnlyFragmentDoesNotEnterModelMessages(t *testing.T) {
 	result, err := NewAssembler(Budget{}).Assemble(stdcontext.Background(), AssembleRequest{
-		Messages: []*agent.Message{agent.UserMessage("继续写")},
+		Messages: []*agentschema.Message{agentschema.UserMessage("继续写")},
 		Fragments: []Fragment{{
 			Source:    "display.thinking",
 			Purpose:   "retain bounded diagnostics without model injection",
@@ -212,7 +212,7 @@ func TestAuditOnlyFragmentDoesNotEnterModelMessages(t *testing.T) {
 
 func TestAssemblerDoesNotInjectExplicitlyExcludedFragment(t *testing.T) {
 	result, err := NewAssembler(Budget{}).Assemble(stdcontext.Background(), AssembleRequest{
-		Messages: []*agent.Message{agent.UserMessage("继续写")},
+		Messages: []*agentschema.Message{agentschema.UserMessage("继续写")},
 		Fragments: []Fragment{{
 			Source:    "workspace.optional",
 			Purpose:   "optional context omitted by its projector",
@@ -231,7 +231,7 @@ func TestAssemblerDoesNotInjectExplicitlyExcludedFragment(t *testing.T) {
 
 func TestAssemblerDoesNotPrefixNonUserFinalMessage(t *testing.T) {
 	result, err := NewAssembler(Budget{}).Assemble(stdcontext.Background(), AssembleRequest{
-		Messages: []*agent.Message{agent.AssistantMessage("已有回复", nil)},
+		Messages: []*agentschema.Message{agentschema.AssistantMessage("已有回复", nil)},
 		Fragments: []Fragment{{
 			Source:    "workspace.progress",
 			Purpose:   "turn-scoped context requires a user request",
@@ -256,7 +256,7 @@ func TestAssemblerEnforcesFragmentBudgetsAndAccountsCompleteInjection(t *testing
 		MaxTotalBytes:    4096,
 	})
 	result, err := assembler.Assemble(stdcontext.Background(), AssembleRequest{
-		Messages: []*agent.Message{agent.UserMessage(userMessage)},
+		Messages: []*agentschema.Message{agentschema.UserMessage(userMessage)},
 		Fragments: []Fragment{
 			{
 				Source:    "workspace.outline",

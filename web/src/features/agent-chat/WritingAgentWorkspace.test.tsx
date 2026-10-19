@@ -22,17 +22,17 @@ vi.mock('./api', () => ({
 }))
 
 vi.mock('./AgentChatConversationTab', () => ({
-  AgentChatConversationTab: ({ sessionId, draft, active, host, onRunningChange, onDraftCommitted, projectId }: {
+  AgentChatConversationTab: ({ sessionId, draft, active, host, onCreateSession, onRunningChange, onDraftCommitted, projectId }: {
     sessionId: string
     draft?: boolean
     active: boolean
     projectId: string
     onRunningChange?: (projectId: string, sessionId: string, running: boolean) => void
     onDraftCommitted?: (message: string) => void
+    onCreateSession: (title?: string, customAgentId?: string) => void | Promise<void>
     host?: {
       sessionRailVisible: boolean
       onSessionRailVisibleChange: (visible: boolean) => void
-      onCreateSession: (title?: string, customAgentId?: string) => void | Promise<void>
     }
   }) => (
     <div
@@ -57,8 +57,8 @@ vi.mock('./AgentChatConversationTab', () => ({
               显示会话侧栏
             </button>
           ) : null}
-          <button type="button" onClick={() => void host.onCreateSession()}>新建会话</button>
-          <button type="button" onClick={() => void host.onCreateSession(undefined, 'focused-editor')}>切换自定义 Agent</button>
+          <button type="button" onClick={() => void onCreateSession()}>新建会话</button>
+          <button type="button" onClick={() => void onCreateSession(undefined, 'focused-editor')}>切换自定义 Agent</button>
         </>
       ) : null}
     </div>
@@ -246,7 +246,7 @@ describe('WritingAgentWorkspace', () => {
 
     expect(await screen.findByTestId('conversation:session-b')).toHaveTextContent('active')
     expect(screen.getByTestId('conversation:session-a')).toHaveTextContent('hidden')
-    expect(getAgentChatProjects).toHaveBeenCalledWith()
+    expect(getAgentChatProjects).toHaveBeenCalledWith('book-a')
     expect(window.localStorage.getItem('nova.writingAgent.activeSession.v1:book-a')).toBe('session-a')
     expect(window.localStorage.getItem('nova.writingAgent.activeSession.v1:configuration:book-a')).toBe('session-b')
   })

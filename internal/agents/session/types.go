@@ -4,11 +4,13 @@ import (
 	"sync"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	agentcontext "denova/internal/agents/context"
 	"denova/internal/agents/conversationconfig"
 	"denova/internal/agents/conversationjournal"
+
+	agentinteraction "github.com/alfredxw/denova/agent/lifecycle/interaction"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 const (
@@ -49,20 +51,22 @@ type HistoryEntry struct {
 	ID   string `json:"id,omitempty"`
 	// DisplaySegmentID distinguishes display transcript identity from a
 	// canonical message ID when both are projected as ordinary history rows.
-	DisplaySegmentID string                  `json:"display_segment_id,omitempty"`
-	DisplayPhase     string                  `json:"display_phase,omitempty"`
-	Role             string                  `json:"role,omitempty"`
-	Content          string                  `json:"content,omitempty"`
-	Attachments      []agent.Attachment      `json:"attachments,omitempty"`
-	Name             string                  `json:"name,omitempty"`
-	Args             string                  `json:"args,omitempty"`
-	Status           string                  `json:"status,omitempty"`
-	Result           string                  `json:"result,omitempty"`
-	ToolPresentation *agent.ToolPresentation `json:"tool_presentation,omitempty"`
-	Illustration     *ChapterIllustration    `json:"illustration,omitempty"`
-	Ask              *AskInteraction         `json:"ask,omitempty"`
-	Message          *agent.Message          `json:"-"`
-	CreatedAt        time.Time               `json:"created_at,omitempty"`
+	DisplaySegmentID string                      `json:"display_segment_id,omitempty"`
+	DisplayPhase     string                      `json:"display_phase,omitempty"`
+	Phase            string                      `json:"phase,omitempty"`
+	RuntimeManaged   bool                        `json:"runtime_managed,omitempty"`
+	Role             string                      `json:"role,omitempty"`
+	Content          string                      `json:"content,omitempty"`
+	Attachments      []agentschema.Attachment    `json:"attachments,omitempty"`
+	Name             string                      `json:"name,omitempty"`
+	Args             string                      `json:"args,omitempty"`
+	Status           string                      `json:"status,omitempty"`
+	Result           string                      `json:"result,omitempty"`
+	ToolPresentation *agenttool.ToolPresentation `json:"tool_presentation,omitempty"`
+	Illustration     *ChapterIllustration        `json:"illustration,omitempty"`
+	Ask              *AskInteraction             `json:"ask,omitempty"`
+	Message          *agentschema.Message        `json:"-"`
+	CreatedAt        time.Time                   `json:"created_at,omitempty"`
 
 	RunID                string                       `json:"run_id,omitempty"`
 	AgentKind            string                       `json:"agent_kind,omitempty"`
@@ -129,7 +133,7 @@ type MessageMetadata struct {
 type historyRecord struct {
 	journalID                    string
 	kind                         string
-	message                      *agent.Message
+	message                      *agentschema.Message
 	messageMetadata              MessageMetadata
 	display                      *DisplayEvent
 	interruption                 *Interruption
@@ -139,27 +143,29 @@ type historyRecord struct {
 }
 
 type messageRecord struct {
-	Type      string        `json:"type"`
-	CreatedAt time.Time     `json:"created_at,omitempty"`
-	Message   agent.Message `json:"message"`
+	Type      string              `json:"type"`
+	CreatedAt time.Time           `json:"created_at,omitempty"`
+	Message   agentschema.Message `json:"message"`
 	MessageMetadata
 }
 
 // DisplayEvent 表示只用于前端展示的非上下文事件，例如 thinking 和工具卡片。
 type DisplayEvent struct {
-	AgentCycle       int                     `json:"agent_cycle,omitempty"`
-	ID               string                  `json:"id,omitempty"`
-	Role             string                  `json:"role"`
-	DisplayPhase     string                  `json:"display_phase,omitempty"`
-	Content          string                  `json:"content,omitempty"`
-	Name             string                  `json:"name,omitempty"`
-	Args             string                  `json:"args,omitempty"`
-	Status           string                  `json:"status,omitempty"`
-	Result           string                  `json:"result,omitempty"`
-	ToolPresentation *agent.ToolPresentation `json:"tool_presentation,omitempty"`
-	Illustration     *ChapterIllustration    `json:"illustration,omitempty"`
-	Ask              *AskInteraction         `json:"ask,omitempty"`
-	CreatedAt        time.Time               `json:"created_at,omitempty"`
+	Phase            string                      `json:"phase,omitempty"`
+	RuntimeManaged   bool                        `json:"runtime_managed,omitempty"`
+	AgentCycle       int                         `json:"agent_cycle,omitempty"`
+	ID               string                      `json:"id,omitempty"`
+	Role             string                      `json:"role"`
+	DisplayPhase     string                      `json:"display_phase,omitempty"`
+	Content          string                      `json:"content,omitempty"`
+	Name             string                      `json:"name,omitempty"`
+	Args             string                      `json:"args,omitempty"`
+	Status           string                      `json:"status,omitempty"`
+	Result           string                      `json:"result,omitempty"`
+	ToolPresentation *agenttool.ToolPresentation `json:"tool_presentation,omitempty"`
+	Illustration     *ChapterIllustration        `json:"illustration,omitempty"`
+	Ask              *AskInteraction             `json:"ask,omitempty"`
+	CreatedAt        time.Time                   `json:"created_at,omitempty"`
 
 	RunID                string           `json:"run_id,omitempty"`
 	AgentKind            string           `json:"agent_kind,omitempty"`
@@ -302,17 +308,18 @@ type AskInteraction struct {
 	// interaction to the durable coordinator cycle that owned its tool call.
 	// They are optional only for journals written before this correlation was
 	// introduced.
-	AgentCommandID   string                    `json:"agent_command_id,omitempty"`
-	AgentOperationID string                    `json:"agent_operation_id,omitempty"`
-	AgentCycle       int                       `json:"agent_cycle,omitempty"`
-	Status           string                    `json:"status"`
-	Questions        []AskQuestion             `json:"questions,omitempty"`
-	AllowOther       bool                      `json:"allow_other,omitempty"`
-	Approval         *ToolApprovalPresentation `json:"approval,omitempty"`
-	Answers          []AskAnswerResult         `json:"answers,omitempty"`
-	CancelReason     string                    `json:"cancel_reason,omitempty"`
-	CreatedAt        time.Time                 `json:"created_at"`
-	ResolvedAt       *time.Time                `json:"resolved_at,omitempty"`
+	AgentCommandID   string                                   `json:"agent_command_id,omitempty"`
+	AgentOperationID string                                   `json:"agent_operation_id,omitempty"`
+	AgentCycle       int                                      `json:"agent_cycle,omitempty"`
+	Status           string                                   `json:"status"`
+	Questions        []AskQuestion                            `json:"questions,omitempty"`
+	AllowOther       bool                                     `json:"allow_other,omitempty"`
+	Approval         *ToolApprovalPresentation                `json:"approval,omitempty"`
+	Verification     *agentinteraction.ToolEffectVerification `json:"verification,omitempty"`
+	Answers          []AskAnswerResult                        `json:"answers,omitempty"`
+	CancelReason     string                                   `json:"cancel_reason,omitempty"`
+	CreatedAt        time.Time                                `json:"created_at"`
+	ResolvedAt       *time.Time                               `json:"resolved_at,omitempty"`
 }
 
 // Session 保存单个会话的内存状态。
@@ -342,7 +349,7 @@ type Session struct {
 	historyBaseIndex       int
 	partialMaterialization bool
 	mu                     sync.Mutex
-	messages               []*agent.Message
+	messages               []*agentschema.Message
 	records                []historyRecord
 }
 
@@ -354,7 +361,7 @@ type SessionMeta struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 	Active       bool      `json:"active"`
 	MessageCount int       `json:"message_count"`
-	// RuntimeConfig is projection metadata used to seed new conversations. The
-	// dedicated conversation-config API is the sole client mutation/read seam.
-	RuntimeConfig *conversationconfig.Snapshot `json:"-"`
+	// RuntimeConfig seeds new conversations and identifies their custom Agent.
+	// List metadata needs the selection, not the source Session's CAS revision.
+	RuntimeConfig *conversationconfig.Config `json:"-"`
 }

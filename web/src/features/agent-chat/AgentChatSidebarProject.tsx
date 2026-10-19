@@ -2,16 +2,15 @@ import { useEffect, useState, type CSSProperties } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { useTranslation } from 'react-i18next'
-import { CircleAlert, Bot, ChevronRight, Clock3, Folder, FolderOpen, MoreHorizontal, Pencil, Pin, PinOff, Plus } from 'lucide-react'
+import { CircleAlert, Bot, ChevronRight, Clock3, Folder, FolderOpen, MoreHorizontal, Pencil, Pin, PinOff, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { DeferredContent } from '@/components/common/DeferredContent'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
-import { useQuery } from '@tanstack/react-query'
-import { projectSettingsTarget, settingsQueryOptions } from '@/features/settings/query'
-import { customAgentsForRuntime } from '@/features/agents/CustomAgentSelect'
-import { queryClient } from '@/lib/query-client'
+import { NewProjectConversationButton } from './NewProjectConversationButton'
 import type { AgentChatProject, AgentChatSession } from './api'
+import { PluginActionsMenuItem } from '@/features/platform/PluginWorkspace'
 import { AgentChatProjectDetailsCard } from './AgentChatProjectDetailsCard'
 import type { AgentChatActivityStatus, AgentChatSidebarActivity } from './sidebar-activity'
 
@@ -27,6 +26,7 @@ export function projectSortableID(projectID: string) {
 }
 
 interface AgentChatSidebarProjectProps {
+  deferContent?: boolean
   project: AgentChatProject
   active: boolean
   expanded: boolean
@@ -42,11 +42,33 @@ interface AgentChatSidebarProjectProps {
   onOpenHistory: () => void
   onOpenSession: (session: AgentChatSession) => void
   onRenameSession: (session: AgentChatSession) => void
+  onDeleteSession: (session: AgentChatSession) => void
   onOpenActivity: (activity: AgentChatSidebarActivity) => void
 }
 
 /** One sortable Project with stable recent conversations, live status, and terminal entries. */
-export function AgentChatSidebarProject({
+export function AgentChatSidebarProject(props: AgentChatSidebarProjectProps) {
+  const sortable = useSortable({
+    id: projectSortableID(props.project.id),
+    data: { kind: 'project', projectID: props.project.id } satisfies AgentChatSidebarProjectDragData,
+    disabled: !props.manualSorting,
+  })
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(sortable.transform),
+    transition: sortable.transition,
+  }
+  return <div ref={sortable.setNodeRef} style={style} className={`mb-1 ${sortable.isDragging ? 'relative z-20 opacity-80' : ''}`}>
+    <DeferredContent eager={!props.deferContent} placeholder={<button type="button" ref={sortable.setActivatorNodeRef}
+      {...(props.manualSorting ? sortable.attributes : {})} {...(props.manualSorting ? sortable.listeners : {})}
+      onClick={props.onToggle} className="w-full truncate rounded px-2 py-1.5 text-left text-xs">
+      {props.project.name || props.project.path}
+    </button>}>
+      <AgentChatSidebarProjectContent {...props} sortable={sortable} />
+    </DeferredContent>
+  </div>
+}
+
+function AgentChatSidebarProjectContent({
   project,
   active,
   expanded,
@@ -62,8 +84,10 @@ export function AgentChatSidebarProject({
   onOpenHistory,
   onOpenSession,
   onRenameSession,
+  onDeleteSession,
   onOpenActivity,
-}: AgentChatSidebarProjectProps) {
+  sortable,
+}: AgentChatSidebarProjectProps & { sortable: ReturnType<typeof useSortable> }) {
   const { t } = useTranslation()
   const [visibleConversationLimit, setVisibleConversationLimit] = useState(RECENT_CONVERSATION_PAGE_SIZE)
   useEffect(() => {
@@ -91,27 +115,13 @@ export function AgentChatSidebarProject({
   const hasExpandableContent = Boolean(
     project.error || visibleSessions.length > 0 || supplementalActivities.length > 0 || project.total > 0,
   )
-  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({
-    id: projectSortableID(project.id),
-    data: {
-      kind: 'project',
-      projectID: project.id,
-    } satisfies AgentChatSidebarProjectDragData,
-    disabled: !manualSorting,
-  })
-  const style: CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-  }
+  const { attributes, listeners, setActivatorNodeRef } = sortable
   const managedProject = project.type === 'agents'
-  const baseAgentKind = project.type === 'book' ? 'ide' : 'general'
-  const settingsQuery = useQuery(settingsQueryOptions(projectSettingsTarget(project.id)), queryClient)
-  const customAgents = customAgentsForRuntime(settingsQuery.data?.effective.custom_agents, baseAgentKind)
   let ProjectIcon = expanded ? FolderOpen : Folder
   if (project.type === 'general' || managedProject) ProjectIcon = Bot
 
   return (
-    <div ref={setNodeRef} style={style} className={`mb-1 ${isDragging ? 'relative z-20 opacity-80' : ''}`}>
+    <div>
       <ContextMenu>
         <AgentChatProjectDetailsCard project={project} active={active} manualSorting={manualSorting}>
           <ContextMenuTrigger asChild>
@@ -179,6 +189,7 @@ export function AgentChatSidebarProject({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-36">
+                  <PluginActionsMenuItem projectId={project.id} context="general" />
                   {!managedProject ? (
                     <>
                       <DropdownMenuItem onSelect={onRename}>{t('agentChat.project.rename')}</DropdownMenuItem>
@@ -196,45 +207,7 @@ export function AgentChatSidebarProject({
                   ) : null}
                 </DropdownMenuContent>
               </DropdownMenu>
-              {customAgents.length > 0 ? (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-xs"
-                      className="shrink-0 opacity-60 transition-opacity hover:opacity-100 data-[state=open]:opacity-100 focus-visible:opacity-100"
-                      disabled={project.status !== 'available'}
-                      aria-label={t('agentChat.sidebar.newChatIn', { name })}
-                    >
-                      <Plus />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="min-w-48">
-                    <DropdownMenuItem onSelect={() => onCreateSession('')}>
-                      {t(baseAgentKind === 'ide' ? 'agents.ide.title' : 'agents.general.title')}
-                    </DropdownMenuItem>
-                    {customAgents.map((agent) => (
-                      <DropdownMenuItem key={agent.id} onSelect={() => onCreateSession(agent.id)}>
-                        <Bot />
-                        {agent.name}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              ) : (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  className="shrink-0 opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100"
-                  disabled={project.status !== 'available'}
-                  onClick={() => onCreateSession()}
-                  aria-label={t('agentChat.sidebar.newChatIn', { name })}
-                >
-                  <Plus />
-                </Button>
-              )}
+              <NewProjectConversationButton project={project} onCreate={onCreateSession} />
             </div>
           </ContextMenuTrigger>
         </AgentChatProjectDetailsCard>
@@ -274,7 +247,7 @@ export function AgentChatSidebarProject({
               {project.error ? (
                 <p className="px-2 py-2 text-[11px] text-[var(--nova-danger)]">{project.error}</p>
               ) : null}
-              {visibleSessions.length > 0 || supplementalActivities.length > 0 ? (
+              {expanded && (visibleSessions.length > 0 || supplementalActivities.length > 0) ? (
                 <div className="pb-1 pt-1">
                   {visibleSessions.map((session) => (
                     <ConversationRow
@@ -283,6 +256,9 @@ export function AgentChatSidebarProject({
                       activity={activityBySessionID.get(session.id)}
                       onOpen={() => onOpenSession(session)}
                       onRename={() => onRenameSession(session)}
+                      onDelete={() => onDeleteSession(session)}
+                      // The store keeps at least one conversation per Project.
+                      deletable={project.sessions.length > 1}
                     />
                   ))}
                   {supplementalActivities.map((activity) => (
@@ -315,16 +291,22 @@ function ConversationRow({
   activity,
   onOpen,
   onRename,
+  onDelete,
+  deletable,
 }: {
   session: AgentChatSession
   activity?: AgentChatSidebarActivity
   onOpen: () => void
   onRename: () => void
+  onDelete: () => void
+  deletable: boolean
 }) {
   const { t } = useTranslation()
   const title = session.title || t('chat.untitledSession')
   const focused = activity?.focused ?? false
   const statusLabel = activity ? t(`agentChat.sidebar.status.${activity.status}`) : ''
+  // A running conversation is rejected by the backend; say so before asking.
+  const running = activity?.status === 'running'
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -351,6 +333,10 @@ function ConversationRow({
         <ContextMenuItem onSelect={onRename}>
           <Pencil />
           {t('chat.renameSession')}
+        </ContextMenuItem>
+        <ContextMenuItem variant="destructive" disabled={!deletable || running} onSelect={onDelete}>
+          <Trash2 />
+          {running ? t('agentChat.sidebar.deleteRunning') : t('chat.deleteSession')}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

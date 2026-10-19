@@ -7,6 +7,26 @@ import (
 	"testing"
 )
 
+func TestMarketTokenSettingsRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	existing := Settings{Market: MarketSettings{RegistryURL: "https://example.com/index.json"}}
+	next, err := ApplySettingsMergePatch(existing, json.RawMessage(`{"market":{"github_token":"test-token"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteSettingsFile(UserConfigPath(root), next); err != nil {
+		t.Fatal(err)
+	}
+	layered, err := LoadLayered(root, "")
+	if err != nil || layered.Effective.Market.GitHubToken != "test-token" || layered.Effective.Market.RegistryURL != existing.Market.RegistryURL {
+		t.Fatalf("market settings did not round-trip: %+v %v", layered.Effective.Market, err)
+	}
+	next, err = ApplySettingsMergePatch(next, json.RawMessage(`{"market":{"github_token":null}}`))
+	if err != nil || next.Market.GitHubToken != "" || next.Market.RegistryURL != existing.Market.RegistryURL {
+		t.Fatalf("clearing the token changed registry: %+v %v", next.Market, err)
+	}
+}
+
 func TestApplySettingsMergePatchPreservesOmittedFieldsAndMergesNestedObjects(t *testing.T) {
 	existing := Settings{
 		OpenAIModel: "keep-model",
@@ -85,6 +105,9 @@ func TestValidateWorkspaceSettingsPatchUsesExplicitScopeBoundary(t *testing.T) {
 	}
 	if err := ValidateWorkspaceSettingsPatch(json.RawMessage(`{"theme":"light"}`)); !errors.Is(err, ErrInvalidSettingsPatch) {
 		t.Fatalf("user-only setting should be rejected, got %v", err)
+	}
+	if err := ValidateWorkspaceSettingsPatch(json.RawMessage(`{"interactive_stage_character_layout":"sides"}`)); !errors.Is(err, ErrInvalidSettingsPatch) {
+		t.Fatalf("personal character layout should be rejected in workspace settings, got %v", err)
 	}
 	if err := ValidateWorkspaceSettingsPatch(json.RawMessage(`{"agent_quick_prompts":{"writing":[]}}`)); !errors.Is(err, ErrInvalidSettingsPatch) {
 		t.Fatalf("personal quick prompts should be rejected in workspace settings, got %v", err)

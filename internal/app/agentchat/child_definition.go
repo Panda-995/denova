@@ -4,14 +4,14 @@ import (
 	"context"
 	"fmt"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	chatagent "denova/internal/agents/chat"
 	agentdelegation "denova/internal/agents/delegation"
 	agentexecution "denova/internal/agents/execution"
 	agentrun "denova/internal/agents/run"
 	appagentruntime "denova/internal/app/agentruntime"
 	conversationapp "denova/internal/app/conversation"
+
+	"github.com/alfredxw/denova/agent"
 )
 
 func (service *Service) PrepareChildDefinition(

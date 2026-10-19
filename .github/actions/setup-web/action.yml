@@ -1,0 +1,21 @@
+name: Setup pnpm project
+description: Install the pinned Node toolchain and locked project dependencies.
+inputs:
+  directory:
+    description: pnpm project directory
+    default: web
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@v6
+      with:
+        version: 11.15.1
+    - uses: actions/setup-node@v7
+      with:
+        node-version: '22'
+        cache: pnpm
+        cache-dependency-path: ${{ inputs.directory }}/pnpm-lock.yaml
+    - shell: bash
+      env:
+        PROJECT_DIRECTORY: ${{ inputs.directory }}
+      run: pnpm --dir "$PROJECT_DIRECTORY" install --frozen-lockfile

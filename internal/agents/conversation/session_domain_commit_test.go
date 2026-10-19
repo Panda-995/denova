@@ -2,14 +2,14 @@ package conversation
 
 import (
 	"context"
-	agentrun "denova/internal/agents/run"
 	"errors"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-	"github.com/alfredxw/denova/agent/providers"
-
+	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
+
+	"github.com/alfredxw/denova/agent/model/providers"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestSessionConversationRejectsCanonicalWritesWithoutDurableCycleIdentity(t *testing.T) {
@@ -25,7 +25,7 @@ func TestSessionConversationRejectsCanonicalWritesWithoutDurableCycleIdentity(t 
 	if err := conversation.AppendAssistant("must not bypass actor"); !errors.Is(err, ErrMissingAgentCycleIdentity) {
 		t.Fatalf("assistant append error = %v, want %v", err, ErrMissingAgentCycleIdentity)
 	}
-	if err := conversation.AppendContextMessage(agent.ToolMessage(agent.TextToolResult("must not bypass actor"), "call-1")); !errors.Is(err, ErrMissingAgentCycleIdentity) {
+	if err := conversation.AppendContextMessage(agentschema.ToolMessage(agentschema.TextToolResult("must not bypass actor"), "call-1")); !errors.Is(err, ErrMissingAgentCycleIdentity) {
 		t.Fatalf("context append error = %v, want %v", err, ErrMissingAgentCycleIdentity)
 	}
 	if got := sess.MessageCountTotal(); got != 0 {

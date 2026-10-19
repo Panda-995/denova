@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-const loreItemsVersion = 2
+const loreItemsVersion = 3
 
 const (
 	LoadModeResident = "resident"
@@ -33,38 +33,44 @@ const (
 
 // Item 是用户可编辑的作品资料条目。固定字段只负责索引和展示，正文继续使用 Markdown。
 type Item struct {
-	ID               string      `json:"id"`
-	Enabled          bool        `json:"enabled"`
-	Type             string      `json:"type"`
-	TypeSource       string      `json:"type_source"`
-	Name             string      `json:"name"`
-	Importance       string      `json:"importance"`
-	Tags             []string    `json:"tags"`
-	BriefDescription string      `json:"brief_description"`
-	Keywords         []string    `json:"keywords"`
-	LoadMode         string      `json:"load_mode"`
-	Content          string      `json:"content"`
-	CreatedAt        string      `json:"created_at"`
-	UpdatedAt        string      `json:"updated_at"`
-	Image            *Image      `json:"image,omitempty"`
-	Provenance       *Provenance `json:"provenance,omitempty"`
+	ID               string            `json:"id"`
+	Enabled          bool              `json:"enabled"`
+	Type             string            `json:"type"`
+	TypeSource       string            `json:"type_source"`
+	Name             string            `json:"name"`
+	Importance       string            `json:"importance"`
+	Tags             []string          `json:"tags"`
+	BriefDescription string            `json:"brief_description"`
+	Keywords         []string          `json:"keywords"`
+	LoadMode         string            `json:"load_mode"`
+	IndexMemberships []IndexMembership `json:"index_memberships,omitempty"`
+	Content          string            `json:"content"`
+	CreatedAt        string            `json:"created_at"`
+	UpdatedAt        string            `json:"updated_at"`
+	Image            *Image            `json:"image,omitempty"`
+	Materials        *Materials        `json:"materials,omitempty"`
+	// ResolvedMaterials is a read projection, never persisted by Store.
+	ResolvedMaterials []Material  `json:"resolved_materials,omitempty"`
+	Provenance        *Provenance `json:"provenance,omitempty"`
 }
 
 type ItemInput struct {
-	ID               string      `json:"id"`
-	Enabled          *bool       `json:"enabled,omitempty"`
-	Type             string      `json:"type"`
-	TypeSource       string      `json:"type_source,omitempty"`
-	Name             string      `json:"name"`
-	Importance       string      `json:"importance"`
-	Tags             []string    `json:"tags"`
-	BriefDescription string      `json:"brief_description"`
-	Keywords         []string    `json:"keywords"`
-	LoadMode         string      `json:"load_mode"`
-	Content          string      `json:"content"`
-	Image            *Image      `json:"image,omitempty"`
-	Provenance       *Provenance `json:"provenance,omitempty"`
-	BaseRevision     string      `json:"base_revision,omitempty"`
+	ID               string   `json:"id"`
+	Enabled          *bool    `json:"enabled,omitempty"`
+	Type             string   `json:"type"`
+	TypeSource       string   `json:"type_source,omitempty"`
+	Name             string   `json:"name"`
+	Importance       string   `json:"importance"`
+	Tags             []string `json:"tags"`
+	BriefDescription string   `json:"brief_description"`
+	Keywords         []string `json:"keywords"`
+	LoadMode         string   `json:"load_mode"`
+	// Omission preserves memberships on update; an explicit empty array clears them.
+	IndexMemberships []IndexMembership `json:"index_memberships"`
+	Content          string            `json:"content"`
+	Image            *Image            `json:"image,omitempty"`
+	Provenance       *Provenance       `json:"provenance,omitempty"`
+	BaseRevision     string            `json:"base_revision,omitempty"`
 }
 
 // ReadResult preserves the caller's lookup order while reporting entries
@@ -89,6 +95,7 @@ type Provenance struct {
 type Image struct {
 	Schema        string `json:"schema"`
 	ImagePath     string `json:"image_path"`
+	ImageURL      string `json:"image_url,omitempty"` // Read projection for a remote cover; never a file path.
 	MetaPath      string `json:"meta_path"`
 	AltText       string `json:"alt_text,omitempty"`
 	ImagePresetID string `json:"image_preset_id,omitempty"`
@@ -106,8 +113,11 @@ type Image struct {
 }
 
 type Collection struct {
-	Version int    `json:"version"`
-	Items   []Item `json:"items"`
+	Version    int        `json:"version"`
+	Categories []Category `json:"categories"`
+	Items      []Item     `json:"items"`
+	Assets     []Asset    `json:"assets,omitempty"`
+	IndexGuide IndexGuide `json:"index_guide"`
 }
 
 type Operation struct {
@@ -137,6 +147,7 @@ type NameAllocator struct {
 // IndexOptions controls model-visible lore index rendering. Keywords are
 // matched independently; Match selects OR (any) or AND (all) semantics.
 type IndexOptions struct {
+	GroupNames      []string
 	Keywords        []string
 	Match           string
 	Types           []string
@@ -151,6 +162,8 @@ type IndexOptions struct {
 
 var ErrRevisionConflict = errors.New("资料已被其他操作更新，请重新加载后再保存")
 
+var ErrNameRequiredForID = errors.New("lore name must contain a letter or digit to generate an ID")
+
 var loreMutationLocks sync.Map
 
 func (item *Item) UnmarshalJSON(data []byte) error {
@@ -163,6 +176,13 @@ func (item *Item) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if raw, ok := fields["materials"]; ok && string(raw) == "null" {
+		return errors.New("materials must be an object, not null")
 	}
 	item.Enabled = true
 	if raw.Enabled != nil {

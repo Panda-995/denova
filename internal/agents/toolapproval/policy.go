@@ -9,9 +9,9 @@ import (
 	"runtime"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
+
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 type Action string
@@ -39,7 +39,7 @@ type Request struct {
 	Workspace       string
 	ToolName        string
 	Arguments       string
-	Descriptor      agent.ToolDescriptor
+	Descriptor      agenttool.ToolDescriptor
 	GOOS            string
 	Rules           []config.AgentApprovalRule
 	AttachmentPaths []string
@@ -84,7 +84,7 @@ func Evaluate(request Request) Decision {
 		request.GOOS = runtime.GOOS
 	}
 
-	if request.Descriptor.Source == agent.ToolSourceShell || request.ToolName == "bash" || request.ToolName == "pwsh" {
+	if request.Descriptor.Source == agenttool.ToolSourceShell || request.ToolName == "bash" || request.ToolName == "pwsh" {
 		return evaluateShell(request)
 	}
 	if decision, handled := evaluateFilesystemRead(request); handled {
@@ -98,14 +98,14 @@ func Evaluate(request Request) Decision {
 	// capability checks remain authoritative. Workspace/session/config changes
 	// therefore do not inherit the ambiguity of an arbitrary shell program.
 	switch request.Descriptor.MutationScope {
-	case agent.ToolMutationNone, agent.ToolMutationWorkspace, agent.ToolMutationSession, agent.ToolMutationConfig:
+	case agenttool.ToolMutationNone, agenttool.ToolMutationWorkspace, agenttool.ToolMutationSession, agenttool.ToolMutationConfig:
 		if isNetworkSource(request.Descriptor.Source) && request.Mode == config.AgentApprovalAsk {
 			return prompt("network_access", RiskMedium,
 				"该工具将访问网络；Ask 模式需要你的确认。 / This tool will access the network; Ask mode requires approval.")
 		}
 		return allow("structured_tool", RiskLow,
 			"结构化工具调用符合已启用的能力范围。 / The structured tool call is within its enabled capability.")
-	case agent.ToolMutationExternal:
+	case agenttool.ToolMutationExternal:
 		if request.Mode == config.AgentApprovalFullAccess {
 			return allow("external_full_access", RiskHigh,
 				"Full access 模式允许非 Shell 的外部副作用。 / Full access mode allows this non-shell external side effect.")
@@ -215,8 +215,8 @@ func dangerousShellEnvironment(environment map[string]string) string {
 	return ""
 }
 
-func isNetworkSource(source agent.ToolSource) bool {
-	return source == agent.ToolSourceWeb || source == agent.ToolSourceImage
+func isNetworkSource(source agenttool.ToolSource) bool {
+	return source == agenttool.ToolSourceWeb || source == agenttool.ToolSourceImage
 }
 
 func allow(rule string, risk Risk, reason string) Decision {

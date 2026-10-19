@@ -65,7 +65,7 @@ func (h *Handlers) HandleInteractiveChatCommand(ctx context.Context, c *app.Requ
 		Reason: body.Reason, Input: body.Input,
 	})
 	if err != nil {
-		h.writeAgentCommandError(c, err, body.TargetOperationID)
+		h.writeAgentCommandError(ctx, c, err, body.TargetOperationID)
 		return
 	}
 	c.JSON(consts.StatusAccepted, agentCommandReceiptResponse{
@@ -83,6 +83,8 @@ func interactiveAgentCommandKind(value string) (novaApp.CommandKind, error) {
 		return novaApp.CommandCancelQueued, nil
 	case string(novaApp.CommandAbort):
 		return novaApp.CommandAbort, nil
+	case string(novaApp.CommandSuspend):
+		return novaApp.CommandSuspend, nil
 	default:
 		return "", novaApp.ErrInvalidAgentCommand
 	}

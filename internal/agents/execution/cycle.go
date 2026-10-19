@@ -8,7 +8,8 @@ import (
 	agentrun "denova/internal/agents/run"
 	"denova/internal/book"
 
-	agent "github.com/alfredxw/denova/agent"
+	"github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 // ErrCyclePreparationUnavailable means a durable public Agent turn cannot be
@@ -30,7 +31,7 @@ type Cycle struct {
 // CanonicalMessageSource returns the complete model-visible history from the
 // product's sole conversation journal before public Run admission.
 type CanonicalMessageSource interface {
-	CanonicalMessages(context.Context) ([]*agent.Message, error)
+	CanonicalMessages(context.Context) ([]*agentschema.Message, error)
 }
 
 type SuccessorPolicy func(context.Context, agentrun.OperationID, agentrun.Outcome) error

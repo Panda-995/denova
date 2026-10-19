@@ -7,13 +7,14 @@ import (
 	agentchat "denova/internal/agents/chat"
 	agentrun "denova/internal/agents/run"
 
-	agent "github.com/alfredxw/denova/agent"
+	"github.com/alfredxw/denova/agent"
+	agentmiddleware "github.com/alfredxw/denova/agent/engine/middleware"
 )
 
 // bindChildTrace gives the child its own recorder and event consumer. Task
 // forwarding uses Session.Observe, so consuming this Run's events cannot steal
 // display events. Preparation is serialized by the child Session lifecycle.
-func (backend *publicBackend) bindChildTrace(ctx context.Context, request agent.PrepareRequest, options agentrun.Options, parent *publicCycleRegistration) (agent.Middleware, error) {
+func (backend *publicBackend) bindChildTrace(ctx context.Context, request agent.PrepareRequest, options agentrun.Options, parent *publicCycleRegistration) (agentmiddleware.Middleware, error) {
 	backend.mu.RLock()
 	handle := backend.runs[request.Run.ID]
 	backend.mu.RUnlock()
@@ -48,7 +49,7 @@ func (backend *publicBackend) bindChildTrace(ctx context.Context, request agent.
 	}
 	// Keep workspace effects in their parent product scope; only the trace
 	// binder uses the independent child Session identity.
-	return agent.IdentifyMiddleware(
+	return agentmiddleware.IdentifyMiddleware(
 		agentchat.NewPublicHostMiddleware(agentchat.ChatRequest{}, options, handle.registration),
 		publicCapabilityIdentity("denova.child_trace", request.Session.Key),
 	), nil

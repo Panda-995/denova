@@ -79,7 +79,7 @@ func TestInitWorkspaceMigratesLegacyLoreIntoPublicSettingDirectory(t *testing.T)
 	if err != nil {
 		t.Fatalf("读取迁移后的 Lore 失败: %v", err)
 	}
-	if !strings.Contains(string(data), `"id": "hero"`) || !strings.Contains(string(data), `"version": 2`) {
+	if !strings.Contains(string(data), `"id": "hero"`) || !strings.Contains(string(data), `"version": 3`) {
 		t.Fatalf("迁移后的 Lore 未保留旧条目或升级格式: %s", data)
 	}
 	if _, err := os.Stat(legacyLore); err != nil {

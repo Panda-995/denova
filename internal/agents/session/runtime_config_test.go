@@ -62,7 +62,7 @@ func TestRuntimeConfigPersistsWithCASAndMetadataProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(metas) != 1 || metas[0].RuntimeConfig == nil || *metas[0].RuntimeConfig != saved {
+	if len(metas) != 1 || metas[0].RuntimeConfig == nil || *metas[0].RuntimeConfig != saved.Config {
 		t.Fatalf("metadata runtime config = %#v", metas)
 	}
 	if err := store.Close(); err != nil {

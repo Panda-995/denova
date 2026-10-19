@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-	agenttools "github.com/alfredxw/denova/agent/tools"
-
 	workspacechange "denova/internal/workspace/change"
+
+	agentexecution "github.com/alfredxw/denova/agent/engine/execution"
+	agenttools "github.com/alfredxw/denova/agent/tool/builtin"
 )
 
 type recordingWorkspaceChangeService struct {
@@ -384,7 +384,7 @@ func TestWorkspaceWriteDerivesCurrentOrMissingRevisionInternally(t *testing.T) {
 }
 
 func TestWorkspaceChangeMetadataUsesNativeToolIdentity(t *testing.T) {
-	ctx := agent.ContextWithToolCall(context.Background(), "call-native", "edit")
+	ctx := agentexecution.ContextWithToolCall(context.Background(), "call-native", "edit")
 	metadata := workspaceChangeMetadata(ctx, nil)
 	if metadata.ToolCallID != "call-native" || metadata.ChangeGroupID != "call-native" {
 		t.Fatalf("metadata = %#v", metadata)

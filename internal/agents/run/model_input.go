@@ -14,11 +14,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
-	"github.com/alfredxw/denova/agent/providers"
-
 	"denova/internal/agents/modelio"
 	"denova/internal/agents/prompts"
+
+	agentmiddleware "github.com/alfredxw/denova/agent/engine/middleware"
+	agentmodel "github.com/alfredxw/denova/agent/model"
+	"github.com/alfredxw/denova/agent/model/providers"
+	agentstream "github.com/alfredxw/denova/agent/model/stream"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 var (
@@ -46,8 +49,8 @@ type modelInputLogOptions struct {
 	Source         string
 	Mode           string
 	Config         providers.ModelConfig
-	Messages       []*agent.Message
-	Tools          []*agent.ToolInfo
+	Messages       []*agentschema.Message
+	Tools          []*agentschema.ToolInfo
 }
 
 type modelInputLogRecord struct {
@@ -64,7 +67,7 @@ type modelInputLogRecord struct {
 	MessageCount int                      `json:"message_count"`
 	ToolCount    int                      `json:"tool_count"`
 	Cache        modelInputLogCache       `json:"cache_attribution"`
-	Messages     []*agent.Message         `json:"messages"`
+	Messages     []*agentschema.Message   `json:"messages"`
 	Tools        []modelInputLogTool      `json:"tools,omitempty"`
 }
 
@@ -81,8 +84,8 @@ type modelInputLogInputJob struct {
 	Config         providers.ModelConfig
 	MessageCount   int
 	ToolCount      int
-	Messages       []*agent.Message
-	Tools          []*agent.ToolInfo
+	Messages       []*agentschema.Message
+	Tools          []*agentschema.ToolInfo
 }
 
 type modelInputLogProviderRequestIDRecord struct {
@@ -167,7 +170,7 @@ func logFullModelInput(opts modelInputLogOptions) string {
 		Config:         opts.Config,
 		MessageCount:   len(opts.Messages),
 		ToolCount:      len(opts.Tools),
-		Messages:       append([]*agent.Message(nil), opts.Messages...),
+		Messages:       append([]*agentschema.Message(nil), opts.Messages...),
 		Tools:          cloneToolInfos(opts.Tools),
 		SystemSections: append([]modelInputLogSystemSectionFingerprint(nil), opts.SystemSections...),
 	}
@@ -180,11 +183,11 @@ func logFullModelInput(opts modelInputLogOptions) string {
 	return callID
 }
 
-func logModelProviderRequestID(agentKind, source, mode, modelName, runID string, callIndex int, msg *agent.Message) string {
+func logModelProviderRequestID(agentKind, source, mode, modelName, runID string, callIndex int, msg *agentschema.Message) string {
 	return logModelProviderRequestIDForCall("", agentKind, source, mode, modelName, runID, callIndex, msg)
 }
 
-func logModelProviderRequestIDForCall(callID, agentKind, source, mode, modelName, runID string, callIndex int, msg *agent.Message) string {
+func logModelProviderRequestIDForCall(callID, agentKind, source, mode, modelName, runID string, callIndex int, msg *agentschema.Message) string {
 	requestID := providerRequestIDFromMessage(msg)
 	if requestID == "" {
 		return ""
@@ -203,7 +206,7 @@ func logModelProviderRequestIDForCall(callID, agentKind, source, mode, modelName
 	return requestID
 }
 
-func providerRequestIDFromMessage(msg *agent.Message) string {
+func providerRequestIDFromMessage(msg *agentschema.Message) string {
 	if msg == nil {
 		return ""
 	}
@@ -475,7 +478,7 @@ func modelInputLogConfig(cfg providers.ModelConfig) modelInputLogModelConfig {
 	}
 }
 
-func modelInputLogTools(tools []*agent.ToolInfo) []modelInputLogTool {
+func modelInputLogTools(tools []*agentschema.ToolInfo) []modelInputLogTool {
 	if len(tools) == 0 {
 		return nil
 	}
@@ -503,7 +506,7 @@ func modelInputLogTools(tools []*agent.ToolInfo) []modelInputLogTool {
 }
 
 type modelInputLoggingMiddleware struct {
-	*agent.BaseMiddleware
+	*agentmiddleware.BaseMiddleware
 	agentKind             string
 	config                providers.ModelConfig
 	contextWindowTokens   int
@@ -513,15 +516,15 @@ type modelInputLoggingMiddleware struct {
 
 // NewModelInputLoggingMiddleware creates the single provider boundary that
 // validates, traces, and optionally logs the exact model request.
-func NewModelInputLoggingMiddleware(agentKind string, cfg providers.ModelConfig, contextWindowTokens, providerInputMaxBytes int, composition prompts.SystemPromptComposition) agent.Middleware {
+func NewModelInputLoggingMiddleware(agentKind string, cfg providers.ModelConfig, contextWindowTokens, providerInputMaxBytes int, composition prompts.SystemPromptComposition) agentmiddleware.Middleware {
 	return &modelInputLoggingMiddleware{
-		BaseMiddleware: &agent.BaseMiddleware{}, agentKind: agentKind, config: cfg,
+		BaseMiddleware: &agentmiddleware.BaseMiddleware{}, agentKind: agentKind, config: cfg,
 		contextWindowTokens: contextWindowTokens, providerInputMaxBytes: providerInputMaxBytes,
 		systemSections: modelInputLogSystemSections(composition),
 	}
 }
 
-func (m *modelInputLoggingMiddleware) WrapModel(ctx context.Context, wrapped agent.BaseChatModel, mc *agent.ModelContext) (agent.BaseChatModel, error) {
+func (m *modelInputLoggingMiddleware) WrapModel(ctx context.Context, wrapped agentmodel.BaseChatModel, mc *agentmiddleware.ModelContext) (agentmodel.BaseChatModel, error) {
 	return &modelInputLoggingChatModel{
 		inner:                 wrapped,
 		agentKind:             m.agentKind,
@@ -534,17 +537,21 @@ func (m *modelInputLoggingMiddleware) WrapModel(ctx context.Context, wrapped age
 }
 
 type modelInputLoggingChatModel struct {
-	inner                 agent.BaseChatModel
+	inner                 agentmodel.BaseChatModel
 	agentKind             string
 	config                providers.ModelConfig
-	tools                 []*agent.ToolInfo
+	tools                 []*agentschema.ToolInfo
 	contextWindowTokens   int
 	providerInputMaxBytes int
 	systemSections        []modelInputLogSystemSectionFingerprint
 }
 
-func (m *modelInputLoggingChatModel) Generate(ctx context.Context, input []*agent.Message, opts ...agent.ModelOption) (*agent.Message, error) {
-	if err := modelio.ValidateInput(m.agentKind, input, m.tools, m.providerInputMaxBytes, m.contextWindowTokens); err != nil {
+func (m *modelInputLoggingChatModel) InputEstimator() agentmodel.InputEstimator {
+	return m.config.InputEstimator()
+}
+
+func (m *modelInputLoggingChatModel) Generate(ctx context.Context, input []*agentschema.Message, opts ...agentmodel.ModelOption) (*agentschema.Message, error) {
+	if err := modelio.ValidateInput(m.agentKind, m.config, input, m.tools, m.providerInputMaxBytes, m.contextWindowTokens); err != nil {
 		return nil, err
 	}
 	ctx = contextWithModelInputSystemSections(ctx, m.systemSections)
@@ -555,8 +562,8 @@ func (m *modelInputLoggingChatModel) Generate(ctx context.Context, input []*agen
 	return msg, err
 }
 
-func (m *modelInputLoggingChatModel) Stream(ctx context.Context, input []*agent.Message, opts ...agent.ModelOption) (*agent.StreamReader[*agent.Message], error) {
-	if err := modelio.ValidateInput(m.agentKind, input, m.tools, m.providerInputMaxBytes, m.contextWindowTokens); err != nil {
+func (m *modelInputLoggingChatModel) Stream(ctx context.Context, input []*agentschema.Message, opts ...agentmodel.ModelOption) (*agentstream.StreamReader[*agentschema.Message], error) {
+	if err := modelio.ValidateInput(m.agentKind, m.config, input, m.tools, m.providerInputMaxBytes, m.contextWindowTokens); err != nil {
 		return nil, err
 	}
 	ctx = contextWithModelInputSystemSections(ctx, m.systemSections)
@@ -564,13 +571,13 @@ func (m *modelInputLoggingChatModel) Stream(ctx context.Context, input []*agent.
 	span, callID, spanCtx := BeginLLMCallTrace(ctx, m.agentKind, source, "stream", m.config, input, m.tools, true)
 	started := time.Now()
 	var firstChunk time.Time
-	var chunks []*agent.Message
+	var chunks []*agentschema.Message
 	stream, err := m.inner.Stream(spanCtx, input, stableToolModelOptions(opts, m.tools)...)
 	if err != nil {
 		FinishLLMCallTrace(span, callID, m.agentKind, source, "stream", m.config.Model, 0, nil, err, nil)
 		return nil, err
 	}
-	return agent.StreamReaderWithConvert(stream, func(msg *agent.Message) (*agent.Message, error) {
+	return agentstream.StreamReaderWithConvert(stream, func(msg *agentschema.Message) (*agentschema.Message, error) {
 		if msg != nil {
 			if firstChunk.IsZero() {
 				firstChunk = time.Now()
@@ -578,13 +585,13 @@ func (m *modelInputLoggingChatModel) Stream(ctx context.Context, input []*agent.
 			chunks = append(chunks, msg)
 		}
 		return msg, nil
-	}, agent.WithErrWrapper(func(err error) error {
+	}, agentstream.WithErrWrapper(func(err error) error {
 		FinishLLMCallTrace(span, callID, m.agentKind, source, "stream", m.config.Model, 0, nil, err, map[string]any{
 			"ttft_ms": durationMilliseconds(started, firstChunk),
 		})
 		return err
-	}), agent.WithOnEOF(func() (any, error) {
-		msg, concatErr := agent.ConcatMessages(chunks)
+	}), agentstream.WithOnEOF(func() (any, error) {
+		msg, concatErr := agentschema.ConcatMessages(chunks)
 		FinishLLMCallTrace(span, callID, m.agentKind, source, "stream", m.config.Model, 0, msg, concatErr, map[string]any{
 			"ttft_ms": durationMilliseconds(started, firstChunk),
 		})
@@ -592,28 +599,28 @@ func (m *modelInputLoggingChatModel) Stream(ctx context.Context, input []*agent.
 	})), nil
 }
 
-func modelInputToolsFromContext(mc *agent.ModelContext) []*agent.ToolInfo {
+func modelInputToolsFromContext(mc *agentmiddleware.ModelContext) []*agentschema.ToolInfo {
 	if mc == nil || len(mc.Tools) == 0 {
 		return nil
 	}
 	return cloneToolInfos(mc.Tools)
 }
 
-func stableToolModelOptions(opts []agent.ModelOption, tools []*agent.ToolInfo) []agent.ModelOption {
+func stableToolModelOptions(opts []agentmodel.ModelOption, tools []*agentschema.ToolInfo) []agentmodel.ModelOption {
 	if len(tools) == 0 {
 		return opts
 	}
-	next := make([]agent.ModelOption, 0, len(opts)+1)
+	next := make([]agentmodel.ModelOption, 0, len(opts)+1)
 	next = append(next, opts...)
-	next = append(next, agent.WithTools(cloneToolInfos(tools)))
+	next = append(next, agentmodel.WithTools(cloneToolInfos(tools)))
 	return next
 }
 
-func cloneToolInfos(tools []*agent.ToolInfo) []*agent.ToolInfo {
+func cloneToolInfos(tools []*agentschema.ToolInfo) []*agentschema.ToolInfo {
 	if len(tools) == 0 {
 		return nil
 	}
-	result := make([]*agent.ToolInfo, 0, len(tools))
+	result := make([]*agentschema.ToolInfo, 0, len(tools))
 	for _, item := range tools {
 		if item == nil {
 			continue
@@ -623,18 +630,18 @@ func cloneToolInfos(tools []*agent.ToolInfo) []*agent.ToolInfo {
 	return result
 }
 
-func cloneToolInfo(item *agent.ToolInfo) *agent.ToolInfo {
+func cloneToolInfo(item *agentschema.ToolInfo) *agentschema.ToolInfo {
 	if item == nil {
 		return nil
 	}
 	data, err := json.Marshal(item)
 	if err == nil {
-		var cloned agent.ToolInfo
+		var cloned agentschema.ToolInfo
 		if unmarshalErr := json.Unmarshal(data, &cloned); unmarshalErr == nil {
 			return &cloned
 		}
 	}
-	cloned := &agent.ToolInfo{
+	cloned := &agentschema.ToolInfo{
 		Name:        item.Name,
 		Desc:        item.Desc,
 		Extra:       cloneStringAnyMap(item.Extra),
@@ -643,15 +650,15 @@ func cloneToolInfo(item *agent.ToolInfo) *agent.ToolInfo {
 	return cloned
 }
 
-func cloneParamsOneOf(params *agent.ParamsOneOf) *agent.ParamsOneOf {
+func cloneParamsOneOf(params *agentschema.ParamsOneOf) *agentschema.ParamsOneOf {
 	if params == nil {
 		return nil
 	}
-	data, err := json.Marshal(&agent.ToolInfo{ParamsOneOf: params})
+	data, err := json.Marshal(&agentschema.ToolInfo{ParamsOneOf: params})
 	if err != nil {
 		return params
 	}
-	var cloned agent.ToolInfo
+	var cloned agentschema.ToolInfo
 	if err := json.Unmarshal(data, &cloned); err != nil {
 		return params
 	}

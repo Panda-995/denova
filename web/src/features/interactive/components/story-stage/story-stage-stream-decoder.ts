@@ -30,10 +30,12 @@ const toolIdentitySchema = metadataSchema.extend({
 })
 
 const handledEventSchemas = {
+  ask_pending: metadataSchema.extend({ id: z.string(), tool_call_id: z.string(), agent_kind: z.string(), status: z.literal('pending'), questions: z.array(z.unknown()) }),
+  ask_resolved: metadataSchema.extend({ id: z.string(), status: z.enum(['answered', 'cancelled']) }),
   task_checkpoint: z.object({
     complete: z.boolean().optional(),
     cursor: z.number().optional(),
-    status: z.enum(['running', 'done', 'aborted', 'error']).optional(),
+    status: z.enum(['running', 'done', 'aborted', 'error', 'suspended']).optional(),
     terminal_reason: z.string().optional(),
   }).passthrough(),
   task_checkpoint_committed: z.object({}).passthrough(),
@@ -41,7 +43,7 @@ const handledEventSchemas = {
     cursor: z.number().int().nonnegative(),
     persistence_required: z.boolean().optional(),
     settled: z.boolean().optional(),
-    status: z.enum(['running', 'done', 'aborted', 'error']).optional(),
+    status: z.enum(['running', 'done', 'aborted', 'error', 'suspended']).optional(),
     task_id: z.string().trim().min(1),
     terminal_reason: z.string().optional(),
   }).passthrough(),
@@ -59,6 +61,11 @@ const handledEventSchemas = {
   }),
   thinking: contentSchema,
   interactive_content_reclassified: contentSchema,
+  model_retry: metadataSchema.extend({
+    attempt: z.number(), max_attempts: z.number(), delay_ms: z.number(), reason: z.string(),
+    output_state: z.enum(['none', 'partial', 'complete']), discard_ids: z.array(z.string()), accepted_content: z.string(),
+  }),
+  suspended: z.object({ reason: z.string().optional() }).passthrough(),
   tool_call: toolIdentitySchema.extend({ args: z.string().optional() }),
   tool_args_delta: toolIdentitySchema.extend({
     args: z.string().optional(),
@@ -68,14 +75,10 @@ const handledEventSchemas = {
   tool_progress: toolIdentitySchema,
   tool_result: toolIdentitySchema.extend({ content: z.string().default('') }),
   context_compaction: z.object({ status: z.string().optional() }).passthrough(),
+  todo_updated: z.object({ schema: z.literal('agent.todo.v1'), items: z.array(z.object({ id: z.string(), text: z.string(), status: z.enum(['pending', 'in_progress', 'completed']) })) }).passthrough(),
   token_usage: z.object({ run_id: z.string().optional() }).passthrough(),
   interactive_turn_persisted: z.custom<InteractiveTurnPersistedEvent>(isInteractiveTurnPersistedEvent),
   runtime_recovery_required: z.object({}).passthrough(),
-  goal_evaluation_failed: z.object({
-    code: z.literal('agent_runtime.goal_evaluation_failed'),
-    detail: z.string().optional(),
-    message: z.string().optional(),
-  }).passthrough(),
   error: z.object({
     code: z.string().optional(),
     error: z.string().optional(),

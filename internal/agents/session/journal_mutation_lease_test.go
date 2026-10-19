@@ -7,10 +7,33 @@ import (
 	"testing"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/internal/localfs"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
+
+func TestCanonicalMutationPanicDoesNotStrandTheSessionLock(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sess, err := store.GetOrCreate("panic-recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("mutation did not propagate the panic to its worker boundary")
+			}
+		}()
+		_ = sess.withCanonicalMutation(context.Background(), "test panic cleanup", func() error { panic("fixture") })
+	}()
+	if err := sess.Append(agentschema.UserMessage("The session remains usable.")); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestDisplayMutationRefreshesDomainCommitFromAnotherSession(t *testing.T) {
 	store, err := NewStore(t.TempDir())
@@ -31,7 +54,7 @@ func TestDisplayMutationRefreshesDomainCommitFromAnotherSession(t *testing.T) {
 	}
 	intent, err := NewDomainCommitIntent(
 		DomainCommitIdentity{CommandID: "command-1", OperationID: "operation-1", Cycle: 1},
-		agent.AssistantMessage("canonical answer", nil),
+		agentschema.AssistantMessage("canonical answer", nil),
 		MessageMetadata{RunID: "run-1", AgentKind: "ide"},
 	)
 	if err != nil {
@@ -77,7 +100,7 @@ func TestDisplayMutationWaitsForCanonicalJournalLease(t *testing.T) {
 	}
 	intent, err := NewDomainCommitIntent(
 		DomainCommitIdentity{CommandID: "command-lease", OperationID: "operation-lease", Cycle: 1},
-		agent.AssistantMessage("leased answer", nil),
+		agentschema.AssistantMessage("leased answer", nil),
 		MessageMetadata{},
 	)
 	if err != nil {
@@ -202,7 +225,7 @@ func TestConcurrentIndependentSessionMutationsKeepJournalCanonical(t *testing.T)
 		launch(fmt.Sprintf("domain-%d", index), func() error {
 			intent, intentErr := NewDomainCommitIntent(
 				DomainCommitIdentity{CommandID: fmt.Sprintf("command-%d", index), OperationID: fmt.Sprintf("operation-%d", index), Cycle: 1},
-				agent.AssistantMessage(fmt.Sprintf("answer-%d", index), nil),
+				agentschema.AssistantMessage(fmt.Sprintf("answer-%d", index), nil),
 				MessageMetadata{},
 			)
 			if intentErr != nil {

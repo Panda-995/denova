@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 // UserReference is display-only provenance attached to one accepted user
@@ -26,7 +26,7 @@ type UserReference struct {
 // projected model context with explicit provenance.
 type ModelContextInput struct {
 	UserMessage    string
-	Attachments    []agent.Attachment
+	Attachments    []agentschema.Attachment
 	UserReferences []UserReference
 	Fragments      []Fragment
 	Budget         Budget
@@ -35,7 +35,7 @@ type ModelContextInput struct {
 // ModelContextResult returns both exact model messages and the assembly audit.
 // Callers must not persist Messages as display history.
 type ModelContextResult struct {
-	Messages []*agent.Message
+	Messages []*agentschema.Message
 	Context  Result
 	// CommitState is opaque conversation-owned data derived during pure
 	// assembly and applied only by CommitModelInput. Generic callers must not
@@ -84,7 +84,7 @@ func ContextBudgetForAgent(cfg *config.Config, agentKind string) Budget {
 // turn fragments.
 func AssembleSingleUserModelContext(ctx context.Context, input ModelContextInput) (ModelContextResult, error) {
 	assembled, err := NewAssembler(input.Budget).Assemble(ctx, AssembleRequest{
-		Messages: []*agent.Message{agent.UserMessageWithAttachments(input.UserMessage, input.Attachments)}, Fragments: input.Fragments,
+		Messages: []*agentschema.Message{agentschema.UserMessageWithAttachments(input.UserMessage, input.Attachments)}, Fragments: input.Fragments,
 	})
 	if err != nil {
 		return ModelContextResult{}, err

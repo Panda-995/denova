@@ -3,10 +3,12 @@ package chat
 import (
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
 	"denova/internal/agents/prompts"
+
+	"github.com/alfredxw/denova/agent"
+	agentmodel "github.com/alfredxw/denova/agent/model"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestInspectedContextAnalysisUsesCapacityAwareProfileOutputReserve(t *testing.T) {
@@ -19,13 +21,16 @@ func TestInspectedContextAnalysisUsesCapacityAwareProfileOutputReserve(t *testin
 			ToolResultContextEnabled: &disableToolContext,
 		}},
 	}
-	messages := []*agent.Message{agent.UserMessage("short request")}
-	analysis := BuildInspectedContextAnalysis(cfg, config.AgentKindIDE, "ide", prompts.SystemPromptComposition{}, agent.Inspection{
-		ModelRequest: agent.ModelRequestInspection{
+	messages := []*agentschema.Message{agentschema.UserMessage("short request")}
+	analysis, err := BuildInspectedContextAnalysis(cfg, config.AgentKindIDE, "ide", prompts.SystemPromptComposition{}, agent.Inspection{
+		ModelRequest: agentmodel.ModelRequestInspection{
 			Messages: messages,
-			Options:  agent.Options{MaxTokens: &maxOutput},
+			Options:  agentmodel.Options{MaxTokens: &maxOutput},
 		},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if analysis.ReservedCompletionTokens != 2500 || analysis.ReservedToolResultTokens != 0 {
 		t.Fatalf("analysis reserves = completion:%d tools:%d, want 2500/0",
 			analysis.ReservedCompletionTokens, analysis.ReservedToolResultTokens)
@@ -47,7 +52,10 @@ func TestLegacyContextAnalysisUsesCapacityAwareProfileOutputReserve(t *testing.T
 			ToolResultContextEnabled: &disableToolContext,
 		}},
 	}
-	usage := analyzeContextUsage(cfg, config.AgentKindInteractiveStory, "", []*agent.Message{agent.UserMessage("short request")}, 0)
+	usage, err := analyzeContextUsage(cfg, config.AgentKindInteractiveStory, "", []*agentschema.Message{agentschema.UserMessage("short request")}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if usage.completionReserve != 2500 || usage.toolResultReserve != 0 {
 		t.Fatalf("legacy analysis reserves = completion:%d tools:%d, want 2500/0",
 			usage.completionReserve, usage.toolResultReserve)

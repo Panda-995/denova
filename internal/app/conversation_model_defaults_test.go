@@ -155,7 +155,7 @@ func TestWritingDraftRemembersSelectionAcrossBookProjects(t *testing.T) {
 	}
 	invalidProfile := "missing-model"
 	_, err = application.PatchConversationConfig(ctx, first, ConversationConfigPatch{ProfileID: &invalidProfile}, saved.Revision)
-	if err == nil || errors.Is(err, ErrConversationModelDefaultsNotSaved) {
+	if err == nil || errors.Is(err, ErrConversationDefaultsNotSaved) {
 		t.Fatalf("invalid model must fail before persistence: %v", err)
 	}
 	settings, err := application.SettingsService().Snapshot(appsettings.Global())

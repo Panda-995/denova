@@ -16,7 +16,9 @@ import (
 	"runtime"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentexecution "github.com/alfredxw/denova/agent/engine/execution"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 // Store publishes immutable artifacts beneath one already-existing boundary.
@@ -88,7 +90,7 @@ func NewBoundedStore(boundaryRoot, artifactRoot string) (*Store, error) {
 	return &Store{boundaryRoot: canonicalBoundary, artifactRoot: filepath.ToSlash(relative)}, nil
 }
 
-func (store *Store) BeginToolArtifact(ctx context.Context, request agent.ToolArtifactRequest) (agent.ToolArtifactWriter, error) {
+func (store *Store) BeginToolArtifact(ctx context.Context, request agenttool.ToolArtifactRequest) (agenttool.ToolArtifactWriter, error) {
 	if store == nil || store.boundaryRoot == "" || store.artifactRoot == "" {
 		return nil, errors.New("tool artifact store is not configured")
 	}
@@ -103,10 +105,10 @@ func (store *Store) BeginToolArtifact(ctx context.Context, request agent.ToolArt
 	}
 	purpose := request.Purpose
 	if purpose == "" {
-		purpose = agent.ToolArtifactPurposeAttachment
+		purpose = agentschema.ToolArtifactPurposeAttachment
 	}
 	switch purpose {
-	case agent.ToolArtifactPurposeCompleteModelOutput, agent.ToolArtifactPurposeCompleteToolOutput, agent.ToolArtifactPurposeAttachment:
+	case agentschema.ToolArtifactPurposeCompleteModelOutput, agentschema.ToolArtifactPurposeCompleteToolOutput, agentschema.ToolArtifactPurposeAttachment:
 	default:
 		return nil, fmt.Errorf("unsupported tool artifact purpose %q", purpose)
 	}
@@ -129,10 +131,10 @@ func (store *Store) BeginToolArtifact(ctx context.Context, request agent.ToolArt
 
 	callID := strings.TrimSpace(request.ToolCallID)
 	if callID == "" {
-		callID = strings.TrimSpace(agent.CurrentToolExecutionID(ctx))
+		callID = strings.TrimSpace(agentexecution.CurrentToolExecutionID(ctx))
 	}
 	if callID == "" {
-		callID = strings.TrimSpace(agent.ToolCallID(ctx))
+		callID = strings.TrimSpace(agentexecution.ToolCallID(ctx))
 	}
 	id, err := artifactID(callID, purpose)
 	if err != nil {
@@ -157,7 +159,7 @@ func (store *Store) BeginToolArtifact(ctx context.Context, request agent.ToolArt
 // check intentionally relies on bounded path ownership, immutable call/purpose
 // identity, and file size; a content hash is optional diagnostic metadata, not
 // part of the runtime recovery contract.
-func (store *Store) VerifyToolArtifact(ctx context.Context, reference agent.ToolArtifactRef, expected agent.ToolArtifactRequest) error {
+func (store *Store) VerifyToolArtifact(ctx context.Context, reference agentschema.ToolArtifactRef, expected agenttool.ToolArtifactRequest) error {
 	if store == nil || store.boundaryRoot == "" || store.artifactRoot == "" {
 		return errors.New("tool artifact store is not configured")
 	}
@@ -168,17 +170,17 @@ func (store *Store) VerifyToolArtifact(ctx context.Context, reference agent.Tool
 	}
 	purpose := expected.Purpose
 	if purpose == "" {
-		purpose = agent.ToolArtifactPurposeAttachment
+		purpose = agentschema.ToolArtifactPurposeAttachment
 	}
 	if reference.Purpose != purpose || !reference.Complete {
 		return errors.New("tool artifact purpose or completeness does not match")
 	}
 	callID := strings.TrimSpace(expected.ToolCallID)
 	if callID == "" {
-		callID = strings.TrimSpace(agent.CurrentToolExecutionID(ctx))
+		callID = strings.TrimSpace(agentexecution.CurrentToolExecutionID(ctx))
 	}
 	if callID == "" {
-		callID = strings.TrimSpace(agent.ToolCallID(ctx))
+		callID = strings.TrimSpace(agentexecution.ToolCallID(ctx))
 	}
 	wantID, err := artifactID(callID, purpose)
 	if err != nil {
@@ -252,7 +254,7 @@ type writer struct {
 	tempName    string
 	finalName   string
 	id          string
-	purpose     agent.ToolArtifactPurpose
+	purpose     agentschema.ToolArtifactPurpose
 	contentType string
 	digest      hash.Hash
 	byteSize    int64
@@ -271,43 +273,43 @@ func (w *writer) Write(data []byte) (int, error) {
 	return written, err
 }
 
-func (w *writer) Commit() (agent.ToolArtifactRef, error) {
+func (w *writer) Commit() (agentschema.ToolArtifactRef, error) {
 	if w == nil || w.file == nil || w.root == nil || w.terminal {
-		return agent.ToolArtifactRef{}, errors.New("tool artifact writer is closed")
+		return agentschema.ToolArtifactRef{}, errors.New("tool artifact writer is closed")
 	}
 	if err := w.file.Sync(); err != nil {
 		_ = w.Abort()
-		return agent.ToolArtifactRef{}, fmt.Errorf("sync tool artifact: %w", err)
+		return agentschema.ToolArtifactRef{}, fmt.Errorf("sync tool artifact: %w", err)
 	}
 	if err := w.file.Close(); err != nil {
 		w.file = nil
 		_ = w.Abort()
-		return agent.ToolArtifactRef{}, fmt.Errorf("close tool artifact: %w", err)
+		return agentschema.ToolArtifactRef{}, fmt.Errorf("close tool artifact: %w", err)
 	}
 	w.file = nil
 	if err := w.root.Link(w.tempName, w.finalName); err != nil {
 		if !errors.Is(err, os.ErrExist) {
 			_ = w.Abort()
-			return agent.ToolArtifactRef{}, fmt.Errorf("publish tool artifact: %w", err)
+			return agentschema.ToolArtifactRef{}, fmt.Errorf("publish tool artifact: %w", err)
 		}
 		matches, compareErr := w.matchesPublishedArtifact()
 		if compareErr != nil {
 			_ = w.Abort()
-			return agent.ToolArtifactRef{}, compareErr
+			return agentschema.ToolArtifactRef{}, compareErr
 		}
 		if !matches {
 			_ = w.Abort()
-			return agent.ToolArtifactRef{}, fmt.Errorf("tool artifact call identity %q already has different content", w.id)
+			return agentschema.ToolArtifactRef{}, fmt.Errorf("tool artifact call identity %q already has different content", w.id)
 		}
 		// A matching file may predate the private at-rest permission policy.
 		// Repair it before returning the replayed reference.
 		if err := w.root.Chmod(w.finalName, 0o600); err != nil {
 			_ = w.Abort()
-			return agent.ToolArtifactRef{}, fmt.Errorf("secure replayed tool artifact: %w", err)
+			return agentschema.ToolArtifactRef{}, fmt.Errorf("secure replayed tool artifact: %w", err)
 		}
 		if err := w.root.Remove(w.tempName); err != nil && !errors.Is(err, os.ErrNotExist) {
 			_ = w.Abort()
-			return agent.ToolArtifactRef{}, fmt.Errorf("remove replay artifact staging file: %w", err)
+			return agentschema.ToolArtifactRef{}, fmt.Errorf("remove replay artifact staging file: %w", err)
 		}
 		w.tempName = ""
 		return w.finish(), nil
@@ -315,20 +317,20 @@ func (w *writer) Commit() (agent.ToolArtifactRef, error) {
 	if err := w.root.Chmod(w.finalName, 0o600); err != nil {
 		_ = w.root.Remove(w.finalName)
 		_ = w.Abort()
-		return agent.ToolArtifactRef{}, fmt.Errorf("secure tool artifact: %w", err)
+		return agentschema.ToolArtifactRef{}, fmt.Errorf("secure tool artifact: %w", err)
 	}
 	if err := w.root.Remove(w.tempName); err != nil && !errors.Is(err, os.ErrNotExist) {
 		_ = w.root.Remove(w.finalName)
 		w.terminal = true
 		_ = w.closeRoot()
-		return agent.ToolArtifactRef{}, fmt.Errorf("remove tool artifact staging file: %w", err)
+		return agentschema.ToolArtifactRef{}, fmt.Errorf("remove tool artifact staging file: %w", err)
 	}
 	w.tempName = ""
 	if err := syncArtifactDirectory(w.root, filepath.ToSlash(filepath.Dir(w.finalName))); err != nil {
 		_ = w.root.Remove(w.finalName)
 		w.terminal = true
 		_ = w.closeRoot()
-		return agent.ToolArtifactRef{}, fmt.Errorf("sync tool artifact directory: %w", err)
+		return agentschema.ToolArtifactRef{}, fmt.Errorf("sync tool artifact directory: %w", err)
 	}
 	return w.finish(), nil
 }
@@ -373,9 +375,9 @@ func (w *writer) matchesPublishedArtifact() (bool, error) {
 	return string(digest.Sum(nil)) == string(w.digest.Sum(nil)), nil
 }
 
-func (w *writer) finish() agent.ToolArtifactRef {
+func (w *writer) finish() agentschema.ToolArtifactRef {
 	w.terminal = true
-	reference := agent.ToolArtifactRef{
+	reference := agentschema.ToolArtifactRef{
 		ID: w.id, Purpose: w.purpose, ReadablePath: w.finalName, ContentType: w.contentType,
 		EstimatedBytes: w.byteSize, EstimatedTokens: estimatedTokens(w.byteSize), Complete: true,
 		SHA256: hex.EncodeToString(w.digest.Sum(nil)),
@@ -411,7 +413,7 @@ func createStagingFile(root *os.Root, directory string) (string, *os.File, error
 	return "", nil, errors.New("create tool artifact: staging name collisions exhausted")
 }
 
-func artifactID(callID string, purpose agent.ToolArtifactPurpose) (string, error) {
+func artifactID(callID string, purpose agentschema.ToolArtifactPurpose) (string, error) {
 	if callID != "" {
 		// Purpose is part of the immutable identity. A tool may publish one
 		// auxiliary attachment and one complete model-output stream under the same

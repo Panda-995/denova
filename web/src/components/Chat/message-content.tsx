@@ -1,4 +1,5 @@
-import { Children, Fragment, cloneElement, isValidElement, memo, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useVirtualizedMessageState } from './VirtualizedMessageState'
+import { Children, Fragment, cloneElement, isValidElement, memo, useLayoutEffect, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { cjk } from '@streamdown/cjk'
 import { math } from '@streamdown/math'
@@ -20,6 +21,7 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/components/ai-e
 import { agentContentPreview } from './agent-content-preview'
 import { AgentSourceBadge } from './message-source-badge'
 import { StreamingContentStage } from './StreamingContentStage'
+import { useMotionIntensity } from '@/features/motion/motion-preferences'
 
 const chatMarkdownPlugins = { cjk, math }
 const chatMarkdownControls = {
@@ -41,6 +43,7 @@ interface MarkdownContentProps {
   highlightDialogue: boolean
   projectId: string
   streaming?: boolean
+  animateWords?: boolean
 }
 
 interface ChatMarkdownImageProps {
@@ -82,6 +85,7 @@ export const MarkdownContent = memo(function MarkdownContent({
   highlightDialogue,
   projectId,
   streaming = false,
+  animateWords = true,
 }: MarkdownContentProps) {
   const { t } = useTranslation()
   const components = useMemo(() => ({
@@ -102,7 +106,7 @@ export const MarkdownContent = memo(function MarkdownContent({
   // retain Streamdown's horizontal overflow behavior.
   return (
     <Streamdown
-      animated
+      animated={animateWords}
       className="nova-streamdown min-w-0 space-y-2"
       components={components}
       controls={chatMarkdownControls}
@@ -224,10 +228,11 @@ function highlightDialogueText(text: string, enabled: boolean, keyPrefix: string
 /** Reasoning follows streaming until the user takes explicit control. */
 export function ThinkingBlock({ projectId, message, content, streaming, showAgentSource = true }: { projectId: string; message: ThinkingChatMessage; content: string; streaming: boolean; showAgentSource?: boolean }) {
   const { t } = useTranslation()
+  const motionIntensity = useMotionIntensity()
   const preview = agentContentPreview(content)
-  const [expanded, setExpanded] = useState(streaming)
-  const userToggledRef = useRef(false)
-  const wasStreamingRef = useRef(streaming)
+  const [expanded, setExpanded] = useVirtualizedMessageState('thinking-expanded', streaming)
+  const [userToggled, setUserToggled] = useVirtualizedMessageState('thinking-toggled', false)
+  const [wasStreaming, setWasStreaming] = useVirtualizedMessageState('thinking-streaming', streaming)
   const contentScrollLock = useBottomScrollLock<HTMLDivElement>({
     enabled: streaming && expanded,
     resetKey: `${message.id || message.created_at || 'thinking'}:thinking-stream`,
@@ -235,18 +240,17 @@ export function ThinkingBlock({ projectId, message, content, streaming, showAgen
   })
 
   useLayoutEffect(() => {
-    const wasStreaming = wasStreamingRef.current
-    wasStreamingRef.current = streaming
+    setWasStreaming(streaming)
     if (!wasStreaming && streaming) {
-      userToggledRef.current = false
+      setUserToggled(false)
       setExpanded(true)
-    } else if (wasStreaming && !streaming && !userToggledRef.current) {
+    } else if (wasStreaming && !streaming && !userToggled) {
       setExpanded(false)
     }
   }, [streaming])
 
   const handleOpenChange = (open: boolean) => {
-    userToggledRef.current = true
+    setUserToggled(true)
     setExpanded(open)
   }
 
@@ -294,6 +298,9 @@ export function ThinkingBlock({ projectId, message, content, streaming, showAgen
                       highlightDialogue={false}
                       projectId={projectId}
                       streaming={streaming}
+                      // Word animation events bubble through the thinking
+                      // disclosure; enable this extra work only for full motion.
+                      animateWords={motionIntensity === 'full'}
                     />
                   )}
                 </StreamingContentStage>

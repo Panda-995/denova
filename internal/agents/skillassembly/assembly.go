@@ -6,20 +6,20 @@ import (
 	"context"
 	"fmt"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
 	"denova/internal/agents/prompts"
 	novaskills "denova/internal/agents/skills"
 	agenttoolruntime "denova/internal/agents/toolruntime"
 	producttools "denova/internal/agents/tools"
+
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 // Assembly contains the three runtime surfaces derived from one effective
 // catalog. SystemPrompt remains unchanged when Skills are unavailable.
 type Assembly struct {
 	SystemPrompt prompts.SystemPromptComposition
-	Tools        []agent.ToolDefinition
+	Tools        []agenttool.ToolDefinition
 	ReadAdapters []producttools.ReadAdapterBinding
 }
 
@@ -79,7 +79,7 @@ func Build(
 	if err != nil {
 		return Assembly{}, fmt.Errorf("create Skill reference adapter for Agent %s: %w", agentKind, err)
 	}
-	assembly.Tools = []agent.ToolDefinition{canonical}
+	assembly.Tools = []agenttool.ToolDefinition{canonical}
 	assembly.ReadAdapters = []producttools.ReadAdapterBinding{referenceAdapter}
 	return assembly, nil
 }

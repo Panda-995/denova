@@ -2,7 +2,7 @@ import { useId, useState } from 'react'
 import { Copy, Eye, EyeOff, RefreshCw } from 'lucide-react'
 import { nanoid } from 'nanoid'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { RemoteAccessConnections } from '@/features/remote-access/RemoteAccessConnections'
 import { Button } from '@/components/ui/button'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
@@ -70,7 +70,7 @@ export function LANAccessSettings({ draft, inherited, onChange }: {
           <SelectTrigger id={`${id}-enabled`} className="w-full"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectGroup>
-              <SelectItem value="inherit">{t('common.inherit', { value: t(inherited.allow_lan_access ? 'settings.bool.true' : 'settings.bool.false') })}</SelectItem>
+              <SelectItem value="inherit">{t('common.defaultValue', { value: t(inherited.allow_lan_access ? 'settings.bool.true' : 'settings.bool.false') })}</SelectItem>
               <SelectItem value="true">{t('settings.bool.true')}</SelectItem>
               <SelectItem value="false">{t('settings.bool.false')}</SelectItem>
             </SelectGroup>

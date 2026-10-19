@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/internal/interactive"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestPrepareInteractiveTurnHidesAuthoritativeModifiersFromAgent(t *testing.T) {
@@ -64,7 +64,7 @@ func TestPrepareInteractiveTurnHidesAuthoritativeModifiersFromAgent(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != agent.ToolResultSuccess {
+	if result.Status != agentschema.ToolResultSuccess {
 		t.Fatalf("prepare result status = %q", result.Status)
 	}
 	for _, hidden := range []string{"target", "total", "rolls", "bonus_total", "difficulty_shift"} {

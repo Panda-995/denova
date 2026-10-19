@@ -19,10 +19,14 @@ import (
 	agenttoolruntime "denova/internal/agents/toolruntime"
 	"denova/internal/project"
 
-	agent "github.com/alfredxw/denova/agent"
-	agentpermission "github.com/alfredxw/denova/agent/permission"
-	"github.com/alfredxw/denova/agent/providers"
-	publictools "github.com/alfredxw/denova/agent/tools"
+	"github.com/alfredxw/denova/agent"
+	agentmiddleware "github.com/alfredxw/denova/agent/engine/middleware"
+	"github.com/alfredxw/denova/agent/model/providers"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentsession "github.com/alfredxw/denova/agent/session"
+	sdktool "github.com/alfredxw/denova/agent/tool"
+	publictools "github.com/alfredxw/denova/agent/tool/builtin"
+	agentpermission "github.com/alfredxw/denova/agent/tool/permission"
 )
 
 func TestDelegatedWorkspaceMutationCompletesAndKeepsItsOwnJournal(t *testing.T) {
@@ -58,49 +62,49 @@ func TestDelegatedWorkspaceMutationCompletesAndKeepsItsOwnJournal(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	toolset, err := agent.StaticTools(definitions...)
+	toolset, err := sdktool.StaticTools(definitions...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	childModel := &publicBackendTestModel{responses: []*agent.Message{
-		agent.AssistantMessage("", []agent.ToolCall{{ID: "write-chapter", Type: "function", Function: agent.FunctionCall{
+	childModel := &publicBackendTestModel{responses: []*agentschema.Message{
+		agentschema.AssistantMessage("", []agentschema.ToolCall{{ID: "write-chapter", Type: "function", Function: agentschema.FunctionCall{
 			Name: "write", Arguments: `{"path":"chapter.md","content":"Draft chapter.\n"}`,
 		}}}),
-		agent.AssistantMessage("", []agent.ToolCall{{ID: "revise-chapter", Type: "function", Function: agent.FunctionCall{
+		agentschema.AssistantMessage("", []agentschema.ToolCall{{ID: "revise-chapter", Type: "function", Function: agentschema.FunctionCall{
 			Name: "edit", Arguments: `{"path":"chapter.md","edits":[{"old_string":"Draft","new_string":"Finished"}]}`,
 		}}}),
-		agent.AssistantMessage("Chapter saved and verified.", nil),
+		agentschema.AssistantMessage("Chapter saved and verified.", nil),
 	}}
 	child := agent.Definition{
 		Key: "test.delegated-writer", Name: "writer", Model: childModel,
 		AttachmentRoot: layout.StoreRoot,
-		ModelIdentity:  agent.CapabilityIdentity{Kind: "test.child-model", Version: 1},
+		ModelIdentity:  agentschema.CapabilityIdentity{Kind: "test.child-model", Version: 1},
 		Tools:          toolset, Permission: agentpermission.FullAccess(),
-		Middlewares: []agent.Middleware{agent.IdentifyMiddleware(
+		Middlewares: []agentmiddleware.Middleware{agentmiddleware.IdentifyMiddleware(
 			agenttoolruntime.NewOrchestratorMiddleware(agenttoolruntime.OrchestratorConfig{
 				AgentKind: agentrun.AgentKindIDE, Workspace: workspace,
-			}), agent.CapabilityIdentity{Kind: "test.child-orchestrator", Version: 1},
-		), agent.IdentifyMiddleware(
+			}), agentschema.CapabilityIdentity{Kind: "test.child-orchestrator", Version: 1},
+		), agentmiddleware.IdentifyMiddleware(
 			agentrun.NewModelInputLoggingMiddleware(agentrun.AgentKindIDE, providers.ModelConfig{Model: "child-test"}, 0, 0, agentprompts.SystemPromptComposition{}),
-			agent.CapabilityIdentity{Kind: "test.child-model-trace", Version: 1},
+			agentschema.CapabilityIdentity{Kind: "test.child-model-trace", Version: 1},
 		)},
 	}
 	catalog, err := agentdelegation.NewCatalog(nil, agentdelegation.Config{
 		Capability: "test.delegation", MaxResultBytes: 64 << 10, Parallelism: 1,
-		ValidationIdentity: agent.CapabilityIdentity{Kind: "test.delegation-validation", Version: 1},
-		Validate:           func(context.Context, []agent.ToolDefinition) error { return nil },
+		ValidationIdentity: agentschema.CapabilityIdentity{Kind: "test.delegation-validation", Version: 1},
+		Validate:           func(context.Context, []sdktool.ToolDefinition) error { return nil },
 	}, agentdelegation.Child{
 		Name: "writer", Description: "Writes the delegated chapter", Definition: child,
-		Identity: agent.CapabilityIdentity{Kind: "test.writer", Version: 1},
+		Identity: agentschema.CapabilityIdentity{Kind: "test.writer", Version: 1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	parentModel := &publicBackendTestModel{responses: []*agent.Message{
-		agent.AssistantMessage("", []agent.ToolCall{{ID: "delegate-chapter", Type: "function", Function: agent.FunctionCall{
-			Name: "task", Arguments: `{"action":"start","starts":[{"agent":"writer","idempotency_key":"chapter-once","prompt":"Write and revise the delegated chapter."}]}`,
+	parentModel := &publicBackendTestModel{responses: []*agentschema.Message{
+		agentschema.AssistantMessage("", []agentschema.ToolCall{{ID: "delegate-chapter", Type: "function", Function: agentschema.FunctionCall{
+			Name: "send", Arguments: `{"items":[{"action":"delegate","message":"Write and revise the delegated chapter.","agent":"writer","idempotency_key":"chapter-once"}]}`,
 		}}}),
-		agent.AssistantMessage("Delegated chapter complete.", nil),
+		agentschema.AssistantMessage("Delegated chapter complete.", nil),
 	}}
 	var committed []agenttoolruntime.CommittedToolMutation
 	options := []Option{
@@ -123,7 +127,7 @@ func TestDelegatedWorkspaceMutationCompletesAndKeepsItsOwnJournal(t *testing.T) 
 	operation, err := runtime.Start(ctx, StartRequest{Cycle: Cycle{
 		Definition: agent.Definition{
 			Key: "test.parent-writer", Name: "root", Model: parentModel,
-			ModelIdentity: agent.CapabilityIdentity{Kind: "test.parent-model", Version: 1},
+			ModelIdentity: agentschema.CapabilityIdentity{Kind: "test.parent-model", Version: 1},
 			Tools:         catalog, Permission: agentpermission.FullAccess(),
 		},
 		Conversation: agentconversation.NewSessionConversationForAgent(sess, nil, agentrun.AgentKindIDE),
@@ -176,11 +180,11 @@ func TestDelegatedWorkspaceMutationCompletesAndKeepsItsOwnJournal(t *testing.T) 
 			}
 		}
 	}
-	keys, err := runtime.public.agent.ListSessions(ctx, agent.SessionSelector{All: true})
+	keys, err := runtime.public.agent.ListSessions(ctx, agentsession.Selector{All: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var childKey agent.SessionKey
+	var childKey agentsession.Key
 	for _, key := range keys {
 		if strings.HasPrefix(key.Namespace, "task.") {
 			if childKey.ID != "" {
@@ -193,6 +197,17 @@ func TestDelegatedWorkspaceMutationCompletesAndKeepsItsOwnJournal(t *testing.T) 
 		t.Fatal("delegated Session is missing")
 	}
 	childRunID := string(committed[0].RuntimeOperation)
+	assertMutationSettlement := func(runtime *Runtime) {
+		t.Helper()
+		view, found, err := runtime.OperationProjection(ctx, agentrun.Options{
+			AgentKind: agentrun.AgentKindIDE, ProjectID: projectRecord.ID, SessionID: sess.ID,
+			Workspace: workspace, StateRoot: layout.StoreRoot,
+		}, childRunID)
+		if err != nil || !found || view.Outcome == nil || view.Outcome.Status != agentrun.OutcomeCompleted {
+			t.Fatalf("delegated mutation settlement = %#v, found = %v, error = %v", view, found, err)
+		}
+	}
+	assertMutationSettlement(runtime)
 	waitForChildTrace(t, runtime, childRunID)
 	location := agentrun.TraceLocation{Workspace: workspace, StateRoot: layout.StoreRoot}
 	childTrace, err := agentrun.ReadRunTrace(location, childRunID)
@@ -211,7 +226,7 @@ func TestDelegatedWorkspaceMutationCompletesAndKeepsItsOwnJournal(t *testing.T) 
 		t.Fatalf("child boundary content = %v", contentRecords)
 	}
 	parentTrace, err := agentrun.ReadRunTrace(location, string(operation.Receipt().OperationID))
-	if err != nil || len(parentTrace.Children) != 1 || parentTrace.Children[0].ID != childRunID || parentTrace.Summary.LLMCalls != 2 || parentTrace.Summary.ToolCalls != 1 {
+	if err != nil || len(parentTrace.Children) != 1 || parentTrace.Children[0].ID != childRunID || parentTrace.Summary.LLMCalls != len(parentModel.inputs) || parentTrace.Summary.ToolCalls != 1 {
 		t.Fatalf("parent trace mixed or lost child execution: %#v, error = %v", parentTrace, err)
 	}
 	if err := runtime.Close(ctx); err != nil {
@@ -222,21 +237,26 @@ func TestDelegatedWorkspaceMutationCompletesAndKeepsItsOwnJournal(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer reopened.Close(ctx)
+	assertMutationSettlement(reopened)
 	childSession, err := reopened.public.agent.Session(ctx, childKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	snapshot, err := childSession.Snapshot(ctx)
-	if err != nil || len(snapshot.RecentRuns) != 1 || snapshot.RecentRuns[0].Status != agent.ResultCompleted || snapshot.RecentRuns[0].Output != "Chapter saved and verified." {
+	if err != nil || len(snapshot.RecentRuns) != 1 || snapshot.RecentRuns[0].Status != agentschema.ResultCompleted || snapshot.RecentRuns[0].Output != "Chapter saved and verified." {
 		t.Fatalf("reopened child = %#v, error = %v", snapshot, err)
 	}
-	inspection, err := childSession.Inspect(ctx, agent.Text("Inspect the saved chapter."))
+	accepted, _, err := childSession.RunInput(ctx, childRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := childSession.Inspect(ctx, agent.Input{Text: "Inspect the saved chapter.", HostData: accepted.HostData})
 	if err != nil {
 		t.Fatal(err)
 	}
 	toolResults := 0
 	for _, message := range inspection.ModelRequest.Messages {
-		if message.Role == agent.ToolRole {
+		if message.Role == agentschema.ToolRole {
 			toolResults++
 		}
 	}
@@ -262,18 +282,18 @@ func TestDelegatedWorkspaceMutationCompletesAndKeepsItsOwnJournal(t *testing.T) 
 	}
 	// A cold child must rebuild product effect routing without a live parent
 	// registration.
-	childModel.responses = []*agent.Message{
-		agent.AssistantMessage("", []agent.ToolCall{{ID: "cold-revision", Type: "function", Function: agent.FunctionCall{
+	childModel.responses = []*agentschema.Message{
+		agentschema.AssistantMessage("", []agentschema.ToolCall{{ID: "cold-revision", Type: "function", Function: agentschema.FunctionCall{
 			Name: "edit", Arguments: `{"path":"chapter.md","edits":[{"old_string":"Finished","new_string":"Final"}]}`,
 		}}}),
-		agent.AssistantMessage("Cold revision saved.", nil),
+		agentschema.AssistantMessage("Cold revision saved.", nil),
 	}
-	input := agent.Input{Text: "Revise the existing chapter.", IdempotencyKey: "cold-revision"}
+	input := agent.Input{Text: "Revise the existing chapter.", IdempotencyKey: "cold-revision", HostData: accepted.HostData}
 	coldRun, err := childSession.Run(ctx, input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result, err := coldRun.Wait(ctx); err != nil || result.Status != agent.ResultCompleted {
+	if result, err := coldRun.Wait(ctx); err != nil || result.Status != agentschema.ResultCompleted {
 		t.Fatalf("cold child result = %#v, error = %v", result, err)
 	}
 	waitForChildTrace(t, reopened, coldRun.ID())
@@ -297,7 +317,8 @@ func waitForChildTrace(t *testing.T, runtime *Runtime, runID string) {
 	handle := runtime.public.runs[runID]
 	runtime.public.mu.RUnlock()
 	if handle == nil {
-		t.Fatalf("child Run %s has no trace consumer", runID)
+		// Completed consumers leave the live registry only after flushing their trace.
+		return
 	}
 	select {
 	case <-handle.done:

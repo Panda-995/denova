@@ -1,8 +1,10 @@
 package session
 
-import agent "github.com/alfredxw/denova/agent"
+import (
+	agentschema "github.com/alfredxw/denova/agent/schema"
+)
 
-func (s *Session) effectiveTranscriptMessagesLocked() []*agent.Message {
+func (s *Session) effectiveTranscriptMessagesLocked() []*agentschema.Message {
 	start := s.clearAfterIndex - s.messageBaseIndex
 	if start < 0 {
 		start = 0
@@ -10,9 +12,9 @@ func (s *Session) effectiveTranscriptMessagesLocked() []*agent.Message {
 	if start > len(s.messages) {
 		start = len(s.messages)
 	}
-	result := make([]*agent.Message, len(s.messages)-start)
+	result := make([]*agentschema.Message, len(s.messages)-start)
 	for index, message := range s.messages[start:] {
-		result[index] = agent.CloneMessage(message)
+		result[index] = agentschema.CloneMessage(message)
 	}
 	return result
 }

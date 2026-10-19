@@ -5,7 +5,7 @@ import Placeholder from '@tiptap/extension-placeholder'
 import { CharacterCount } from '@tiptap/extension-character-count'
 import { TableKit } from '@tiptap/extension-table'
 import { Markdown } from '@tiptap/markdown'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { useTranslation } from 'react-i18next'
 
 import type { ChapterIllustration, TextSelection as QuoteSelection } from '@/lib/api'
@@ -59,6 +59,8 @@ export type { EditorFlushHandler } from './useEditorDraftPersistence'
 export type { DocumentReviewController, DocumentReviewNavigationIntent } from '@/features/document-review/controller'
 
 export interface WritingDocumentEditorProps {
+  /** Hidden tabs retain editing state without claiming global commands or navigation guards. */
+  active?: boolean
   /** Stable resource identity used for reads, assets, review snapshots, and caches. */
   projectId: string
   fileName: string | null
@@ -93,6 +95,7 @@ interface EditorSearchIntent {
 
 /** Writing-specific TipTap editor for Markdown manuscripts. */
 export function WritingDocumentEditor({
+  active = true,
   projectId,
   fileName,
   content,
@@ -361,6 +364,7 @@ export function WritingDocumentEditor({
     loadExternalVersion,
     keepLocalVersion,
   } = useEditorDraftPersistence({
+    active,
     workspace: resourceScope,
     fileName,
     content,
@@ -435,7 +439,7 @@ export function WritingDocumentEditor({
   }, [searchOpen, searchQuery, searchIndex, updateSearch])
 
   useEffect(() => {
-    if (editorMode !== 'document') return
+    if (!active || editorMode !== 'document') return
     if (!editor || !searchIntent || !searchIntent.query.trim()) return
     if (lastSearchIntentNonceRef.current === searchIntent.nonce) return
 
@@ -451,7 +455,7 @@ export function WritingDocumentEditor({
       lastSearchIntentNonceRef.current = searchIntent.nonce
     })
     return () => cancelAnimationFrame(frame)
-  }, [editor, editorMode, fileName, searchIntent, updateSearch, useRegex])
+  }, [active, editor, editorMode, fileName, searchIntent, updateSearch, useRegex])
 
   useEffect(() => {
     if (editorMode !== 'source' || !searchIntent) return
@@ -499,8 +503,9 @@ export function WritingDocumentEditor({
 
   // Ctrl+F / Cmd+F 打开文章内搜索，保存快捷键由工作台统一分发。
   useEffect(() => {
-    if (editorMode !== 'document') return
+    if (!active || editorMode !== 'document') return
     const handler = (e: KeyboardEvent) => {
+      if (editorContainerRef.current?.closest('[hidden], [inert]')) return
       // 当焦点在 chat 输入框等 textarea/input 时，不拦截快捷键
       const inCurrentEditor = Boolean(
         editor && !editor.isDestroyed && e.target instanceof globalThis.Node && editor.view.dom.contains(e.target),
@@ -514,7 +519,7 @@ export function WritingDocumentEditor({
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [editor, editorMode])
+  }, [active, editor, editorMode])
 
   /** 引用当前选区到 Chat */
   const quoteCurrentSelection = useCallback(() => {
@@ -537,8 +542,9 @@ export function WritingDocumentEditor({
 
   // Cmd+Shift+L：正文支持评论时创建评论，其他文件保留原有的选区引用能力。
   useEffect(() => {
-    if (editorMode !== 'document') return
+    if (!active || editorMode !== 'document') return
     const handler = (e: KeyboardEvent) => {
+      if (editorContainerRef.current?.closest('[hidden], [inert]')) return
       const inCurrentEditor = Boolean(
         editor && !editor.isDestroyed && e.target instanceof globalThis.Node && editor.view.dom.contains(e.target),
       )
@@ -552,7 +558,7 @@ export function WritingDocumentEditor({
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [commentCurrentSelection, documentCommentsAvailable, editor, editorMode, quoteCurrentSelection])
+  }, [active, commentCurrentSelection, documentCommentsAvailable, editor, editorMode, quoteCurrentSelection])
 
   /** 跳转到下一处搜索结果。 */
   const goToSearchMatch = useCallback((direction: 1 | -1) => {

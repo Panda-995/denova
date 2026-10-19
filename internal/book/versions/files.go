@@ -1,6 +1,7 @@
 package versions
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -43,34 +44,7 @@ func collectVersionFiles(root, base string, store gitstorer.EncodedObjectStorer)
 	files := []versionFileData{}
 	byPath := map[string]versionFileData{}
 	var totalBytes int64
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return fmt.Errorf("walk version path %q: %w", path, walkErr)
-		}
-		if path == root {
-			return nil
-		}
-		rel, err := filepath.Rel(base, path)
-		if err != nil {
-			return nil
-		}
-		relSlash := filepath.ToSlash(rel)
-		if isVersionExcludedRelPath(relSlash) {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return fmt.Errorf("inspect version file %q: %w", path, err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return nil
-		}
+	err := walkVersionFiles(context.Background(), root, base, func(path, rel string, info os.FileInfo) error {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("read version file %q: %w", path, err)
@@ -109,6 +83,44 @@ func collectVersionFiles(root, base string, store gitstorer.EncodedObjectStorer)
 	}
 	sort.SliceStable(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return workspaceSnapshot{files: files, byPath: byPath, totalBytes: totalBytes}, nil
+}
+
+// walkVersionFiles keeps status, snapshots and restoration on one visibility
+// rule. It does not read content or follow symbolic links.
+func walkVersionFiles(ctx context.Context, root, base string, visit func(path, rel string, info os.FileInfo) error) error {
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if walkErr != nil {
+			return fmt.Errorf("walk version path %q: %w", path, walkErr)
+		}
+		if path == root {
+			return nil
+		}
+		rel, err := filepath.Rel(base, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if isVersionExcludedRelPath(rel) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return fmt.Errorf("inspect version file %q: %w", path, err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		return visit(path, rel, info)
+	})
 }
 
 func storeGitBlob(store gitstorer.EncodedObjectStorer, data []byte) (plumbing.Hash, error) {

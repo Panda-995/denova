@@ -21,14 +21,15 @@ func NewArkAdapter(httpClient *http.Client) *ArkAdapter {
 }
 
 type arkImageRequest struct {
-	Model                     string `json:"model"`
-	Prompt                    string `json:"prompt"`
-	Size                      string `json:"size,omitempty"`
-	OutputFormat              string `json:"output_format,omitempty"`
-	ResponseFormat            string `json:"response_format"`
-	SequentialImageGeneration string `json:"sequential_image_generation"`
-	Stream                    bool   `json:"stream"`
-	Watermark                 bool   `json:"watermark"`
+	Images                    []string `json:"image,omitempty"`
+	Model                     string   `json:"model"`
+	Prompt                    string   `json:"prompt"`
+	Size                      string   `json:"size,omitempty"`
+	OutputFormat              string   `json:"output_format,omitempty"`
+	ResponseFormat            string   `json:"response_format"`
+	SequentialImageGeneration string   `json:"sequential_image_generation"`
+	Stream                    bool     `json:"stream"`
+	Watermark                 bool     `json:"watermark"`
 }
 
 func (adapter *ArkAdapter) Generate(ctx context.Context, profile config.ResolvedImageAPIProfile, request GenerateRequest) (Result, error) {
@@ -52,6 +53,9 @@ func (adapter *ArkAdapter) Generate(ctx context.Context, profile config.Resolved
 			SequentialImageGeneration: "disabled",
 			Stream:                    false,
 			Watermark:                 false,
+		}
+		for _, input := range request.Images {
+			payload.Images = append(payload.Images, imageDataURL(input))
 		}
 		var response imagesAPIResponse
 		if err := doJSON(ctx, adapter.httpClient, http.MethodPost, endpoint, bearerHeaders(profile.APIKey, profile.Headers), payload, &response); err != nil {

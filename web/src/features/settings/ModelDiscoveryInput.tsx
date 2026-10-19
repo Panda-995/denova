@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import { discoverModels } from './api'
-import { MODEL_PROTOCOL_ANTHROPIC_MESSAGES, MODEL_PROTOCOL_CHAT_COMPLETIONS, MODEL_PROTOCOL_RESPONSES } from './model-profiles'
+import { MODEL_PROTOCOL_ANTHROPIC_MESSAGES, MODEL_PROTOCOL_CHAT_COMPLETIONS, MODEL_PROTOCOL_GOOGLE_GENERATIVE_AI, MODEL_PROTOCOL_RESPONSES } from './model-profiles'
 import type { ModelEndpointSettings, ModelInfo, ModelProfileSettings } from './types'
 
 type DiscoveryState =
@@ -32,6 +32,7 @@ export function ModelDiscoveryInput({ endpoint, profile, defaultProtocol, value,
   const supported = protocol === MODEL_PROTOCOL_CHAT_COMPLETIONS
     || protocol === MODEL_PROTOCOL_RESPONSES
     || protocol === MODEL_PROTOCOL_ANTHROPIC_MESSAGES
+    || protocol === MODEL_PROTOCOL_GOOGLE_GENERATIVE_AI
   const routeFingerprint = useMemo(() => JSON.stringify({
     id: endpoint.id,
     provider: endpoint.provider,

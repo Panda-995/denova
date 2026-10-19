@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"denova/internal/agents/run"
+	"denova/internal/observability"
 )
 
 func (t *Task) Emit(ev agentrun.Event) {
+	ev = ev.WithErrorDiagnostics(observability.RequestID(t.ctx), t.id)
 	t.mu.Lock()
 	if t.finished {
 		t.mu.Unlock()
@@ -27,6 +29,8 @@ func (t *Task) Emit(ev agentrun.Event) {
 			t.status = Failed
 		case "aborted":
 			t.status = Aborted
+		case "suspended":
+			t.status = Suspended
 		}
 		if t.status != Running {
 			t.terminalReason, t.terminalReasonTruncated = taskTerminalReason(ev)

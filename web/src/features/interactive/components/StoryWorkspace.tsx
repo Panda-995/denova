@@ -1,23 +1,33 @@
+import { useGameStories } from '@/features/platform/game-story-context'
+import { BUILTIN_GAME_ID } from '@/features/platform/api'
 import { useState, type ReactNode, type KeyboardEventHandler, type PointerEventHandler } from 'react'
 import { createPortal } from 'react-dom'
-import { GripHorizontal, GripVertical } from 'lucide-react'
+import { GripHorizontal, GripVertical, PanelRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Panel } from 'react-resizable-panels'
 import { useIsMobile } from '@/hooks/useIsMobile'
+import { Button } from '@/components/ui/button'
 import { MobilePaneHost } from '@/components/layout/mobile-pane-host'
 import { CollapsiblePanelSeparator, CollapsibleResizablePanel, PanelMotionGroup } from '@/components/layout/panel-motion'
 import { usePersistedPanelLayout } from '@/components/layout/use-persisted-panel-layout'
 import { createStablePortalHost, StablePortalSlot } from '@/components/layout/stable-portal-slot'
 
 /** Retains the story and its supporting console while moving between a phone drawer and desktop split. */
-export function StoryWorkspace({ story, console: consoleContent, rightPanelVisible, mobileConsoleOpen, onMobileConsoleOpenChange }: {
+export function StoryWorkspace({ story, console: consoleContent, rightPanelVisible, onToggleRightPanel, mobileConsoleOpen, onMobileConsoleOpenChange }: {
   story: ReactNode
   console: ReactNode
   rightPanelVisible: boolean
+  onToggleRightPanel?: () => void
   mobileConsoleOpen: boolean
   onMobileConsoleOpenChange: (open: boolean) => void
 }) {
   const { t } = useTranslation()
+  const gameStories = useGameStories()
+  const selectedStory = gameStories?.picker.stories.find(story => story.id === gameStories.picker.currentStoryId)
+  const initialSetup = selectedStory?.title_source === 'pending' && selectedStory.turn_count === 0
+  const externalSetup = gameStories && (gameStories.creating || !gameStories.picker.currentStoryId || initialSetup) && gameStories.selectedGameId !== BUILTIN_GAME_ID
+  rightPanelVisible = rightPanelVisible && !externalSetup
+  mobileConsoleOpen = mobileConsoleOpen && !externalSetup
   const isMobile = useIsMobile()
   const [storyHost] = useState(() => createStablePortalHost('flex h-full min-h-0 flex-col'))
   const [consoleHost] = useState(() => createStablePortalHost('flex h-full min-h-0 flex-col'))
@@ -25,7 +35,19 @@ export function StoryWorkspace({ story, console: consoleContent, rightPanelVisib
   const consoleSlot = <StablePortalSlot host={consoleHost} fallback={consoleContent} className="h-full min-h-0 w-full min-w-0 flex-1" />
   const storyPanelLayout = usePersistedPanelLayout({ storageKey: 'nova-interactive-horizontal', panelIds: ['story-stage', 'snapshot'] })
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col">
+    <div className="relative flex h-full min-h-0 flex-1 flex-col">
+      {!isMobile && !externalSetup && onToggleRightPanel && (
+        <Button
+          type="button" variant="ghost" size="icon-sm"
+          className="nova-story-console-toggle absolute right-2 top-2 z-40"
+          onClick={onToggleRightPanel}
+          aria-label={t(rightPanelVisible ? 'storyStage.hideDirectorPanel' : 'storyStage.showDirectorPanel')}
+          title={t(rightPanelVisible ? 'storyStage.hideDirectorPanel' : 'storyStage.showDirectorPanel')}
+          aria-expanded={rightPanelVisible}
+        >
+          <PanelRight />
+        </Button>
+      )}
       {isMobile ? (
         <MobilePaneHost
           panes={[{ id: 'director-panel', title: t('directorPanel.title'), side: 'right', swipeToOpen: true, content: consoleSlot }]}

@@ -10,7 +10,7 @@ import (
 	agentlifecycle "denova/internal/agents/lifecycle"
 	agentrun "denova/internal/agents/run"
 
-	agent "github.com/alfredxw/denova/agent"
+	"github.com/alfredxw/denova/agent"
 	agentsession "github.com/alfredxw/denova/agent/session"
 )
 
@@ -77,7 +77,7 @@ func (s *Runtime) Inspect(ctx context.Context, cycle Cycle) (agent.Inspection, e
 
 func inspectionRegistrationFromContext(
 	ctx context.Context,
-	key agent.SessionKey,
+	key agentsession.Key,
 	data agentlifecycle.TurnHostData,
 ) (*publicCycleRegistration, error) {
 	value, ok := ctx.Value(publicInspectionRegistrationContextKey{}).(publicInspectionRegistration)

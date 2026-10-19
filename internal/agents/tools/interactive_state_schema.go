@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/internal/interactive"
+
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 const initializeStoryStateSchemaToolName = "initialize_story_state_schema"
@@ -114,7 +114,7 @@ func normalizeOpeningStateSchemaTemplateOps(ops []interactive.ActorStateTemplate
 	return normalized
 }
 
-func newInteractiveOpeningStateSchemaTools(ctx InteractiveContext) ([]agent.ToolDefinition, error) {
+func newInteractiveOpeningStateSchemaTools(ctx InteractiveContext) ([]agenttool.ToolDefinition, error) {
 	if ctx.SubmitStateSchemaBatch == nil {
 		return nil, nil
 	}
@@ -128,7 +128,7 @@ func newInteractiveOpeningStateSchemaTools(ctx InteractiveContext) ([]agent.Tool
 		"A finalized receipt includes initialization_guide. auto_initialized_fields are already covered by template defaults or initial Actor values. required_state_changes lists exact actor_id, template_id, field_id, and type values that the first submit_interactive_turn must fill together. Do not use empty, unset, unknown, or pending placeholders.",
 		"The draft is never written alone. Structure, prose, every initial field, and choices persist atomically only when all pass. Create Actors and set all initial values later through submit_interactive_turn.state_changes.",
 	}, "\n")
-	submitTool, err := agent.InferTool(
+	submitTool, err := agenttool.InferTool(
 		initializeStoryStateSchemaToolName,
 		description,
 		func(callCtx context.Context, input openingStateSchemaBatchToolInput) (string, error) {
@@ -150,5 +150,5 @@ func newInteractiveOpeningStateSchemaTools(ctx InteractiveContext) ([]agent.Tool
 	if err != nil {
 		return nil, err
 	}
-	return []agent.ToolDefinition{definedSubmitTool}, nil
+	return []agenttool.ToolDefinition{definedSubmitTool}, nil
 }

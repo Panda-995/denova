@@ -5,11 +5,12 @@ import (
 	"errors"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-	publictools "github.com/alfredxw/denova/agent/tools"
-
 	"denova/config"
 	novaskills "denova/internal/agents/skills"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
+	publictools "github.com/alfredxw/denova/agent/tool/builtin"
 )
 
 const GeneralSubAgentName = publictools.DefaultTaskAgentName
@@ -23,11 +24,11 @@ const skillToolDescription = "Load the complete instructions for one Skill from 
 // newSkillTool exposes progressive Skill disclosure. The available catalog is
 // injected into the system instruction so this provider-visible schema remains
 // stable when Skills are added, removed, or edited.
-func newSkillTool(_ context.Context, backend *novaskills.Backend, maxBytes int) (agent.ToolDefinition, error) {
+func newSkillTool(_ context.Context, backend *novaskills.Backend, maxBytes int) (agenttool.ToolDefinition, error) {
 	if backend == nil {
-		return agent.ToolDefinition{}, nil
+		return agenttool.ToolDefinition{}, nil
 	}
-	tool, err := agent.InferTool("skill", skillToolDescription, func(callCtx context.Context, input skillToolInput) (string, error) {
+	tool, err := agenttool.InferTool("skill", skillToolDescription, func(callCtx context.Context, input skillToolInput) (string, error) {
 		name := strings.TrimSpace(input.Name)
 		if name == "" {
 			return "", errors.New("skill name is required")
@@ -39,12 +40,12 @@ func newSkillTool(_ context.Context, backend *novaskills.Backend, maxBytes int) 
 		return novaskills.FormatForModel(skill, maxBytes), nil
 	})
 	if err != nil {
-		return agent.ToolDefinition{}, err
+		return agenttool.ToolDefinition{}, err
 	}
-	return defineTool(tool, boundedReadDescriptor(agent.ToolSourceOther, config.AgentToolSkills, agent.ToolResultRecoveryRerun))
+	return defineTool(tool, boundedReadDescriptor(agenttool.ToolSourceOther, config.AgentToolSkills, agentschema.ToolResultRecoveryRerun))
 }
 
 // NewSkill builds the progressive-disclosure Skill tool.
-func NewSkill(ctx context.Context, backend *novaskills.Backend, maxBytes int) (agent.ToolDefinition, error) {
+func NewSkill(ctx context.Context, backend *novaskills.Backend, maxBytes int) (agenttool.ToolDefinition, error) {
 	return newSkillTool(ctx, backend, maxBytes)
 }

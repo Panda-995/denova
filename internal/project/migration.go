@@ -11,7 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"denova/internal/assetstore"
+	"denova/internal/book"
 	"denova/internal/book/versions"
+	"denova/internal/portablepath"
 	workspacelayout "denova/internal/workspace"
 )
 
@@ -40,16 +43,31 @@ func (registry *Registry) EnsureStore(record Record) (Layout, error) {
 	if err != nil {
 		return Layout{}, err
 	}
+	for _, relative := range []string{"migration.json", "meta.json"} {
+		if err := portablepath.CheckPath(layout.StoreRoot, relative); err != nil {
+			return Layout{}, fmt.Errorf("inspect Project Store metadata: %w", err)
+		}
+	}
+	receiptPath := filepath.Join(layout.StoreRoot, "migration.json")
+	if prepared, ok := registry.preparedStores[record.ID]; ok && prepared.layout == layout {
+		// Completed directory migration is initialization work. Book metadata
+		// and asset migration stay live for later imports and released restores.
+		if raw, readErr := os.ReadFile(receiptPath); readErr == nil && string(raw) == prepared.receipt {
+			return layout, registry.prepareBookStore(layout)
+		}
+	}
+	if err := registry.migrateProjectIDStoreDirectories([]Record{record}); err != nil {
+		return Layout{}, err
+	}
 	if err := os.MkdirAll(layout.StoreRoot, 0o700); err != nil {
 		return Layout{}, fmt.Errorf("create Project Store: %w", err)
 	}
-	receiptPath := filepath.Join(layout.StoreRoot, "migration.json")
 	complete, err := ensureCurrentStoreMigrationReceipt(receiptPath, record.ID)
 	if err != nil {
 		return Layout{}, err
 	}
 	if complete {
-		return layout, nil
+		return layout, registry.prepareStore(layout)
 	}
 	legacy := []struct {
 		name        string
@@ -63,6 +81,11 @@ func (registry *Registry) EnsureStore(record Record) (Layout, error) {
 		{name: "runs", source: workspacelayout.Path(layout.ContentRoot, "runs"), destination: layout.RunsDir()},
 		{name: "artifacts", source: workspacelayout.Path(layout.ContentRoot, "artifacts"), destination: layout.ArtifactsDir()},
 		{name: "automations", source: workspacelayout.Path(layout.ContentRoot, "automations"), destination: layout.AutomationsDir()},
+	}
+	if workspacelayout.IsUserDataRoot(workspacelayout.Dir(layout.ContentRoot)) {
+		// A code project may contain the application's entire data root. It
+		// does not own those global settings, automations or other Projects.
+		legacy = nil
 	}
 	copied := make([]string, 0, len(legacy))
 	if layout.Type == TypeBook {
@@ -103,7 +126,34 @@ func (registry *Registry) EnsureStore(record Record) (Layout, error) {
 	if err := writeFileAtomic(receiptPath, append(raw, '\n'), 0o600); err != nil {
 		return Layout{}, fmt.Errorf("write Project Store migration receipt: %w", err)
 	}
-	return layout, nil
+	return layout, registry.prepareStore(layout)
+}
+
+// Cache only complete preparations. Failed migrations remain retryable and
+// nothing besides the canonical receipt is used to recover after a restart.
+func (registry *Registry) prepareStore(layout Layout) error {
+	if err := registry.prepareBookStore(layout); err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(filepath.Join(layout.StoreRoot, "migration.json"))
+	if err != nil {
+		return err
+	}
+	if registry.preparedStores == nil {
+		registry.preparedStores = make(map[string]preparedProjectStore)
+	}
+	registry.preparedStores[layout.ProjectID] = preparedProjectStore{layout: layout, receipt: string(raw)}
+	return nil
+}
+
+func (registry *Registry) prepareBookStore(layout Layout) error {
+	if layout.Type != TypeBook {
+		return nil
+	}
+	if err := book.NewMetaStore(registry.denovaDir).MigrateLegacy(layout.ContentRoot, layout.StoreRoot); err != nil {
+		return fmt.Errorf("migrate Book metadata: %w", err)
+	}
+	return assetstore.Migrate(layout.ContentRoot, layout.StoreRoot)
 }
 
 // ensureCurrentStoreMigrationReceipt accepts the current receipt, upgrades the
@@ -146,16 +196,6 @@ func ensureCurrentStoreMigrationReceipt(receiptPath, projectID string) (bool, er
 			storeMigrationVersion,
 		)
 	}
-}
-
-func (registry *Registry) migrateReleasedStoreReceipts(projects []Record) error {
-	for _, record := range projects {
-		receiptPath := filepath.Join(registry.denovaDir, storeDirectoryName, record.StoreDirName, "migration.json")
-		if _, err := ensureCurrentStoreMigrationReceipt(receiptPath, record.ID); err != nil {
-			return fmt.Errorf("migrate Project %s Store receipt: %w", record.ID, err)
-		}
-	}
-	return nil
 }
 
 func copyStateEntry(source, destination string) error {

@@ -9,7 +9,8 @@ import (
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
 )
 
 func (conversation *imageAgentConversation) NewAgentConversationCommitter(
@@ -23,7 +24,7 @@ func (conversation *imageAgentConversation) NewAgentConversationCommitter(
 		ProjectOutput: func(
 			_ context.Context,
 			_ agentchat.AgentContextPreparation,
-			request agent.OutputCommitRequest,
+			request agentcanonical.OutputCommitRequest,
 			metadata session.MessageMetadata,
 		) (agentlifecycle.SessionOutputCommit, error) {
 			conversation.assistant = request.Message.Content
@@ -69,11 +70,11 @@ func (committer *imageAgentConversationCommitter) ApplyPreparedContext(
 
 func (committer *imageAgentConversationCommitter) CommitContext(
 	ctx context.Context,
-	request agent.ContextCommitRequest,
-) (agent.CommitReceipt, error) {
+	request agentcanonical.ContextCommitRequest,
+) (agentcanonical.CommitReceipt, error) {
 	delegate, ok := committer.ConversationCommitter.(agentlifecycle.ConversationContextCommitter)
 	if !ok {
-		return agent.CommitReceipt{}, agent.ErrCapabilityUnsupported
+		return agentcanonical.CommitReceipt{}, agentschema.ErrCapabilityUnsupported
 	}
 	return delegate.CommitContext(ctx, request)
 }

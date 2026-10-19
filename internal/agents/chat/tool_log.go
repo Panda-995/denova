@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func logToolCall(name, id string, argsBytes int, source string) {
@@ -44,7 +44,7 @@ func looksLikeToolFailure(content string) bool {
 }
 
 // mergeToolCalls 合并流式 frame 中分散的 tool call 信息。
-func mergeToolCalls(existing []agent.ToolCall, incoming []agent.ToolCall) []agent.ToolCall {
+func mergeToolCalls(existing []agentschema.ToolCall, incoming []agentschema.ToolCall) []agentschema.ToolCall {
 	for _, tc := range incoming {
 		idx := tc.Index
 		if idx == nil {
@@ -56,7 +56,7 @@ func mergeToolCalls(existing []agent.ToolCall, incoming []agent.ToolCall) []agen
 
 		i := *idx
 		for len(existing) <= i {
-			existing = append(existing, agent.ToolCall{})
+			existing = append(existing, agentschema.ToolCall{})
 		}
 		if tc.Function.Name != "" {
 			existing[i].Function.Name = tc.Function.Name

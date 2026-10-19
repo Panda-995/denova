@@ -307,21 +307,6 @@
     border-radius: 10px;
   }
 
-  [data-nova-mobile-shell="true"] .nova-agent-composer,
-  [data-nova-mobile-shell="true"] .nova-agent-composer:focus-within {
-    border-radius: 24px;
-    border-color: var(--nova-border-soft);
-    background: color-mix(in srgb, var(--nova-surface) 72%, transparent);
-    -webkit-backdrop-filter: blur(20px);
-    backdrop-filter: blur(20px);
-    padding: 8px;
-    box-shadow: 0 4px 18px color-mix(in srgb, var(--nova-bg-deep) 12%, transparent);
-  }
-
-  [data-nova-mobile-shell="true"] .nova-agent-composer:focus-within {
-    border-color: var(--nova-field-focus-border);
-  }
-
   .nova-agent-composer :is(.nova-agent-composer-icon, .nova-agent-composer-pill) {
     border-color: transparent;
     background: transparent;
@@ -382,7 +367,6 @@
 
   [data-testid="story-stage-hot-choices-list"] > button {
     padding: 12px;
-    border-radius: 12px;
     border-color: transparent;
     font-size: var(--nova-mobile-label-size);
     line-height: 1.5;
@@ -403,7 +387,7 @@
     }
   }
 
-  [data-nova-mobile-shell="true"] :is(.nova-chat-input-area-floating, .nova-story-input-float) {
+  [data-nova-mobile-shell="true"] .nova-chat-input-area-floating {
     /* Only the floating composer obscures content; reading continues beneath its margins. */
     background: transparent;
   }

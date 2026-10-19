@@ -6,35 +6,35 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestAssemblerKeepsTurnContextAfterToolResults(t *testing.T) {
-	request := agent.UserMessage("continue")
-	state := agent.UserMessage("updated workspace state")
+	request := agentschema.UserMessage("continue")
+	state := agentschema.UserMessage("updated workspace state")
 	state.Extra = map[string]any{"agent.context_state": "v1"}
-	completion := agent.UserMessage("research complete")
-	completion.TaskCompletion = &agent.TaskCompletionMessageMeta{CompletionID: "completion-1", Author: "researcher", Recipient: "writer"}
-	assistant := agent.AssistantMessage("checking", []agent.ToolCall{{
-		ID: "call-1", Type: "function", Function: agent.FunctionCall{Name: "inspect", Arguments: `{}`},
+	completion := agentschema.UserMessage("research complete")
+	completion.TaskCompletion = &agentschema.TaskCompletionMessageMeta{CompletionID: "completion-1", Author: "researcher", Recipient: "writer"}
+	assistant := agentschema.AssistantMessage("checking", []agentschema.ToolCall{{
+		ID: "call-1", Type: "function", Function: agentschema.FunctionCall{Name: "inspect", Arguments: `{}`},
 	}})
-	tool := agent.ToolMessage(agent.TextToolResult("evidence"), "call-1", agent.WithToolName("inspect"))
+	tool := agentschema.ToolMessage(agentschema.TextToolResult("evidence"), "call-1", agentschema.WithToolName("inspect"))
 	fragments := []Fragment{
 		{Source: "workspace.instructions", Purpose: "provide stable instructions", Content: "instructions", Placement: PlacementLeadingMessage, Included: true},
 		{Source: "workspace.selection", Purpose: "preserve the current request", Content: "selected chapter", Placement: PlacementFinalUserPrefix, Included: true},
 	}
 	assembler := NewAssembler(Budget{})
-	initial, err := assembler.Assemble(t.Context(), AssembleRequest{Messages: []*agent.Message{request}, Fragments: fragments})
+	initial, err := assembler.Assemble(t.Context(), AssembleRequest{Messages: []*agentschema.Message{request}, Fragments: fragments})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, trailing := range [][]*agent.Message{{assistant, tool}, {state, assistant, tool}, {assistant, tool, state, completion}} {
-		messages := append([]*agent.Message{request}, trailing...)
+	for _, trailing := range [][]*agentschema.Message{{assistant, tool}, {state, assistant, tool}, {assistant, tool, state, completion}} {
+		messages := append([]*agentschema.Message{request}, trailing...)
 		resumed, err := assembler.Assemble(t.Context(), AssembleRequest{Messages: messages, Fragments: fragments})
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := append(append([]*agent.Message(nil), initial.Messages...), trailing...)
+		want := append(append([]*agentschema.Message(nil), initial.Messages...), trailing...)
 		if !reflect.DeepEqual(resumed.Messages, want) || !reflect.DeepEqual(resumed.Fragments, initial.Fragments) || resumed.InjectedBytes != initial.InjectedBytes {
 			t.Fatalf("turn context changed after tool results: messages=%#v fragments=%#v bytes=%d", resumed.Messages, resumed.Fragments, resumed.InjectedBytes)
 		}
@@ -42,11 +42,11 @@ func TestAssemblerKeepsTurnContextAfterToolResults(t *testing.T) {
 			t.Fatal("assembly mutated canonical messages")
 		}
 	}
-	withoutInput, err := assembler.Assemble(t.Context(), AssembleRequest{Messages: []*agent.Message{state, assistant, tool, completion}, Fragments: fragments})
+	withoutInput, err := assembler.Assemble(t.Context(), AssembleRequest{Messages: []*agentschema.Message{state, assistant, tool, completion}, Fragments: fragments})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if withoutInput.Fragments[1].Included || !reflect.DeepEqual(withoutInput.Messages[1:], []*agent.Message{state, assistant, tool, completion}) {
+	if withoutInput.Fragments[1].Included || !reflect.DeepEqual(withoutInput.Messages[1:], []*agentschema.Message{state, assistant, tool, completion}) {
 		t.Fatal("turn context was attached to a state update without a user request")
 	}
 }
@@ -58,7 +58,7 @@ func TestAssemblerAccountsForDefaultRendererAndTruncatesContent(t *testing.T) {
 		MaxFragmentBytes: 3,
 		MaxTotalBytes:    len(want) - len(request),
 	}).Assemble(stdcontext.Background(), AssembleRequest{
-		Messages: []*agent.Message{agent.UserMessage(request)},
+		Messages: []*agentschema.Message{agentschema.UserMessage(request)},
 		Fragments: []Fragment{{
 			Source: "workspace.state", Title: "State", Purpose: "resume work",
 			Content: "abcd", Placement: PlacementFinalUserPrefix, Included: true,
@@ -80,7 +80,7 @@ func TestAssemblerRejectsTotalBudgetOverflowInsteadOfSilentlyTruncating(t *testi
 		MaxFragmentBytes: 64,
 		MaxTotalBytes:    16,
 	}).Assemble(stdcontext.Background(), AssembleRequest{
-		Messages: []*agent.Message{agent.UserMessage("continue")},
+		Messages: []*agentschema.Message{agentschema.UserMessage("continue")},
 		Fragments: []Fragment{{
 			Source: "workspace.state", Title: "State", Purpose: "resume work",
 			Content: "complete bounded state", Placement: PlacementFinalUserPrefix, Included: true,
@@ -92,10 +92,10 @@ func TestAssemblerRejectsTotalBudgetOverflowInsteadOfSilentlyTruncating(t *testi
 }
 
 func TestAssemblerKeepsAuditOnlyContentOutOfModelMessages(t *testing.T) {
-	input := agent.UserMessage("write")
+	input := agentschema.UserMessage("write")
 	input.Extra = map[string]any{"nested": []any{"original"}}
 	result, err := NewAssembler(Budget{}).Assemble(stdcontext.Background(), AssembleRequest{
-		Messages: []*agent.Message{input},
+		Messages: []*agentschema.Message{input},
 		Fragments: []Fragment{{
 			Source: "display.tool", Purpose: "bounded audit", Content: "raw output",
 			Placement: PlacementAuditOnly, Included: true,

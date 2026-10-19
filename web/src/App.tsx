@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { useTheme } from 'next-themes'
-import { checkForUpdate, fetchProjectSettings, fetchSettings, refreshProjectSettings, refreshSettings } from '@/features/settings/api'
+import { getUpdateStatus, fetchProjectSettings, fetchSettings, refreshProjectSettings, refreshSettings } from '@/features/settings/api'
 import { subscribeSettingsTarget } from '@/features/settings/query'
 import { applyFontSettings, fontSettingsFromEffective } from '@/features/settings/font-variables'
-import { markAutoUpdateChecked, shouldRunAutoUpdateCheck, UPDATE_CHECK_RESULT_EVENT } from '@/features/settings/update-check-cache'
+import { UPDATE_CHECK_RESULT_EVENT } from '@/features/settings/update-events'
 import type { UpdateCheckResult } from '@/features/settings/types'
+import { buildFrontendReloadURL } from '@/features/settings/update-reload'
+import { APP_VERSION } from '@/app-version'
+import { AnalyticsNotice } from '@/features/analytics/AnalyticsPreferences'
+import { useAnalyticsActivity } from '@/features/analytics/use-analytics-activity'
 import { getProjectLoreItems, importCharacterCard, previewCharacterCard, setProjectChapterConfirmed, switchWorkspace, type CharacterCardPreview, type LoreItem, type WorkspaceSearchResult } from '@/lib/api'
 import { withErrorLogID } from '@/lib/api-client'
 import { CommandPalette } from '@/components/common/command-palette'
@@ -15,7 +20,7 @@ import { useWorkspaceHotkeys } from '@/hooks/use-workspace-hotkeys'
 import { isSharedWorkspaceMode, useWorkspaceStore, workspaceModeRequiresBook, type RightPanel, type WorkspaceMode } from '@/stores/workspace-store'
 import { useInteractiveStore } from '@/features/interactive/stores/interactive-store'
 import type { ChapterSummary } from '@/lib/api'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { setConfiguredLocale } from '@/i18n'
 import { NovaMotionProvider, normalizeMotionIntensity } from '@/features/motion/motion-preferences'
 import {
@@ -39,7 +44,7 @@ import {
   type CharacterCardTargetMode,
 } from '@/components/workbench/CharacterCardImportDialog'
 import { OnboardingGuide, type OnboardingNavigationTarget } from '@/features/onboarding/OnboardingGuide'
-import { SETTINGS_SECTION_EVENT, WRITING_AGENT_INIT_EVENT } from '@/features/onboarding/events'
+import { requestSettingsSection, SETTINGS_SECTION_EVENT, WRITING_AGENT_INIT_EVENT } from '@/features/onboarding/events'
 import {
   isProjectChangeForProject,
   workspaceChangeImpact,
@@ -64,6 +69,7 @@ const CONTENT_MODE_STORAGE_KEY = 'nova:content-mode'
 const MAX_OPEN_TABS_FALLBACK = 5
 const AUTO_SAVE_ENABLED_FALLBACK = true
 const AUTO_SAVE_DELAY_FALLBACK_MS = 1500
+const EMPTY_LORE_ITEMS: LoreItem[] = []
 type SidebarView = 'outline' | 'files' | 'search'
 type CreationRoute = 'ide' | 'interactive'
 
@@ -77,12 +83,17 @@ function App() {
   const [projectExplorerRefreshSignal, setProjectExplorerRefreshSignal] = useState(0)
   const [versionRefreshSignal, setVersionRefreshSignal] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(() => readLayoutBoolean(SETTINGS_OPEN_KEY, false))
+  const [analyticsReady, setAnalyticsReady] = useState(false)
+  useEffect(() => {
+    const openSettings = () => setSettingsOpen(true)
+    window.addEventListener(SETTINGS_SECTION_EVENT, openSettings)
+    return () => window.removeEventListener(SETTINGS_SECTION_EVENT, openSettings)
+  }, [])
   const [openTabs, setOpenTabs] = useState<Tab[]>([])
   const [activeTabKey, setActiveTabKey] = useState<string | null>(null)
   const [maxOpenTabs, setMaxOpenTabs] = useState<number>(MAX_OPEN_TABS_FALLBACK)
   const [editorAutoSaveEnabled, setEditorAutoSaveEnabled] = useState(AUTO_SAVE_ENABLED_FALLBACK)
   const [editorAutoSaveDelayMs, setEditorAutoSaveDelayMs] = useState(AUTO_SAVE_DELAY_FALLBACK_MS)
-  const [updateCheckEnabled, setUpdateCheckEnabled] = useState<boolean | null>(null)
   const [developerMode, setDeveloperMode] = useState<boolean | null>(null)
   const [motionIntensity, setMotionIntensity] = useState('system')
   const [novaDir, setNovaDir] = useState('')
@@ -98,7 +109,6 @@ function App() {
   const [characterCardPreviewing, setCharacterCardPreviewing] = useState(false)
   const [characterCardImporting, setCharacterCardImporting] = useState(false)
   const [characterCardError, setCharacterCardError] = useState('')
-  const [loreItems, setLoreItems] = useState<LoreItem[]>([])
   const [writingAgentConversation, setWritingAgentConversation] = useState<AgentChatConversationState>({
     sessionId: '',
     messages: [],
@@ -107,7 +117,6 @@ function App() {
   const [lastCreationRoute, setLastCreationRoute] = useState<CreationRoute>(() => readContentMode())
   const lastCreationRouteRef = useRef<CreationRoute>(readContentMode())
   const characterCardInputRef = useRef<HTMLInputElement>(null)
-  const updateCheckInFlightRef = useRef(false)
   const tabActivationsRef = useRef<Map<string, number>>(new Map())
   const tabActivationCounterRef = useRef(0)
   const editorFlushHandlerRef = useRef<EditorFlushHandler | null>(null)
@@ -131,11 +140,20 @@ function App() {
     setLastCreationRoute(contentMode)
   }, [mode])
 
+  const retainedFilePaths = useMemo(() => openTabs.flatMap(tab => tab.kind === 'file' ? [tab.path] : []), [openTabs])
   const {
-    tree, loading, selectedFile, fileDocument, fileContent, fileRevision, workspace, projectId, workspaceLoaded, summary, books, booksLoaded, bookSortMode,
+    tree, loading, selectedFile, fileDocument, fileDocuments, workspace, projectId, workspaceLoaded, summary, books, booksLoaded, bookSortMode,
     selectFile, clearSelectedFile, saveFileDraft, createItem, deleteItem, renameItem, copyItem, moveItem,
     refresh, refreshSummary, refreshAfterAgentFileChange, refreshAll, refreshBooks,
-  } = useWorkspace()
+  } = useWorkspace({ retainedFilePaths })
+  useAnalyticsActivity(settingsOpen || !analyticsReady, Boolean(selectedFile))
+  // A late response stays with its Project instead of replacing another library.
+  const loreQuery = useQuery({
+    queryKey: ['lore-items', projectId],
+    queryFn: () => getProjectLoreItems(projectId),
+    enabled: Boolean(projectId),
+  })
+  const loreItems = loreQuery.data ?? EMPTY_LORE_ITEMS
   const settingsWorkspaceRef = useRef<string | null>(null)
 
   const notifyVersionChange = useCallback(() => {
@@ -203,6 +221,8 @@ function App() {
     commandSubmitting,
     queueActionPendingCommandID,
     activityContent,
+    recoveryFailed,
+    resumeActiveChat,
     references,
     styleScenes,
     textSelections,
@@ -214,6 +234,8 @@ function App() {
     approveProposedPlan,
     exitPlanMode,
     stop,
+    suspend,
+    resumeTask,
     loadHistory,
     loadEarlierHistory,
     hasEarlierMessages,
@@ -246,28 +268,17 @@ function App() {
     togglePlanMode()
   }, [togglePlanMode])
 
-  const refreshLoreItems = useCallback(async () => {
-    if (!projectId) {
-      setLoreItems([])
-      return
-    }
-    try {
-      setLoreItems(await getProjectLoreItems(projectId))
-    } catch (e) {
-      console.warn('[App.tsx] failed to load lore items', e)
-      setLoreItems([])
-    }
-  }, [projectId])
-
   useEffect(() => {
-    void refreshLoreItems()
     const onLoreUpdated = (event: Event) => {
       const detail = (event as CustomEvent<LoreUpdatedDetail>).detail
-      if (detail?.projectId === projectId) void refreshLoreItems()
+      if (detail?.projectId === projectId) void loreQuery.refetch()
     }
     window.addEventListener(LORE_UPDATED_EVENT, onLoreUpdated)
     return () => window.removeEventListener(LORE_UPDATED_EVENT, onLoreUpdated)
-  }, [refreshLoreItems])
+  }, [loreQuery.refetch, projectId])
+  useEffect(() => {
+    if (loreQuery.error) console.warn('[App.tsx] failed to load lore items', { projectId, error: loreQuery.error })
+  }, [loreQuery.error, projectId])
 
   const chapterStats = useMemo<Record<string, ChapterSummary>>(
     () => Object.fromEntries((summary?.chapters || []).map((chapter) => [chapter.path, chapter])),
@@ -300,7 +311,6 @@ function App() {
       if (typeof v === 'number' && v >= 1) setMaxOpenTabs(Math.floor(v))
       setEditorAutoSaveEnabled(effective?.auto_save_enabled ?? AUTO_SAVE_ENABLED_FALLBACK)
       setEditorAutoSaveDelayMs(normalizeAutoSaveDelayMs(effective?.auto_save_interval_ms))
-      setUpdateCheckEnabled(effective?.update_check_enabled !== false)
       setDeveloperMode(effective?.labs?.developer_mode === true)
       setNovaDir(data.paths?.denova_dir || data.paths?.nova_dir || '')
       setConfiguredLocale(effective?.language)
@@ -350,18 +360,30 @@ function App() {
   }, [t])
 
   useEffect(() => {
-    if (updateCheckEnabled !== true || updateCheckInFlightRef.current || !shouldRunAutoUpdateCheck()) return
-    updateCheckInFlightRef.current = true
-    checkForUpdate()
-      .then((result) => {
-        applyUpdateCheckResult(result)
-      })
-      .catch((e) => console.warn('[App.tsx] automatic update check failed', e))
-      .finally(() => {
-        markAutoUpdateChecked()
-        updateCheckInFlightRef.current = false
-      })
-  }, [applyUpdateCheckResult, updateCheckEnabled])
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout>
+    const poll = async () => {
+      try {
+        const status = await getUpdateStatus(AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]))
+        if (!controller.signal.aborted) {
+          // Another tab can schedule an idle restart. Every open workbench
+          // must load the new bundle, even if Settings was never mounted here.
+          if (status.phase === 'succeeded' && status.id && status.version
+            && status.current_version.replace(/^v/, '') === status.version.replace(/^v/, '')
+            && status.current_version.replace(/^v/, '') !== APP_VERSION.replace(/^v/, '')) {
+            window.location.replace(buildFrontendReloadURL(status.version, Date.now(), window.location.href))
+            return
+          }
+          if (status.phase === 'staged' && status.version) {
+            applyUpdateCheckResult({ current_version: status.current_version, latest_version: status.version, update_available: true, can_install: false, platform: '', release_url: '', published_at: '' }, true)
+          } else if (status.check) applyUpdateCheckResult(status.check)
+        }
+      } catch (error) { if (!controller.signal.aborted) console.warn('[App.tsx] update status unavailable', error) }
+      if (!controller.signal.aborted) timer = setTimeout(() => void poll(), 15_000)
+    }
+    void poll()
+    return () => { controller.abort(); clearTimeout(timer) }
+  }, [applyUpdateCheckResult])
 
   useEffect(() => {
     if (activeTabKey) touchTab(activeTabKey)
@@ -456,9 +478,9 @@ function App() {
     notifyProjectStructureChange()
   }, [notifyProjectStructureChange, notifyVersionChange, refreshAll, setMode])
 
-  const handleAgentChatBookCreated = useCallback(async (newPath: string) => {
+  const handleBookCreated = useCallback(async (newPath: string) => {
     await refreshAll()
-    console.info('[App.tsx] synchronized the Book created from Agent Chat', { workspace: newPath })
+    console.info('[App.tsx] synchronized the created Book', { workspace: newPath })
     notifyVersionChange()
     notifyProjectStructureChange()
   }, [notifyProjectStructureChange, notifyVersionChange, refreshAll])
@@ -801,12 +823,7 @@ function App() {
 
   const handleOnboardingNavigate = useCallback((target: OnboardingNavigationTarget, prompt?: string) => {
     if (target === 'settings-model') {
-      setSettingsOpen(true)
-      window.setTimeout(() => {
-        window.dispatchEvent(new CustomEvent(SETTINGS_SECTION_EVENT, {
-          detail: { section: 'model' },
-        }))
-      }, 0)
+      requestSettingsSection('model')
       return
     }
     if (target === 'books') {
@@ -874,6 +891,7 @@ function App() {
 
   return (
     <NovaMotionProvider intensity={motionIntensity}>
+      <AnalyticsNotice onReadyChange={setAnalyticsReady} />
       <ModeRouter
         mode={mode}
         lastCreationRoute={lastCreationRoute}
@@ -902,8 +920,7 @@ function App() {
         loading={loading}
         selectedFile={selectedFile}
         fileDocument={fileDocument}
-        fileContent={fileContent}
-        fileRevision={fileRevision}
+        fileDocuments={fileDocuments}
         openTabs={openTabs}
         activeTabKey={activeTabKey}
         sidebarView={sidebarView}
@@ -941,7 +958,7 @@ function App() {
         onQuickSwitchBook={handleQuickWorkspaceSwitch}
         onBeforeWorkspaceSwitch={flushEditorDraft}
         onBooksChange={refreshBooks}
-        onAgentChatBookCreated={handleAgentChatBookCreated}
+        onBookCreated={handleBookCreated}
         onOpenCharacterCardImport={handleOpenCharacterCardImportFromBooks}
         onSetSidebarView={setSidebarView}
         onSelectSearchResult={handleSelectSearchResult}
@@ -972,6 +989,10 @@ function App() {
         onSend={send}
         onAnalyzeContext={analyzeContext}
         onStop={stop}
+        onSuspend={suspend}
+        onResumeTask={resumeTask}
+        recoveryFailed={recoveryFailed}
+        onRetryRecovery={() => { void resumeActiveChat() }}
         onSteerQueuedCommand={steerQueuedCommand}
         onDeleteQueuedCommand={deleteQueuedCommand}
         onEditQueuedCommand={editQueuedCommand}
@@ -1030,7 +1051,7 @@ function App() {
         onImport={handleCharacterCardImport}
       />
       <OnboardingGuide
-        workspaceReady={workspaceLoaded && booksLoaded}
+        workspaceReady={workspaceLoaded && booksLoaded && analyticsReady}
         mode={mode}
         rightPanel={rightPanel}
         settingsOpen={settingsOpen}

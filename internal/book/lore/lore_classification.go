@@ -60,7 +60,7 @@ var loreTypeSignals = []loreTypeSignal{
 		Pattern:  regexp.MustCompile(`(?im)^\s*(?:#{1,4}\s*)?(?:势力|组织|门派|阵营|宗门|家族|公会|公司|政权)(?:设定|资料|信息|详情|档案)?\s*[:：]`),
 	},
 	{
-		Type:     "rule",
+		Type:     "world",
 		Prefixes: []string{"规则", "机制", "法则", "系统", "能力体系", "力量体系", "魔法体系", "修炼体系", "rule", "rules", "mechanic", "mechanics", "system"},
 		Pattern:  regexp.MustCompile(`(?im)^\s*(?:#{1,4}\s*)?(?:规则|机制|法则|系统|能力体系|力量体系|魔法体系|修炼体系)(?:设定|资料|信息|详情)?\s*[:：]`),
 	},
@@ -77,7 +77,7 @@ var loreTypeSignals = []loreTypeSignal{
 }
 
 // ClassifyItemHeuristic performs a deterministic name-first pass. It is
-// intentionally conservative: unknown entries remain other for later review.
+// intentionally conservative: unknown entries remain worldbuilding for later review.
 func ClassifyItemHeuristic(input ClassificationInput) ClassificationSuggestion {
 	name := normalizeLoreClassificationName(input.Name)
 	for _, signal := range loreTypeSignals {
@@ -99,7 +99,7 @@ func ClassifyItemHeuristic(input ClassificationInput) ClassificationSuggestion {
 			return ClassificationSuggestion{ID: input.ID, Type: signal.Type, Confidence: ClassificationConfidenceMedium, Reason: "简介或正文标题包含类型信号"}
 		}
 	}
-	return ClassificationSuggestion{ID: input.ID, Type: "other", Confidence: ClassificationConfidenceLow, Reason: "未发现稳定类型信号"}
+	return ClassificationSuggestion{ID: input.ID, Type: "world", Confidence: ClassificationConfidenceLow, Reason: "未发现稳定类型信号"}
 }
 
 func normalizeLoreClassificationName(value string) string {
@@ -133,13 +133,9 @@ func NormalizeClassificationMode(value string) string {
 	return ClassificationModeHeuristic
 }
 
-// ValidClassificationType reports whether semantic classification returned a
-// supported persisted type.
+// ValidClassificationType validates an ID's syntax. The destination Store and
+// model classification payload validate membership in the project catalog.
 func ValidClassificationType(value string) bool {
-	switch strings.TrimSpace(value) {
-	case "character", "world", "location", "faction", "rule", "item", "other":
-		return true
-	default:
-		return false
-	}
+	value = strings.TrimSpace(value)
+	return value != "" && normalizeLoreID(value) == value && len(value) <= 64
 }

@@ -10,9 +10,8 @@ import (
 )
 
 const (
-	// Version 14 rebuilds locators after the canonical context-batch protocol
-	// replaced its unreleased kind/hash fields with one sequence.
-	storyProjectionVersion      = 14
+	// Version 19 adds canonical branch message locators without history bodies.
+	storyProjectionVersion      = 19
 	storyRecentTransactionLimit = 200
 	storyRecentCommitLimit      = 200
 	storyTurnAnchorEvery        = 256
@@ -37,6 +36,8 @@ type storyCommitLocator struct {
 type storyBranchProjection struct {
 	Head                  string                     `json:"head"`
 	ContextRevision       uint64                     `json:"context_revision"`
+	HistoryRevision       string                     `json:"history_revision,omitempty"`
+	HistoryEpoch          string                     `json:"history_epoch,omitempty"`
 	LatestTurnID          string                     `json:"latest_turn_id,omitempty"`
 	LatestTurnParentID    string                     `json:"latest_turn_parent_id,omitempty"`
 	Depth                 int                        `json:"depth"`
@@ -53,17 +54,20 @@ type storyBranchProjection struct {
 // current branch state and sparse locators, never historical narrative,
 // thinking, rich tool results, maintenance state, or prior state snapshots.
 type storyJournalProjection struct {
-	Version       int                               `json:"version"`
-	StoryID       string                            `json:"story_id"`
-	Generation    string                            `json:"generation"`
-	Meta          StoryMeta                         `json:"meta"`
-	EventCount    int                               `json:"event_count"`
-	TurnCount     int                               `json:"turn_count"`
-	RecentCursors []conversationjournal.Cursor      `json:"recent_cursors,omitempty"`
-	TurnAnchors   []storyTurnAnchor                 `json:"turn_anchors,omitempty"`
-	RecentCommits []storyCommitLocator              `json:"recent_commits,omitempty"`
-	Branches      map[string]*storyBranchProjection `json:"branches"`
-	AgentSessions sessionjournal.Projection         `json:"agent_sessions,omitempty"`
+	Version          int                                   `json:"version"`
+	StoryID          string                                `json:"story_id"`
+	Generation       string                                `json:"generation"`
+	Meta             StoryMeta                             `json:"meta"`
+	EventCount       int                                   `json:"event_count"`
+	TurnCount        int                                   `json:"turn_count"`
+	RecentCursors    []conversationjournal.Cursor          `json:"recent_cursors,omitempty"`
+	TurnAnchors      []storyTurnAnchor                     `json:"turn_anchors,omitempty"`
+	RecentCommits    []storyCommitLocator                  `json:"recent_commits,omitempty"`
+	Branches         map[string]*storyBranchProjection     `json:"branches"`
+	AgentSessions    sessionjournal.Projection             `json:"agent_sessions,omitempty"`
+	TurnDrafts       map[string]storyDraftLocator          `json:"turn_drafts,omitempty"`
+	ExtensionRecords map[string]conversationjournal.Cursor `json:"extension_records,omitempty"`
+	ModelNodes       map[string]storyModelNode             `json:"model_nodes,omitempty"`
 
 	expectedID         string
 	expectedGeneration string
@@ -81,7 +85,7 @@ func (projection *storyJournalProjection) Reset() error {
 	expectedGeneration := projection.expectedGeneration
 	*projection = storyJournalProjection{
 		Version: storyProjectionVersion, StoryID: expectedID, Generation: expectedGeneration,
-		Branches: make(map[string]*storyBranchProjection), expectedID: expectedID, expectedGeneration: expectedGeneration,
+		Branches: make(map[string]*storyBranchProjection), TurnDrafts: make(map[string]storyDraftLocator), expectedID: expectedID, expectedGeneration: expectedGeneration,
 	}
 	projection.AgentSessions.Reset()
 	return nil
@@ -103,6 +107,9 @@ func (projection *storyJournalProjection) Restore(data json.RawMessage) error {
 	if restored.Branches == nil {
 		restored.Branches = make(map[string]*storyBranchProjection)
 	}
+	if restored.TurnDrafts == nil {
+		restored.TurnDrafts = make(map[string]storyDraftLocator)
+	}
 	restored.expectedID = expectedID
 	restored.expectedGeneration = expectedGeneration
 	if err := restored.AgentSessions.Normalize(); err != nil {
@@ -121,7 +128,7 @@ func (projection *storyJournalProjection) Checkpoint() (json.RawMessage, error) 
 
 func (projection *storyJournalProjection) Apply(record conversationjournal.Record) error {
 	projection.rememberCursor(record.Location.Cursor)
-	if handled, err := projection.AgentSessions.Apply(record.Payload); handled || err != nil {
+	if handled, err := projection.AgentSessions.Apply(record); handled || err != nil {
 		return err
 	}
 	meta, events, err := decodeStoryProjectionPayload(record.Payload)
@@ -193,6 +200,9 @@ func (projection *storyJournalProjection) applyMeta(cursor conversationjournal.C
 }
 
 func (projection *storyJournalProjection) applyEvent(cursor conversationjournal.Cursor, record StoryEventRecord) error {
+	if err := projection.indexModelEvent(cursor, record); err != nil {
+		return err
+	}
 	changesModelContext, err := storyEventChangesModelContext(record.Envelope.Type)
 	if err != nil {
 		return err
@@ -201,12 +211,45 @@ func (projection *storyJournalProjection) applyEvent(cursor conversationjournal.
 	branch := projection.branch(record.Envelope.BranchID)
 	branch.TailCursor = cursor
 	parentID := parentIDFromRaw(record.Raw)
+	if changesModelContext {
+		// These three publications append to the canonical lane. A replacement
+		// Turn or a creator edit invalidates checkpoints even when only archived
+		// bodies changed. Both markers are derived from existing event IDs.
+		switch record.Envelope.Type {
+		case StoryEventTypePlayerInput, StoryEventTypeModelContextBatch:
+			branch.HistoryRevision = record.Envelope.ID
+		case StoryEventTypeTurn:
+			branch.HistoryRevision = record.Envelope.ID
+			if parentID != branch.Head {
+				branch.HistoryEpoch = record.Envelope.ID
+			}
+		case StoryEventTypeTurnBackgroundRevised, StoryEventTypeStateDelta, StoryEventTypeTurnInterrupted, StoryEventTypeTurnStateRevised, StoryEventTypeStoryConfigUpdated, StoryEventTypeBranchPlanRevised:
+			// These affect next-turn preparation, not canonical raw messages.
+		case StoryEventTypeBranch, StoryEventTypeBranchHeadMoved, StoryEventTypeTurnVersionSelected, StoryEventTypeTurnNarrativeRevised:
+			branch.HistoryEpoch, branch.HistoryRevision = record.Envelope.ID, record.Envelope.ID
+		default:
+			return fmt.Errorf("canonical history does not handle model context event %q", record.Envelope.Type)
+		}
+	}
 	switch record.Envelope.Type {
+	case StoryEventTypeExtensionRecord:
+		var event extensionRecordEvent
+		if err := mapToStruct(record.Raw, &event); err != nil {
+			return err
+		}
+		if err := validateExtensionRecord(event.ExtensionRecord); err != nil {
+			return err
+		}
+		if projection.ExtensionRecords == nil {
+			projection.ExtensionRecords = make(map[string]conversationjournal.Cursor)
+		}
+		projection.ExtensionRecords[extensionRecordKey(event.BranchID, event.ExtensionRecord)] = cursor
 	case StoryEventTypeTurn:
 		var turn TurnEvent
 		if err := mapToStruct(record.Raw, &turn); err != nil {
 			return err
 		}
+		delete(projection.TurnDrafts, turnDraftKey(turn.BranchID, DomainCommitIdentity{CommandID: turn.AgentCommandID, OperationID: turn.AgentOperationID, Cycle: turn.AgentCycle}))
 		branch.consumePlayerInputs(turn.PlayerInputID, turn.ConsumedPlayerInputIDs)
 		if branch.PendingInterruption != nil && !branch.hasPendingPlayerInput(branch.PendingInterruption.PlayerInputID) {
 			branch.PendingInterruption = nil
@@ -339,8 +382,14 @@ func (projection *storyJournalProjection) applyEvent(cursor conversationjournal.
 		branch.StateBeforeLatest = nil
 		branch.Plan = cloneBranchPlan(event.CurrentPlan)
 		branch.PlanBeforeLatest = nil
+	case StoryEventTypeTurnDraft:
+		var event TurnDraftEvent
+		if err := mapToStruct(record.Raw, &event); err != nil {
+			return err
+		}
+		projection.TurnDrafts[turnDraftKey(event.BranchID, event.Draft.Identity)] = storyDraftLocator{ID: event.ID, Cursor: cursor}
 	case StoryEventTypeHotChoices,
-		StoryEventTypeTurnNarrativeRevised, StoryEventTypeTurnDisplayAppended,
+		StoryEventTypeTurnBackgroundRevised, StoryEventTypeTurnNarrativeRevised, StoryEventTypeTurnDisplayAppended,
 		StoryEventTypeStoryConfigUpdated, StoryEventTypeBranchSwitched, StoryEventTypeBranchArchived:
 		// Side/audit records do not independently advance branch state.
 	default:
@@ -477,4 +526,12 @@ func cloneStoryState(state map[string]any) map[string]any {
 
 func storyJournalGeneration(meta StoryMeta) string {
 	return "story:" + strings.TrimSpace(meta.StoryID) + ":" + strings.TrimSpace(meta.CreatedAt)
+}
+
+func (projection *storyJournalProjection) CurrentCheckpoint() (json.RawMessage, error) {
+	return projection.AgentSessions.CurrentCheckpoint()
+}
+
+func (projection *storyJournalProjection) CurrentReadCursors() []conversationjournal.Cursor {
+	return projection.AgentSessions.CurrentReadCursors()
 }

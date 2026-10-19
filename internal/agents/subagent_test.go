@@ -10,8 +10,14 @@ import (
 	agentdelegation "denova/internal/agents/delegation"
 	agenttoolruntime "denova/internal/agents/toolruntime"
 
-	agent "github.com/alfredxw/denova/agent"
-	"github.com/alfredxw/denova/agent/providers"
+	"github.com/alfredxw/denova/agent"
+	agentcompaction "github.com/alfredxw/denova/agent/context/compaction"
+	agentmiddleware "github.com/alfredxw/denova/agent/engine/middleware"
+	agentmodel "github.com/alfredxw/denova/agent/model"
+	"github.com/alfredxw/denova/agent/model/providers"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
+	publictools "github.com/alfredxw/denova/agent/tool/builtin"
 )
 
 func TestConfigMaxIterationDefaultsToNativeUnlimited(t *testing.T) {
@@ -71,14 +77,47 @@ func TestBuildAgentExposesGeneralAndConfiguredSubAgentsThroughTask(t *testing.T)
 		}
 		t.Fatalf("delegated child names = %v", names)
 	}
+
+	owner, err := agent.New(context.Background(), children[0].Definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close(context.Background())
+	executor, err := publictools.NewLocalTasks(publictools.LocalTaskOptions{Parallelism: 1, Self: publictools.TaskRef{Agent: "parent", Session: "parent"}}, publictools.LocalTaskAgent{Name: children[0].Name, Description: children[0].Description, Identity: children[0].Identity, Opener: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := catalog.Bind(executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	definitions, err := bound.PrepareTools(context.Background(), agenttool.ToolRequest{})
+	if err != nil {
+		t.Fatalf("delegation manifest did not match executable tools: %v", err)
+	}
+	names := toolNamesForTest(t, definitions)
+	for _, name := range []string{"send", "await", "list_agents"} {
+		if !names[name] {
+			t.Fatalf("missing delegation tool %s", name)
+		}
+	}
+	for _, definition := range definitions {
+		info, err := definition.Tool.Info(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Name == "send" && (!strings.Contains(info.Desc, "interrupt pauses") || !strings.Contains(info.Desc, "Accepted receipts")) {
+			t.Fatalf("catalog erased the operation contract: %s", info.Desc)
+		}
+	}
 	var generalOrchestrator, rootOrchestrator *agenttoolruntime.OrchestratorMiddleware
 	for _, middleware := range children[0].Definition.Middlewares {
-		if current, ok := agent.MiddlewareImplementation(middleware).(*agenttoolruntime.OrchestratorMiddleware); ok {
+		if current, ok := agentmiddleware.MiddlewareImplementation(middleware).(*agenttoolruntime.OrchestratorMiddleware); ok {
 			generalOrchestrator = current
 		}
 	}
 	for _, middleware := range definition.Middlewares {
-		if current, ok := agent.MiddlewareImplementation(middleware).(*agenttoolruntime.OrchestratorMiddleware); ok {
+		if current, ok := agentmiddleware.MiddlewareImplementation(middleware).(*agenttoolruntime.OrchestratorMiddleware); ok {
 			rootOrchestrator = current
 		}
 	}
@@ -89,19 +128,17 @@ func TestBuildAgentExposesGeneralAndConfiguredSubAgentsThroughTask(t *testing.T)
 		if child.Definition.Goal != nil {
 			t.Fatalf("delegated child %q unexpectedly inherited root Goal authority", child.Name)
 		}
-		if child.Definition.Cleanup == nil || child.Definition.Compaction == nil || child.Definition.ResultProcessor == nil || child.Definition.Permission == nil {
+		if child.Definition.Compaction == nil || child.Definition.ResultProcessor == nil || child.Definition.Permission == nil {
 			t.Fatalf("delegated child %q lost public lifecycle capabilities: %#v", child.Name, child.Definition)
 		}
 		if child.Name == "researcher" {
-			messages := []*agent.Message{agent.UserMessage("inspect the child Cleanup budget")}
-			plan, planErr := child.Definition.Cleanup.Plan(context.Background(), agent.CleanupPlanRequest{
-				Messages: messages, ModelRequest: messages, CompactionAvailable: true,
-			})
+			messages := []*agentschema.Message{agentschema.UserMessage("inspect the child checkpoint budget")}
+			plan, planErr := child.Definition.Compaction.Plan(context.Background(), agentcompaction.CompactionPlanRequest{ModelSnapshot: (&agentmodel.ModelCall{Messages: messages}).Snapshot()})
 			if planErr != nil {
 				t.Fatal(planErr)
 			}
 			if plan.Metrics.ContextWindowTokens != childWindow {
-				t.Fatalf("delegated child Cleanup window = %d, want model profile window %d", plan.Metrics.ContextWindowTokens, childWindow)
+				t.Fatalf("delegated child checkpoint window = %d, want model profile window %d", plan.Metrics.ContextWindowTokens, childWindow)
 			}
 		}
 	}
@@ -197,11 +234,11 @@ func TestBuildAgentCanDisableGeneralSubAgent(t *testing.T) {
 	if _, ok := agentdelegation.AsCatalog(definition.Tools); ok {
 		t.Fatal("delegation catalog should be absent when no child Agent is enabled")
 	}
-	tools, err := definition.Tools.PrepareTools(context.Background(), agent.ToolRequest{})
+	tools, err := definition.Tools.PrepareTools(context.Background(), agenttool.ToolRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if toolNamesForTest(t, tools)["task"] {
+	if toolNamesForTest(t, tools)["send"] {
 		t.Fatalf("task tool should be absent without any available subagent")
 	}
 }
@@ -263,8 +300,8 @@ func TestBuildChatModelAgentAssemblyProjectsProfileMaxTokensIntoFinalCall(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	call := &agent.ModelCall{Messages: []*agent.Message{agent.UserMessage("inspect")}}
-	modelContext := &agent.ModelContext{}
+	call := &agentmodel.ModelCall{Messages: []*agentschema.Message{agentschema.UserMessage("inspect")}}
+	modelContext := &agentmiddleware.ModelContext{}
 	ctx := context.Background()
 	for _, middleware := range assembly.Middlewares {
 		ctx, call, err = middleware.BeforeModelCall(ctx, call, modelContext)
@@ -272,13 +309,13 @@ func TestBuildChatModelAgentAssemblyProjectsProfileMaxTokensIntoFinalCall(t *tes
 			t.Fatal(err)
 		}
 	}
-	options := agent.GetCommonOptions(&agent.Options{}, call.Options...)
+	options := agentmodel.GetCommonOptions(&agentmodel.Options{}, call.Options...)
 	if options.MaxTokens == nil || *options.MaxTokens != profileMax {
 		t.Fatalf("final model-call max tokens = %#v, want %d", options.MaxTokens, profileMax)
 	}
 }
 
-func toolNamesForTest(t *testing.T, tools []agent.ToolDefinition) map[string]bool {
+func toolNamesForTest(t *testing.T, tools []agenttool.ToolDefinition) map[string]bool {
 	t.Helper()
 	names := make(map[string]bool, len(tools))
 	for _, current := range tools {

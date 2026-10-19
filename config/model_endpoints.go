@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/alfredxw/denova/agent/providers"
+	"github.com/alfredxw/denova/agent/model/providers"
 )
 
 const DefaultModelEndpointID = "default"
@@ -72,7 +72,7 @@ func sanitizeModelEndpoints(endpoints []ModelEndpointSettings) []ModelEndpointSe
 
 func modelProfileFromEndpoint(endpoint ModelEndpointSettings) ModelProfileSettings {
 	return ModelProfileSettings{
-		ID: endpoint.ID, Name: endpoint.Name, Provider: endpoint.Provider,
+		ID: endpoint.ID, Name: endpoint.Name, Enabled: endpoint.Enabled, Provider: endpoint.Provider,
 		Protocol: endpoint.Protocol, APIKey: endpoint.APIKey, BaseURL: endpoint.BaseURL,
 		Headers:           cloneModelProfileHeaders(endpoint.Headers),
 		ProtocolOptions:   cloneModelProfileOptions(endpoint.ProtocolOptions),
@@ -82,7 +82,7 @@ func modelProfileFromEndpoint(endpoint ModelEndpointSettings) ModelProfileSettin
 
 func modelEndpointFromProfile(profile ModelProfileSettings, id string) ModelEndpointSettings {
 	return ModelEndpointSettings{
-		ID: id, Name: strings.TrimSpace(profile.Name), Provider: strings.TrimSpace(profile.Provider),
+		ID: id, Name: strings.TrimSpace(profile.Name), Enabled: profile.Enabled, Provider: strings.TrimSpace(profile.Provider),
 		Protocol: strings.TrimSpace(profile.Protocol), APIKey: profile.APIKey,
 		BaseURL: strings.TrimSpace(profile.BaseURL), Headers: cloneModelProfileHeaders(profile.Headers),
 		ProtocolOptions:   cloneModelProfileOptions(profile.ProtocolOptions),
@@ -107,6 +107,7 @@ func modelProfileWithEndpoint(cfg *Config, profile ModelProfileSettings) ModelPr
 	connection := modelProfileFromEndpoint(endpoint)
 	connection.ID = profile.ID
 	connection.Name = profile.Name
+	connection.Enabled = profile.Enabled
 	connection.EndpointID = endpointID
 	connection.Model = profile.Model
 	connection.Temperature = profile.Temperature

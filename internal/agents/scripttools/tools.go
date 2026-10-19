@@ -10,20 +10,20 @@ import (
 	"denova/config"
 	"denova/internal/agents/toolresult"
 
-	agent "github.com/alfredxw/denova/agent"
-	agentscript "github.com/alfredxw/denova/agent/script"
-	publictools "github.com/alfredxw/denova/agent/tools"
+	agenttool "github.com/alfredxw/denova/agent/tool"
+	publictools "github.com/alfredxw/denova/agent/tool/builtin"
+	agentscript "github.com/alfredxw/denova/agent/tool/script"
 )
 
 // Immediate constructs the model-visible script entry point.
-func Immediate(cfg *config.Config) (agent.ToolDefinition, error) {
+func Immediate(cfg *config.Config) (agenttool.ToolDefinition, error) {
 	scriptConfig, err := engineConfig(cfg)
 	if err != nil {
-		return agent.ToolDefinition{}, err
+		return agenttool.ToolDefinition{}, err
 	}
 	definition, err := publictools.Script(scriptConfig)
 	if err != nil {
-		return agent.ToolDefinition{}, fmt.Errorf("build immediate script tool: %w", err)
+		return agenttool.ToolDefinition{}, fmt.Errorf("build immediate script tool: %w", err)
 	}
 	return definition, nil
 }
@@ -32,10 +32,10 @@ func Immediate(cfg *config.Config) (agent.ToolDefinition, error) {
 // definitions. The caller remains responsible for the parent capability ceiling.
 func ForSubAgent(
 	ctx context.Context,
-	definitions []agent.ToolDefinition,
+	definitions []agenttool.ToolDefinition,
 	enabled config.AgentToolOverride,
-) ([]agent.ToolDefinition, error) {
-	selected := make([]agent.ToolDefinition, 0, len(definitions))
+) ([]agenttool.ToolDefinition, error) {
+	selected := make([]agenttool.ToolDefinition, 0, len(definitions))
 	for _, definition := range definitions {
 		info, err := definition.Tool.Info(ctx)
 		if err != nil {

@@ -33,6 +33,24 @@ describe.each(['writing', 'agent-chat'])('%s history refresh', (surface) => {
     expect(getMessagesPage).toHaveBeenCalledTimes(1)
   })
 
+  it('discards a superseded background read without reporting a conversation failure', async () => {
+    let finish!: (value: SessionMessagesPage) => void
+    const pending = new Promise<SessionMessagesPage>(resolve => { finish = resolve })
+    const setMessages = vi.fn()
+    const getMessagesPage = vi.fn().mockReturnValueOnce(pending).mockResolvedValueOnce(page)
+    const client = { ...writingAgentChatClient, getMessagesPage }
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { result } = renderHook(() => useWritingAgentHistory({ client, setMessages }))
+      let stale!: Promise<void>
+      act(() => { stale = result.current.loadHistory('session-1') })
+      await act(async () => { await result.current.loadHistoryAuthoritative('session-1') })
+      await act(async () => { finish({ ...page, messages: [] }); await stale })
+      expect(setMessages).toHaveBeenCalledExactlyOnceWith(page.messages)
+      expect(error).not.toHaveBeenCalled()
+    } finally { error.mockRestore() }
+  })
+
   it('allows explicit recovery and idle refreshes to replace history', async () => {
     const getMessagesPage = vi.fn().mockResolvedValue(page)
     const setMessages = vi.fn()

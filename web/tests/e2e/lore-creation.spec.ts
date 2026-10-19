@@ -1,0 +1,107 @@
+import { expect, test } from '../support/fixtures'
+import { createAndOpenBook } from '../support/api'
+import type { LoreItem } from '../../src/lib/api'
+
+for (const theme of ['dark', 'light']) {
+  test(theme === 'light' ? 'renders empty and long inline Lore names in light' : 'names Lore inline before persisting an identity in dark', async ({ page, request, browserDiagnostics }, testInfo) => {
+    const book = await createAndOpenBook(request, `Inline lore ${theme}`)
+    const url = `/api/projects/${book.projectId}/book/lore/items`
+    const items = async (): Promise<LoreItem[]> => (await (await request.get(url)).json()).items
+    const settings = await (await request.get('/api/settings')).json()
+    await request.patch('/api/settings', { data: { layer: 'user', base_revision: settings.revisions.user, changes: { theme, language: 'zh-CN' } } })
+    await page.goto('/')
+    const sidebar = page.getByLabel('工作台侧边栏')
+    await sidebar.getByRole('button', { name: '资料库', exact: true }).click()
+    const library = page.getByTestId('lore-library')
+    const pending = page.getByTestId('lore-create-editor')
+    const title = pending.getByLabel('名称', { exact: true })
+    const start = async (category = '角色') => {
+      await library.getByRole('button', { name: '新建资料', exact: true }).click()
+      await page.getByRole('menuitem', { name: category, exact: true }).click()
+      await expect(title).toBeFocused()
+      await expect(title).toHaveValue('')
+      await expect(page.getByRole('dialog')).toHaveCount(0)
+    }
+    await start()
+    expect(await items()).toEqual([])
+    await page.screenshot({ path: testInfo.outputPath(`creation-${theme}-empty-wide.png`) })
+    await page.getByRole('button', { name: '返回资料总览', exact: true }).click()
+    await expect(pending).toHaveCount(0)
+    expect(await items()).toEqual([])
+
+    await start()
+    await title.fill('沈')
+    await title.dispatchEvent('compositionstart')
+    await title.press('Enter')
+    await expect(title).toBeVisible()
+    expect(await items()).toEqual([])
+    await title.dispatchEvent('compositionend')
+    await title.fill('很长的角色名称LongCharacterName'.repeat(8))
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.screenshot({ path: testInfo.outputPath(`creation-${theme}-long-narrow.png`) })
+    expect(await pending.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true)
+    // Preserve empty/long-name layout coverage in light; identity creation,
+    // conflicts and retries are shared business behavior verified in dark.
+    if (theme === 'light') return
+    await title.fill('沈凝')
+    await title.press('Enter')
+    await expect(pending).toHaveCount(0)
+    const content = page.getByRole('textbox', { name: '正文', exact: true })
+    await expect(content).toBeFocused()
+    await page.keyboard.insertText('Created after naming.')
+    await page.keyboard.press('Control+s')
+    await expect.poll(async () => (await items())[0]?.content).toContain('Created after naming.')
+    expect((await items())[0]).toMatchObject({ id: '沈凝', name: '沈凝' })
+    await page.getByLabel('名称', { exact: true }).fill('沈宁')
+    await content.click()
+    await page.keyboard.press('Control+s')
+    await expect.poll(async () => (await items())[0]?.name).toBe('沈宁')
+    expect((await items())[0].id).toBe('沈凝')
+    await page.setViewportSize({ width: 1600, height: 1000 })
+    await page.getByRole('button', { name: '返回资料总览', exact: true }).click()
+
+    await start('地点')
+    await title.fill('沈宁')
+    await title.press('Enter')
+    await expect(pending.getByRole('alert')).toHaveText('已有同名资料，请使用其他名称。')
+    expect(await items()).toHaveLength(1)
+    await title.fill('White Tower')
+    // A rejected request must keep the name and permit retry in the same surface.
+    browserDiagnostics.allow(/console.error:.*(?:\[lore-create\] failed to create item|status of 400)/)
+    await page.route(`**${url}`, async route => {
+      if (route.request().method() === 'POST') await route.fulfill({ status: 400, json: { error: 'Rejected for test' } })
+      else await route.continue()
+    })
+    await title.press('Tab')
+    await expect(pending.getByRole('alert')).toHaveText('创建资料失败，名称已保留。请重试。')
+    await expect(title).toHaveValue('White Tower')
+    await page.unroute(`**${url}`)
+    await title.press('Tab')
+    await expect(pending).toHaveCount(0)
+    await expect(content).toBeFocused()
+    expect((await items()).find(item => item.name === 'White Tower')?.id).toBe('white_tower')
+
+    await sidebar.getByRole('button', { name: '游戏', exact: true }).click()
+    await sidebar.getByRole('button', { name: '资料库', exact: true }).click()
+    await page.getByRole('button', { name: '返回资料总览', exact: true }).click()
+    await start('组织')
+    await title.fill('白塔议会')
+    await pending.getByRole('textbox', { name: '正文', exact: true }).click()
+    await expect(pending).toHaveCount(0)
+    await expect(content).toBeFocused()
+    expect((await items()).find(item => item.name === '白塔议会')?.id).toBe('白塔议会')
+    expect(await items()).toHaveLength(3)
+
+    const current = await (await request.get('/api/settings')).json()
+    await request.patch('/api/settings', { data: { layer: 'user', base_revision: current.revisions.user, changes: { language: 'en-US' } } })
+    await page.reload()
+    await expect(library).toBeVisible()
+    await library.getByRole('button', { name: 'New item', exact: true }).click()
+    await page.getByRole('menuitem', { name: 'Character', exact: true }).click()
+    await expect(pending.getByLabel('Name', { exact: true })).toBeFocused()
+    await expect(pending).toContainText('Enter a name, then press Enter, Tab, or click the content area to start editing.')
+    await page.screenshot({ path: testInfo.outputPath(`creation-${theme}-english-wide.png`) })
+    await pending.getByRole('button', { name: 'Cancel', exact: true }).click()
+    expect(await items()).toHaveLength(3)
+  })
+}

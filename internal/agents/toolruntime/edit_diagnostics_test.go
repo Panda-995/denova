@@ -11,8 +11,14 @@ import (
 
 	"denova/config"
 	agentrun "denova/internal/agents/run"
-	agent "github.com/alfredxw/denova/agent"
-	agenttoolresult "github.com/alfredxw/denova/agent/toolresult"
+
+	"github.com/alfredxw/denova/agent"
+	agentmiddleware "github.com/alfredxw/denova/agent/engine/middleware"
+	agentmodel "github.com/alfredxw/denova/agent/model"
+	agentstream "github.com/alfredxw/denova/agent/model/stream"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
+	agenttoolresult "github.com/alfredxw/denova/agent/tool/result"
 )
 
 func TestEditDiagnosticsReachModelThroughPublicAgent(t *testing.T) {
@@ -30,23 +36,23 @@ func TestEditDiagnosticsReachModelThroughPublicAgent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			toolset, err := agent.StaticTools(definitions...)
+			toolset, err := agenttool.StaticTools(definitions...)
 			if err != nil {
 				t.Fatal(err)
 			}
 			model := &editDiagnosticsModel{}
 			definition := agent.Definition{
 				Name: kind, Instructions: "Execute the requested edit.", Model: model, Tools: toolset,
-				Middlewares: []agent.Middleware{NewOrchestratorMiddleware(OrchestratorConfig{
+				Middlewares: []agentmiddleware.Middleware{NewOrchestratorMiddleware(OrchestratorConfig{
 					AgentKind: kind, PolicyKind: agentrun.AgentKindIDE, Workspace: workspace,
 				})},
 				ResultProcessor: agenttoolresult.Standard(agenttoolresult.Policy{MaxBytes: 4096}),
 			}
 			result, err, projections := runPublicToolLifecycle(t, definition, agentrun.NewObserver(nil, ""))
-			if err != nil || result.Status != agent.ResultCompleted {
+			if err != nil || result.Status != agentschema.ResultCompleted {
 				t.Fatalf("public Agent failed: result=%+v err=%v", result, err)
 			}
-			var feedback *agent.Message
+			var feedback *agentschema.Message
 			for _, message := range model.messages {
 				if message.Role == "tool" && message.ToolName == "edit" {
 					feedback = message
@@ -91,26 +97,26 @@ func TestEditDiagnosticsReachModelThroughPublicAgent(t *testing.T) {
 	}
 }
 
-type editDiagnosticsModel struct{ messages []*agent.Message }
+type editDiagnosticsModel struct{ messages []*agentschema.Message }
 
-func (model *editDiagnosticsModel) Generate(_ context.Context, messages []*agent.Message, _ ...agent.ModelOption) (*agent.Message, error) {
+func (model *editDiagnosticsModel) Generate(_ context.Context, messages []*agentschema.Message, _ ...agentmodel.ModelOption) (*agentschema.Message, error) {
 	first := model.messages == nil
 	model.messages = messages
 	if first {
-		return agent.AssistantMessage("", []agent.ToolCall{{
+		return agentschema.AssistantMessage("", []agentschema.ToolCall{{
 			ID: "edit-diagnostics", Type: "function",
-			Function: agent.FunctionCall{
+			Function: agentschema.FunctionCall{
 				Name: "edit", Arguments: `{"path":"state.md","edits":[{"old_string":"existing","new_string":"updated"},{"old_string":"same","new_string":"unique"},{"old_string":"missing","new_string":"found"}]}`,
 			},
 		}}), nil
 	}
-	return agent.AssistantMessage("done", nil), nil
+	return agentschema.AssistantMessage("done", nil), nil
 }
 
-func (model *editDiagnosticsModel) Stream(ctx context.Context, messages []*agent.Message, options ...agent.ModelOption) (*agent.StreamReader[*agent.Message], error) {
+func (model *editDiagnosticsModel) Stream(ctx context.Context, messages []*agentschema.Message, options ...agentmodel.ModelOption) (*agentstream.StreamReader[*agentschema.Message], error) {
 	message, err := model.Generate(ctx, messages, options...)
 	if err != nil {
 		return nil, err
 	}
-	return agent.StreamReaderFromArray([]*agent.Message{message}), nil
+	return agentstream.StreamReaderFromArray([]*agentschema.Message{message}), nil
 }

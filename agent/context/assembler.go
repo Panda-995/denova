@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 const (
@@ -66,25 +66,25 @@ func (b Budget) normalized() Budget {
 // deliberately not represented by this type unless a caller explicitly
 // projects them into a bounded fragment.
 type Fragment struct {
-	ID        string                 `json:"id,omitempty"`
-	StateID   string                 `json:"state_id,omitempty"`
-	Source    string                 `json:"source"`
-	Title     string                 `json:"title,omitempty"`
-	Purpose   string                 `json:"purpose"`
-	Content   string                 `json:"content"`
-	Placement Placement              `json:"placement"`
-	Stability agent.ContextStability `json:"stability,omitempty"`
-	Limit     int                    `json:"limit"`
-	Hash      string                 `json:"hash"`
-	Included  bool                   `json:"included"`
-	Truncated bool                   `json:"truncated,omitempty"`
-	Note      string                 `json:"note,omitempty"`
+	ID        string                       `json:"id,omitempty"`
+	StateID   string                       `json:"state_id,omitempty"`
+	Source    string                       `json:"source"`
+	Title     string                       `json:"title,omitempty"`
+	Purpose   string                       `json:"purpose"`
+	Content   string                       `json:"content"`
+	Placement Placement                    `json:"placement"`
+	Stability agentschema.ContextStability `json:"stability,omitempty"`
+	Limit     int                          `json:"limit"`
+	Hash      string                       `json:"hash"`
+	Included  bool                         `json:"included"`
+	Truncated bool                         `json:"truncated,omitempty"`
+	Note      string                       `json:"note,omitempty"`
 }
 
 type AssembleRequest struct {
 	// Final-user fragments target the latest user request, preserving any
 	// following tool exchange, context-state update, or task completion.
-	Messages     []*agent.Message
+	Messages     []*agentschema.Message
 	Fragments    []Fragment
 	PreviewChars int
 }
@@ -149,7 +149,7 @@ func (a *Assembler) Assemble(ctx stdcontext.Context, req AssembleRequest) (Resul
 	finalUserIndex := -1
 	for index := len(messages) - 1; index >= 0; index-- {
 		message := messages[index]
-		if message != nil && message.Role == agent.User && !agent.IsContextStateMessage(message) && message.TaskCompletion == nil {
+		if message != nil && message.Role == agentschema.User && !IsContextStateMessage(message) && message.TaskCompletion == nil {
 			finalUserIndex = index
 			break
 		}
@@ -190,9 +190,9 @@ func (a *Assembler) Assemble(ctx stdcontext.Context, req AssembleRequest) (Resul
 	}
 
 	if len(leading) > 0 {
-		leadingMessages := make([]*agent.Message, 0, len(leading))
+		leadingMessages := make([]*agentschema.Message, 0, len(leading))
 		for _, fragment := range leading {
-			message := agent.UserMessage(renderer.RenderLeading(fragment))
+			message := agentschema.UserMessage(renderer.RenderLeading(fragment))
 			message.Extra = map[string]any{MessageExtraPlacement: string(PlacementLeadingMessage)}
 			leadingMessages = append(leadingMessages, message)
 		}
@@ -248,14 +248,14 @@ func resolveFragment(fragment Fragment, budget Budget, hasFinalMessage bool) (Fr
 	if fragment.Stability == "" {
 		switch fragment.Placement {
 		case PlacementLeadingMessage:
-			fragment.Stability = agent.ContextStablePrefix
+			fragment.Stability = agentschema.ContextStablePrefix
 		case PlacementFinalUserPrefix:
-			fragment.Stability = agent.ContextTurn
+			fragment.Stability = agentschema.ContextTurn
 		case PlacementAuditOnly:
-			fragment.Stability = agent.ContextAudit
+			fragment.Stability = agentschema.ContextAudit
 		}
 	}
-	if fragment.Stability == agent.ContextSessionState && strings.TrimSpace(fragment.StateID) == "" {
+	if fragment.Stability == agentschema.ContextSessionState && strings.TrimSpace(fragment.StateID) == "" {
 		return Fragment{}, fmt.Errorf("session-state context fragment requires StateID: source=%s", fragment.Source)
 	}
 	if fragment.Included && fragment.Placement != PlacementAuditOnly {
@@ -376,7 +376,7 @@ func analysisPartForFragment(index int, fragment Fragment) AnalysisPart {
 		ID:      fmt.Sprintf("source_%d", index),
 		Source:  fragment.Source,
 		Title:   fragment.Title,
-		Role:    string(agent.User),
+		Role:    string(agentschema.User),
 		Content: fragment.Content,
 		Note:    fragment.Note,
 		Bytes:   len(fragment.Content),

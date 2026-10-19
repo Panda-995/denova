@@ -3,17 +3,17 @@ package app
 import (
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestInteractiveTaskInfoProjectsAttachmentDescriptors(t *testing.T) {
-	original := agent.Attachment{
+	original := agentschema.Attachment{
 		ID: "att-1", Name: "map.png", MediaType: "image/png", Size: 42,
 		Path: "/private/input/map.png", SHA256: "digest",
 	}
 	identity := interactiveStartIdentity{request: InteractiveAgentStartRequest{
 		CommandID: "command-1", StoryID: "story-1", BranchID: "main",
-		Message: "Inspect the map", AttachedFiles: []agent.Attachment{original},
+		Message: "Inspect the map", AttachedFiles: []agentschema.Attachment{original},
 	}}
 
 	info := identity.taskInfo("task-1")

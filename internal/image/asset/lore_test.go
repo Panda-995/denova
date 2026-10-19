@@ -2,6 +2,7 @@ package asset
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"denova/config"
+	"denova/internal/assetstore"
 	"denova/internal/book"
 	"denova/internal/book/lore"
 	imagegen "denova/internal/image/generation"
@@ -27,9 +29,9 @@ func TestGenerateSavesLoreImageAndMetadata(t *testing.T) {
 	}}
 	service := NewServiceWithGenerator(generator)
 	service.now = func() time.Time { return time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC) }
-	service.suffix = func() string { return "abcd1234" }
 
 	result, err := service.GenerateLore(context.Background(), &config.Config{}, book.NewService(workspace), LoreGenerateRequest{
+		Provenance: ProvenanceDirectory,
 		Item: lore.Item{
 			ID:               "hero",
 			Type:             "character",
@@ -45,10 +47,10 @@ func TestGenerateSavesLoreImageAndMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Schema != LoreResultSchema || result.ImagePath != "assets/lore/images/hero/20260701-120000-abcd1234/image.png" {
+	if result.Schema != LoreResultSchema || filepath.ToSlash(filepath.Dir(result.ImagePath)) != "assets/lore" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
-	if result.MetaPath != "assets/lore/images/hero/20260701-120000-abcd1234/meta.json" || result.ImagePresetID != "game-cg" {
+	if result.MetaPath != "assets/lore/meta.json" || result.ImagePresetID != "game-cg" {
 		t.Fatalf("unexpected metadata paths: %#v", result)
 	}
 	assertFile(t, workspace, result.ImagePath, "image")
@@ -56,69 +58,36 @@ func TestGenerateSavesLoreImageAndMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"schema": "lore_item_image.v1"`, `"item_id": "hero"`, `"image_preset_id": "game-cg"`, `"prompt":`} {
-		if !strings.Contains(string(meta), want) {
-			t.Fatalf("metadata missing %q:\n%s", want, string(meta))
+	metadata, err := assetstore.DecodeMetadata(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var detail generationMeta
+	if err := json.Unmarshal(metadata.Files[filepath.Base(result.ImagePath)], &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.ImagePresetID != "game-cg" || detail.Prompt != generator.request.Prompt || detail.RevisedPrompt != "revised" {
+		t.Fatalf("missing generation details: %+v", detail)
+	}
+	for _, forbidden := range []string{`"mime_type"`, `"size_bytes"`, `"item_id"`, `"image_path"`} {
+		if strings.Contains(string(meta), forbidden) {
+			t.Fatalf("directory metadata duplicates product attributes: %s", meta)
 		}
 	}
-	if !strings.Contains(generator.request.Prompt, "电影感光影") || !strings.Contains(generator.request.Prompt, "夜色氛围") || !strings.Contains(generator.request.Prompt, "林川") {
+	second, err := service.GenerateLore(context.Background(), &config.Config{}, book.NewService(workspace), LoreGenerateRequest{Provenance: ProvenanceDirectory, Item: lore.Item{ID: "other", Name: "Other"}, Prompt: "second prompt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err = os.ReadFile(filepath.Join(workspace, filepath.FromSlash(second.MetaPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err = assetstore.DecodeMetadata(meta)
+	if err != nil || len(metadata.Files) != 2 || len(metadata.Files[filepath.Base(result.ImagePath)]) == 0 {
+		t.Fatalf("generation overwrote another file's provenance: %+v %v", metadata, err)
+	}
+	if !strings.Contains(detail.Prompt, "电影感光影") || !strings.Contains(detail.Prompt, "夜色氛围") || !strings.Contains(detail.Prompt, "林川") {
 		t.Fatalf("prompt missing expected context:\n%s", generator.request.Prompt)
-	}
-}
-
-func TestUploadLoreSavesValidatedImageAndMetadata(t *testing.T) {
-	workspace := t.TempDir()
-	service := NewServiceWithGenerator(nil)
-	service.now = func() time.Time { return time.Date(2026, 7, 2, 13, 30, 0, 0, time.UTC) }
-	service.suffix = func() string { return "upload01" }
-	data := loreTestPNGBytes()
-
-	result, err := service.UploadLore(context.Background(), book.NewService(workspace), LoreUploadRequest{
-		Item:     lore.Item{ID: "hero", Type: "character", Name: "林川"},
-		Filename: "portrait.png",
-		Data:     data,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.ImagePath != "assets/lore/images/hero/20260702-133000-upload01/image.png" || result.MetaPath != "assets/lore/images/hero/20260702-133000-upload01/meta.json" {
-		t.Fatalf("unexpected upload paths: %#v", result)
-	}
-	if result.Provider != "user_upload" || result.ProfileID != "manual" || result.MIMEType != "image/png" || result.SizeBytes != len(data) {
-		t.Fatalf("unexpected upload metadata: %#v", result)
-	}
-	imageData, err := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(result.ImagePath)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(imageData) != string(data) {
-		t.Fatal("uploaded image bytes were not preserved")
-	}
-	meta, err := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(result.MetaPath)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{`"source": "user_upload"`, `"source_name": "portrait.png"`, `"item_id": "hero"`} {
-		if !strings.Contains(string(meta), want) {
-			t.Fatalf("metadata missing %q:\n%s", want, string(meta))
-		}
-	}
-}
-
-func TestUploadLoreRejectsInvalidImageBeforeWriting(t *testing.T) {
-	workspace := t.TempDir()
-	service := NewServiceWithGenerator(nil)
-
-	_, err := service.UploadLore(context.Background(), book.NewService(workspace), LoreUploadRequest{
-		Item:     lore.Item{ID: "hero", Name: "林川"},
-		Filename: "portrait.png",
-		Data:     []byte("not an image"),
-	})
-	if !errors.Is(err, ErrLoreImageUploadInvalid) {
-		t.Fatalf("UploadLore error = %v, want invalid image", err)
-	}
-	if _, statErr := os.Stat(filepath.Join(workspace, "assets")); !os.IsNotExist(statErr) {
-		t.Fatalf("assets should not be written for an invalid upload, err=%v", statErr)
 	}
 }
 
@@ -126,7 +95,7 @@ func TestBuildLorePromptBoundsLoreContent(t *testing.T) {
 	prompt := BuildLorePrompt(LoreGenerateRequest{
 		Item: lore.Item{
 			ID:               "rule",
-			Type:             "rule",
+			Type:             "world",
 			Name:             "长规则",
 			BriefDescription: strings.Repeat("简介", 1000),
 			Content:          strings.Repeat("正文", 5000),
@@ -137,7 +106,7 @@ func TestBuildLorePromptBoundsLoreContent(t *testing.T) {
 	if len([]rune(prompt)) > maxPresetChars+maxBriefChars+maxContentChars+maxInstructionChars+600 {
 		t.Fatalf("prompt is not bounded, runes=%d", len([]rune(prompt)))
 	}
-	if !strings.Contains(prompt, "Lore type: rule") || !strings.Contains(prompt, "Lore name: 长规则") {
+	if !strings.Contains(prompt, "Lore type: world") || !strings.Contains(prompt, "Lore name: 长规则") {
 		t.Fatalf("prompt missing lore identity:\n%s", prompt)
 	}
 }

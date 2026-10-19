@@ -469,12 +469,9 @@ func ResolveStoryDirectorModules(novaDir string, director StoryDirector) StoryDi
 		effective.TRPGSystem = StoryDirectorTRPGSystem{RuleTemplates: []RuleCheck{}}
 	} else if refs.RuleSystemID != "" {
 		if module, err := NewRuleSystemLibrary(novaDir).Get(refs.RuleSystemID); err == nil {
+			// A rule preset's linked state template is a recommendation;
+			// the Story owns its state selection and disabled state.
 			effective.TRPGSystem = module.TRPGSystem
-			if module.ActorStateID != "" {
-				refs.ActorStateID = module.ActorStateID
-				refs.ActorStateDisabled = false
-				effective.ModuleRefs = refs
-			}
 		} else if !ruleSystemEmpty(snapshot.TRPGSystem) {
 			effective.TRPGSystem = snapshot.TRPGSystem
 			warnings = append(warnings, moduleWarning("rule_system", refs.RuleSystemID, err))

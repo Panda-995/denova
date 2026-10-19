@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/alfredxw/denova/agent/providers"
+	"github.com/alfredxw/denova/agent/model/providers"
 )
 
 type ModelErrorClass string
@@ -45,7 +45,9 @@ func ClassifyModelError(err error) ModelErrorClassification {
 
 	var providerError *providers.APIError
 	if errors.As(err, &providerError) {
-		return classifyModelHTTPStatus(providerError.StatusCode)
+		classification := classifyModelHTTPStatus(providerError.StatusCode)
+		classification.Retryable = providerError.Retryable()
+		return classification
 	}
 	var networkError net.Error
 	if errors.As(err, &networkError) {

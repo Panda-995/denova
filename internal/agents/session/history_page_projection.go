@@ -1,0 +1,114 @@
+package session
+
+import (
+	"encoding/json"
+	"fmt"
+
+	"denova/internal/agents/conversationjournal"
+	externaljournal "denova/internal/agents/runtime/external/journal"
+	"denova/internal/agents/sessionjournal"
+)
+
+const historyPageMaxBytes = 8 << 20
+
+// historyPageProjection keeps only the requested display window while scanning
+// its sparse interval. The domain index already classified canonical/display
+// duplicates, including copies whose display prefix is outside this page.
+type historyPageProjection struct {
+	rows                *Session
+	position            int
+	hidden              map[hiddenHistoryRecord]bool
+	positions           []int
+	start, end, maxRows int
+}
+
+func (p *historyPageProjection) apply(record conversationjournal.Record) error {
+	var header struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(record.Payload, &header); err != nil {
+		return err
+	}
+	before := p.position
+	patch := false
+	switch header.Type {
+	case historyTypeDisplay, historyTypeDisplayPatch, historyTypeMessage, historyTypeClear, "":
+		patch = header.Type == historyTypeDisplayPatch
+		if !patch && !p.hidden[hiddenHistoryRecord{Cursor: record.Location.Cursor, Index: record.Location.RecordIndex}] {
+			p.position++
+		}
+	case externaljournal.RecordType:
+		var event externaljournal.Record
+		if err := json.Unmarshal(record.Payload, &event); err != nil {
+			return err
+		}
+		switch event.Kind {
+		case externaljournal.ToolStarted:
+			p.position++
+		case externaljournal.OperationClosed:
+			usage, err := ExternalUsageDisplay(event)
+			if err != nil {
+				return err
+			}
+			if usage == nil {
+				return nil
+			}
+			p.position++
+		case externaljournal.ToolFinished:
+			patch = true
+		case externaljournal.OperationAccepted, externaljournal.ContextCheckpoint, externaljournal.GuidanceDelivered:
+			return nil
+		}
+	case "session", historyTypeContextMessage, historyTypeContextBatch, sessionjournal.RecordType,
+		historyTypeInterrupt, historyTypeInterruptionPatch, historyTypeSessionPatch, historyTypeRuntimePatch, platformRecordType:
+		return nil
+	default:
+		if isRetiredSessionJournalRecordType(header.Type) {
+			return nil
+		}
+		return fmt.Errorf("unknown history page record type %q", header.Type)
+	}
+	if patch || p.position == before || before >= p.end {
+		return nil
+	}
+	if err := appendConversationRecord(p.rows, record); err != nil {
+		return err
+	}
+	// Only History() consumes this projection; the model message array would
+	// otherwise keep bodies alive after their display rows leave the window.
+	p.rows.messages = nil
+	p.positions = append(p.positions, before)
+	last := p.rows.records[len(p.rows.records)-1]
+	if before <= p.start && (last.kind == historyTypeClear || last.message != nil && last.message.Role == "user") {
+		p.drop(len(p.rows.records) - 1)
+	}
+	p.trim()
+	return nil
+}
+
+func (p *historyPageProjection) trim() {
+	bytes := 0
+	for i := len(p.rows.records) - 1; i >= 0; i-- {
+		row := p.rows.records[i]
+		if row.display != nil {
+			bytes += len(row.display.Content) + len(row.display.Args) + len(row.display.Result)
+		}
+		if row.message != nil {
+			bytes += len(row.message.Content) + len(row.messageMetadata.DisplayContent)
+		}
+		// A single item remains whole. Tool production already enforces its own
+		// result budget; pagination must not silently truncate creator content.
+		if i < len(p.rows.records)-1 && (bytes > historyPageMaxBytes || len(p.rows.records)-i > p.maxRows) {
+			p.drop(i + 1)
+			break
+		}
+	}
+}
+
+func (p *historyPageProjection) drop(count int) {
+	if count == 0 {
+		return
+	}
+	p.rows.records = append([]historyRecord(nil), p.rows.records[count:]...)
+	p.positions = append([]int(nil), p.positions[count:]...)
+}

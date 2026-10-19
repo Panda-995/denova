@@ -5,7 +5,7 @@ import (
 	agentlifecycle "denova/internal/agents/lifecycle"
 	agentrun "denova/internal/agents/run"
 
-	agent "github.com/alfredxw/denova/agent"
+	"github.com/alfredxw/denova/agent"
 )
 
 // Product lifecycle vocabulary lives in lifecycle so the execution host can

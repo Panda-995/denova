@@ -3,7 +3,8 @@ package toolresult
 import (
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 // CompleteUnknownToolResults repairs only a missing result half. A durable
@@ -12,11 +13,11 @@ import (
 // exactly that and forbids automatic retry. Existing results in the same
 // assistant batch always win, and running this projection repeatedly is
 // idempotent.
-func CompleteUnknownToolResults(messages []*agent.Message) []*agent.Message {
+func CompleteUnknownToolResults(messages []*agentschema.Message) []*agentschema.Message {
 	if len(messages) == 0 {
 		return messages
 	}
-	completed := make([]*agent.Message, 0, len(messages))
+	completed := make([]*agentschema.Message, 0, len(messages))
 	for index := 0; index < len(messages); {
 		message := messages[index]
 		if message == nil {
@@ -24,7 +25,7 @@ func CompleteUnknownToolResults(messages []*agent.Message) []*agent.Message {
 			continue
 		}
 		completed = append(completed, message)
-		if message.Role != agent.Assistant || len(message.ToolCalls) == 0 {
+		if message.Role != agentschema.Assistant || len(message.ToolCalls) == 0 {
 			index++
 			continue
 		}
@@ -51,10 +52,10 @@ func CompleteUnknownToolResults(messages []*agent.Message) []*agent.Message {
 			if !validToolCall(call) || callCounts[callID] != 1 || resultCounts[callID] != 0 {
 				continue
 			}
-			completed = append(completed, agent.ToolMessage(
-				agent.SyntheticToolResult(agent.ToolResultError, agent.ToolSyntheticEffectUnknown, agent.UnknownToolEffectResult),
+			completed = append(completed, agentschema.ToolMessage(
+				agenttool.SyntheticToolResult(agentschema.ToolResultError, agentschema.ToolSyntheticEffectUnknown, agenttool.UnknownToolEffectResult),
 				callID,
-				agent.WithToolName(call.Function.Name),
+				agentschema.WithToolName(call.Function.Name),
 			))
 		}
 		for resultIndex := index + 1; resultIndex < batchEnd; resultIndex++ {
@@ -68,5 +69,5 @@ func CompleteUnknownToolResults(messages []*agent.Message) []*agent.Message {
 }
 
 func IsUnknownEffectResult(content string) bool {
-	return strings.TrimSpace(content) == agent.UnknownToolEffectResult
+	return strings.TrimSpace(content) == agenttool.UnknownToolEffectResult
 }

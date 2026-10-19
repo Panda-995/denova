@@ -6,20 +6,20 @@ import (
 	"strings"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
-	"github.com/alfredxw/denova/agent/providers"
+	"github.com/alfredxw/denova/agent/model/providers"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestModelInputLogCacheAttributionFingerprintsToolSchema(t *testing.T) {
-	messages := []*agent.Message{
-		agent.SystemMessage("system"),
-		agent.UserMessage("hello"),
+	messages := []*agentschema.Message{
+		agentschema.SystemMessage("system"),
+		agentschema.UserMessage("hello"),
 	}
-	tools := []*agent.ToolInfo{{
+	tools := []*agentschema.ToolInfo{{
 		Name: "read",
 		Desc: "Read a file",
-		ParamsOneOf: agent.NewParamsOneOfByParams(map[string]*agent.ParameterInfo{
-			"path": {Type: agent.String, Desc: "File path", Required: true},
+		ParamsOneOf: agentschema.NewParamsOneOfByParams(map[string]*agentschema.ParameterInfo{
+			"path": {Type: agentschema.String, Desc: "File path", Required: true},
 		}),
 	}}
 	firstTools := modelInputLogTools(tools)
@@ -42,12 +42,12 @@ func TestModelInputLogCacheAttributionFingerprintsToolSchema(t *testing.T) {
 		t.Fatalf("same input should produce stable attribution: first=%#v second=%#v", first, second)
 	}
 
-	changedTools := modelInputLogTools([]*agent.ToolInfo{{
+	changedTools := modelInputLogTools([]*agentschema.ToolInfo{{
 		Name: "read",
 		Desc: "Read a file with line offsets",
-		ParamsOneOf: agent.NewParamsOneOfByParams(map[string]*agent.ParameterInfo{
-			"path":   {Type: agent.String, Desc: "File path", Required: true},
-			"offset": {Type: agent.Number, Desc: "Line offset"},
+		ParamsOneOf: agentschema.NewParamsOneOfByParams(map[string]*agentschema.ParameterInfo{
+			"path":   {Type: agentschema.String, Desc: "File path", Required: true},
+			"offset": {Type: agentschema.Number, Desc: "Line offset"},
 		}),
 	}})
 	changed := modelInputLogCacheAttribution(messages, changedTools)
@@ -61,8 +61,8 @@ func TestModelInputLogCacheAttributionFingerprintsToolSchema(t *testing.T) {
 
 func TestModelInputCacheObservationLocatesFirstDivergence(t *testing.T) {
 	scope := t.Name()
-	messages := []*agent.Message{agent.SystemMessage("stable system"), agent.UserMessage("first turn")}
-	tools := modelInputLogTools([]*agent.ToolInfo{{Name: "read", Desc: "Read files"}})
+	messages := []*agentschema.Message{agentschema.SystemMessage("stable system"), agentschema.UserMessage("first turn")}
+	tools := modelInputLogTools([]*agentschema.ToolInfo{{Name: "read", Desc: "Read files"}})
 	modelConfig := providers.ModelConfig{Model: "test-model"}
 	first := modelInputLogCacheObservation("call-1", scope, modelConfig, messages, tools, nil)
 	if first.FirstDivergence != nil || first.CacheScopeFingerprint == "" || len(first.MessageFingerprints) != 2 {
@@ -74,7 +74,7 @@ func TestModelInputCacheObservationLocatesFirstDivergence(t *testing.T) {
 		t.Fatalf("unchanged cache observation = %#v", same.FirstDivergence)
 	}
 
-	changedMessages := []*agent.Message{agent.SystemMessage("stable system"), agent.UserMessage("second turn")}
+	changedMessages := []*agentschema.Message{agentschema.SystemMessage("stable system"), agentschema.UserMessage("second turn")}
 	changed := modelInputLogCacheObservation("call-3", scope, modelConfig, changedMessages, tools, nil)
 	if changed.FirstDivergence == nil || changed.FirstDivergence.Component != "message" ||
 		changed.FirstDivergence.Index != 1 || changed.FirstDivergence.MatchingMessagePrefix != 1 ||
@@ -82,7 +82,7 @@ func TestModelInputCacheObservationLocatesFirstDivergence(t *testing.T) {
 		t.Fatalf("message cache divergence = %#v", changed.FirstDivergence)
 	}
 
-	changedTools := modelInputLogTools([]*agent.ToolInfo{{Name: "read", Desc: "Read files with offsets"}})
+	changedTools := modelInputLogTools([]*agentschema.ToolInfo{{Name: "read", Desc: "Read files with offsets"}})
 	toolChanged := modelInputLogCacheObservation("call-4", scope, modelConfig, changedMessages, changedTools, nil)
 	if toolChanged.FirstDivergence == nil || toolChanged.FirstDivergence.Component != "tool_schema" ||
 		toolChanged.FirstDivergence.MatchingMessagePrefix != len(changedMessages) {
@@ -91,17 +91,17 @@ func TestModelInputCacheObservationLocatesFirstDivergence(t *testing.T) {
 }
 
 func TestModelInputLogMessageFingerprintsIdentifyContextState(t *testing.T) {
-	state := agent.UserMessage("state")
+	state := agentschema.UserMessage("state")
 	state.Extra = map[string]any{"agent.context_state": "v1"}
-	fingerprints := modelInputLogMessageFingerprints([]*agent.Message{agent.SystemMessage("system"), state})
+	fingerprints := modelInputLogMessageFingerprints([]*agentschema.Message{agentschema.SystemMessage("system"), state})
 	if len(fingerprints) != 2 || fingerprints[0].Component != "system_message" || fingerprints[1].Component != "context_state" {
 		t.Fatalf("message components = %#v", fingerprints)
 	}
 }
 
 func TestFirstModelInputDivergenceIdentifiesSystemSection(t *testing.T) {
-	previousMessages := modelInputLogMessageFingerprints([]*agent.Message{agent.SystemMessage("alpha"), agent.UserMessage("turn")})
-	currentMessages := modelInputLogMessageFingerprints([]*agent.Message{agent.SystemMessage("beta"), agent.UserMessage("turn")})
+	previousMessages := modelInputLogMessageFingerprints([]*agentschema.Message{agentschema.SystemMessage("alpha"), agentschema.UserMessage("turn")})
+	currentMessages := modelInputLogMessageFingerprints([]*agentschema.Message{agentschema.SystemMessage("beta"), agentschema.UserMessage("turn")})
 	previous := modelInputCacheBaseline{
 		CallID: "call-alpha", Messages: previousMessages,
 		SystemSections: []modelInputLogSystemSectionFingerprint{{ID: "workflow", Fingerprint: "alpha", Bytes: 5}},

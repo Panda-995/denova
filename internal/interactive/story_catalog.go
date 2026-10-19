@@ -37,6 +37,9 @@ func (s *Store) SelectStory(storyID string) error {
 		if story.ID != storyID {
 			continue
 		}
+		if story.Preview {
+			return fmt.Errorf("preview Stories are available only through their extension test journey")
+		}
 		if index.CurrentStoryID == storyID {
 			return nil
 		}
@@ -74,7 +77,14 @@ func (s *Store) CreateStory(req CreateStoryRequest) (StorySummary, error) {
 			return StorySummary{}, err
 		}
 	}
+	if err := validateStorySpeechSettings(req.SpeechSettings); err != nil {
+		return StorySummary{}, err
+	}
 	if err := validateStoryCheckSettings(req.CheckSettings); err != nil {
+		return StorySummary{}, err
+	}
+	presentationSettings, err := s.resolveStoryPresentationSettings(req.PresentationSettings, nil)
+	if err != nil {
 		return StorySummary{}, err
 	}
 	protagonist := normalizeStoryProtagonist(req.Protagonist)
@@ -84,24 +94,27 @@ func (s *Store) CreateStory(req CreateStoryRequest) (StorySummary, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	stateSchemaPolicy := cloneStoryStateSchemaPolicy(req.StateSchemaPolicy)
 	story := StorySummary{
-		ID:                 newID("st"),
-		Title:              title,
-		TitleSource:        titleSource,
-		Origin:             strings.TrimSpace(req.Origin),
-		Protagonist:        protagonist,
-		StoryTellerID:      strings.TrimSpace(req.StoryTellerID),
-		PlanningTemplateID: NormalizeGamePlanningTemplateID(req.PlanningTemplateID),
-		PlanningMode:       normalizeStoryPlanningMode(planningMode),
-		ModuleRefs:         cloneStoryDirectorModuleRefs(req.ModuleRefs),
-		ReplyTargetChars:   normalizeStoryReplyTargetChars(req.ReplyTargetChars),
-		ChoiceCount:        normalizeStoryChoiceCount(req.ChoiceCount),
-		Opening:            normalizeStoryOpeningConfig(req.Opening),
-		ImageSettings:      normalizeStoryImageSettings(req.ImageSettings),
-		CheckSettings:      normalizeStoryCheckSettings(req.CheckSettings),
-		StateSchemaPolicy:  cloneStoryStateSchemaPolicy(stateSchemaPolicy),
-		CreatedAt:          now,
-		UpdatedAt:          now,
-		Branches:           1,
+		Preview:              req.Preview,
+		ID:                   newID("st"),
+		Title:                title,
+		TitleSource:          titleSource,
+		Origin:               strings.TrimSpace(req.Origin),
+		Protagonist:          protagonist,
+		StoryTellerID:        strings.TrimSpace(req.StoryTellerID),
+		PlanningTemplateID:   NormalizeGamePlanningTemplateID(req.PlanningTemplateID),
+		PlanningMode:         normalizeStoryPlanningMode(planningMode),
+		ModuleRefs:           cloneStoryDirectorModuleRefs(req.ModuleRefs),
+		ReplyTargetChars:     normalizeStoryReplyTargetChars(req.ReplyTargetChars),
+		ChoiceCount:          normalizeStoryChoiceCount(req.ChoiceCount),
+		Opening:              normalizeStoryOpeningConfig(req.Opening),
+		ImageSettings:        normalizeStoryImageSettings(req.ImageSettings),
+		CheckSettings:        normalizeStoryCheckSettings(req.CheckSettings),
+		SpeechSettings:       normalizeStorySpeechSettings(req.SpeechSettings),
+		PresentationSettings: presentationSettings,
+		StateSchemaPolicy:    cloneStoryStateSchemaPolicy(stateSchemaPolicy),
+		CreatedAt:            now,
+		UpdatedAt:            now,
+		Branches:             1,
 	}
 	if err := validateStoryChoiceCount(story.ChoiceCount); err != nil {
 		return StorySummary{}, err
@@ -118,25 +131,28 @@ func (s *Store) CreateStory(req CreateStoryRequest) (StorySummary, error) {
 	}
 
 	meta := StoryMeta{
-		V:                  schemaVersion,
-		Type:               StoryEventTypeMeta,
-		StoryID:            story.ID,
-		Title:              story.Title,
-		TitleSource:        story.TitleSource,
-		Origin:             story.Origin,
-		Protagonist:        story.Protagonist,
-		StoryTellerID:      story.StoryTellerID,
-		PlanningTemplateID: story.PlanningTemplateID,
-		PlanningMode:       story.PlanningMode,
-		ModuleRefs:         cloneStoryDirectorModuleRefs(story.ModuleRefs),
-		ReplyTargetChars:   story.ReplyTargetChars,
-		ChoiceCount:        story.ChoiceCount,
-		Opening:            story.Opening,
-		ImageSettings:      story.ImageSettings,
-		CheckSettings:      story.CheckSettings,
-		StateSchemaPolicy:  cloneStoryStateSchemaPolicy(stateSchemaPolicy),
-		InitialTraitRolls:  append([]InitialActorTraitRoll(nil), req.InitialTraitRolls...),
-		CurrentBranch:      "main",
+		Preview:              req.Preview,
+		V:                    schemaVersion,
+		Type:                 StoryEventTypeMeta,
+		StoryID:              story.ID,
+		Title:                story.Title,
+		TitleSource:          story.TitleSource,
+		Origin:               story.Origin,
+		Protagonist:          story.Protagonist,
+		StoryTellerID:        story.StoryTellerID,
+		PlanningTemplateID:   story.PlanningTemplateID,
+		PlanningMode:         story.PlanningMode,
+		ModuleRefs:           cloneStoryDirectorModuleRefs(story.ModuleRefs),
+		ReplyTargetChars:     story.ReplyTargetChars,
+		ChoiceCount:          story.ChoiceCount,
+		Opening:              story.Opening,
+		ImageSettings:        story.ImageSettings,
+		CheckSettings:        story.CheckSettings,
+		SpeechSettings:       story.SpeechSettings,
+		PresentationSettings: NormalizeStoryPresentationSettings(story.PresentationSettings),
+		StateSchemaPolicy:    cloneStoryStateSchemaPolicy(stateSchemaPolicy),
+		InitialTraitRolls:    append([]InitialActorTraitRoll(nil), req.InitialTraitRolls...),
+		CurrentBranch:        "main",
 		Branches: map[string]BranchMeta{
 			"main": {CreatedAt: now},
 		},
@@ -246,7 +262,9 @@ func (s *Store) CreateStory(req CreateStoryRequest) (StorySummary, error) {
 	if err := writeJSONL(s.storyPath(story.ID), events); err != nil {
 		return StorySummary{}, err
 	}
-	index.CurrentStoryID = story.ID
+	if !story.Preview {
+		index.CurrentStoryID = story.ID
+	}
 	index.Stories = append(index.Stories, story)
 	if err := s.writeIndexLocked(index); err != nil {
 		return StorySummary{}, err
@@ -329,6 +347,18 @@ func (s *Store) UpdateStory(storyID string, req UpdateStoryRequest) (StorySummar
 	}
 	if req.ImageSettings != nil {
 		meta.ImageSettings = normalizeStoryImageSettings(*req.ImageSettings)
+	}
+	if req.PresentationSettings != nil {
+		meta.PresentationSettings, err = s.resolveStoryPresentationSettings(req.PresentationSettings, meta.PresentationSettings)
+		if err != nil {
+			return StorySummary{}, err
+		}
+	}
+	if req.SpeechSettings != nil {
+		if err := validateStorySpeechSettings(*req.SpeechSettings); err != nil {
+			return StorySummary{}, err
+		}
+		meta.SpeechSettings = normalizeStorySpeechSettings(*req.SpeechSettings)
 	}
 	if req.CheckSettings != nil {
 		if err := validateStoryCheckSettings(*req.CheckSettings); err != nil {
@@ -455,6 +485,12 @@ func storyConfigUpdatedFields(req UpdateStoryRequest) []string {
 	if req.ImageSettings != nil {
 		fields = append(fields, "image_settings")
 	}
+	if req.PresentationSettings != nil {
+		fields = append(fields, "presentation_settings")
+	}
+	if req.SpeechSettings != nil {
+		fields = append(fields, "speech_settings")
+	}
 	if req.CheckSettings != nil {
 		fields = append(fields, "check_settings")
 	}
@@ -492,8 +528,11 @@ func (s *Store) DeleteStory(storyID string) error {
 	index.Stories = next
 	if index.CurrentStoryID == storyID {
 		index.CurrentStoryID = ""
-		if len(index.Stories) > 0 {
-			index.CurrentStoryID = index.Stories[0].ID
+		for _, candidate := range index.Stories {
+			if !candidate.Preview {
+				index.CurrentStoryID = candidate.ID
+				break
+			}
 		}
 	}
 	if closeErr := s.evictStoryJournalLocked(storyID); closeErr != nil {

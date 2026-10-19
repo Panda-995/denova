@@ -1,0 +1,13 @@
+{
+  "errors.requestFailed": "The plugin request failed.",
+  "errors.notFound": "This plugin action is unavailable.",
+  "panel.title": "Draft workbench",
+  "panel.help": "This plugin owns the draft. Its panel and Agent tools share the saved content. Saving does not modify host documents.",
+  "input.text": "Text",
+  "panel.save": "Save draft",
+  "panel.reload": "Reload",
+  "command.echo": "Echo text",
+  "panel.done": "Done",
+  "panel.conflict": "Content changed elsewhere. Reload before saving.",
+  "panel.discard": "Discard unsaved content and reload?"
+}

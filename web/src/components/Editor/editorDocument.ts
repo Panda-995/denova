@@ -241,7 +241,9 @@ export function updateCharacterStats(
 }
 
 export function countTextCharacters(text: string) {
-  return Array.from(text.replace(/\s/g, '')).length
+  // Each whitespace unit is excluded; each valid surrogate pair counts once.
+  // Match only adjustments instead of allocating an array for every character.
+  return text.length - (text.match(/\s|[\ud800-\udbff][\udc00-\udfff]/g)?.length ?? 0)
 }
 
 /** 计算文档中某位置对应的行号（从 1 开始）。 */

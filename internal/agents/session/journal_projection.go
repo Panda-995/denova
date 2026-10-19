@@ -11,27 +11,21 @@ import (
 	"strings"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/internal/agents/conversationconfig"
 	"denova/internal/agents/conversationjournal"
+	externaljournal "denova/internal/agents/runtime/external/journal"
 	"denova/internal/agents/sessionjournal"
+
+	agenthistory "github.com/alfredxw/denova/agent/context/history"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 const (
-	sessionProjectionVersion      = 23
+	sessionProjectionVersion      = 29
 	sessionRecentTransactionLimit = 200
 	sessionRecentCommitLimit      = 200
 	sessionHistoryAnchorEvery     = 256
 )
-
-// historyAnchor maps a stable visible-history position to the physical
-// transaction containing the next row. Anchors contain no user content and
-// make backwards paging independent from the total journal size.
-type historyAnchor struct {
-	Before int                        `json:"before"`
-	Cursor conversationjournal.Cursor `json:"cursor"`
-}
 
 type messageLocator struct {
 	Index       int                        `json:"index"`
@@ -42,7 +36,7 @@ type messageLocator struct {
 type domainCommitLocator struct {
 	MessageIndex int                        `json:"message_index"`
 	Cursor       conversationjournal.Cursor `json:"cursor"`
-	Role         agent.RoleType             `json:"role"`
+	Role         agentschema.RoleType       `json:"role"`
 	Metadata     MessageMetadata            `json:"metadata"`
 	Hash         string                     `json:"hash"`
 }
@@ -81,24 +75,29 @@ type assistantTargetCheckpoint struct {
 // conversation index. It deliberately stores locators and current state only;
 // the canonical JSONL remains the sole source of transcript and display text.
 type sessionJournalProjection struct {
-	Version               int                        `json:"version"`
-	SessionID             string                     `json:"session_id"`
-	Generation            string                     `json:"generation"`
-	Title                 string                     `json:"title"`
-	CreatedAt             time.Time                  `json:"created_at"`
-	UpdatedAt             time.Time                  `json:"updated_at"`
-	MessageCount          int                        `json:"message_count"`
-	VisibleMessageCount   int                        `json:"visible_message_count"`
-	HistoryCount          int                        `json:"history_count"`
-	ClearAfter            int                        `json:"clear_after"`
-	ClearCursor           conversationjournal.Cursor `json:"clear_cursor,omitempty"`
-	ContextRevision       uint64                     `json:"context_revision"`
-	RuntimeConfig         *conversationconfig.Config `json:"runtime_config,omitempty"`
-	RuntimeConfigRevision uint64                     `json:"runtime_config_revision,omitempty"`
+	CanonicalCount        int                                   `json:"canonical_count"`
+	CanonicalPendingUser  bool                                  `json:"canonical_pending_user,omitempty"`
+	CanonicalAnchors      []canonicalAnchor                     `json:"canonical_anchors,omitempty"`
+	Version               int                                   `json:"version"`
+	SessionID             string                                `json:"session_id"`
+	Generation            string                                `json:"generation"`
+	Title                 string                                `json:"title"`
+	CreatedAt             time.Time                             `json:"created_at"`
+	UpdatedAt             time.Time                             `json:"updated_at"`
+	MessageCount          int                                   `json:"message_count"`
+	VisibleMessageCount   int                                   `json:"visible_message_count"`
+	HistoryCount          int                                   `json:"history_count"`
+	ClearAfter            int                                   `json:"clear_after"`
+	ClearCursor           conversationjournal.Cursor            `json:"clear_cursor,omitempty"`
+	ContextRevision       uint64                                `json:"context_revision"`
+	RuntimeConfig         *conversationconfig.Config            `json:"runtime_config,omitempty"`
+	RuntimeConfigRevision uint64                                `json:"runtime_config_revision,omitempty"`
+	PlatformRecords       map[string]conversationjournal.Cursor `json:"platform_records,omitempty"`
 
 	RecentCursors              []conversationjournal.Cursor                   `json:"recent_cursors,omitempty"`
 	MessageLocators            []messageLocator                               `json:"message_locators,omitempty"`
 	MessageTransactionLocators []messageLocator                               `json:"message_transaction_locators,omitempty"`
+	DisplayPatches             map[string][]conversationjournal.Location      `json:"display_patches,omitempty"`
 	HistoryAnchors             []historyAnchor                                `json:"history_anchors,omitempty"`
 	RecentCommits              []domainCommitLocator                          `json:"recent_commits,omitempty"`
 	RecentContextBatches       []contextBatchLocator                          `json:"recent_context_batches,omitempty"`
@@ -107,6 +106,7 @@ type sessionJournalProjection struct {
 	AssistantRuns              []assistantRunCheckpoint                       `json:"active_assistant_runs,omitempty"`
 	AssistantTargets           []assistantTargetCheckpoint                    `json:"active_assistant_targets,omitempty"`
 	AgentSessions              sessionjournal.Projection                      `json:"agent_sessions,omitempty"`
+	External                   externaljournal.Projection                     `json:"external_runtime,omitempty"`
 	ReleasedContextCompactions map[string]releasedContextCompactionProjection `json:"released_context_compactions,omitempty"`
 
 	expectedID         string
@@ -163,6 +163,9 @@ func (projection *sessionJournalProjection) Restore(data json.RawMessage) error 
 	if err := restored.AgentSessions.Normalize(); err != nil {
 		return err
 	}
+	if err := restored.External.Validate(); err != nil {
+		return err
+	}
 	if restored.ReleasedContextCompactions == nil {
 		restored.ReleasedContextCompactions = make(map[string]releasedContextCompactionProjection)
 	}
@@ -192,7 +195,46 @@ func (projection *sessionJournalProjection) Checkpoint() (json.RawMessage, error
 
 func (projection *sessionJournalProjection) Apply(record conversationjournal.Record) error {
 	projection.rememberCursor(record.Location.Cursor)
-	if handled, err := projection.AgentSessions.Apply(record.Payload); handled || err != nil {
+	if handled, err := projection.AgentSessions.Apply(record); handled || err != nil {
+		return err
+	}
+	if handled, err := projection.External.Apply(record); handled || err != nil {
+		if err == nil {
+			var external externaljournal.Record
+			if err := json.Unmarshal(record.Payload, &external); err != nil {
+				return err
+			}
+			if external.Kind == externaljournal.ToolStarted {
+				projection.rememberHistoryRow(record.Location)
+			}
+			if external.Kind == externaljournal.ToolFinished {
+				var finished externaljournal.FinishedTool
+				if err := json.Unmarshal(external.Data, &finished); err != nil {
+					return err
+				}
+				displayID := finished.ExecutionID
+				if projection.External.Operations[external.OperationID].Tools[finished.ExecutionID].Name == "ask" {
+					// QuestionRequest owns the same stable Ask display identity.
+					displayID = "ask-" + displayID
+				}
+				projection.rememberDisplayPatch("external-tool:"+displayID, record.Location)
+				if projection.CanonicalPendingUser {
+					projection.CanonicalCount++
+					projection.CanonicalPendingUser = false
+				}
+				projection.CanonicalCount += 2
+			}
+			if external.Kind == externaljournal.OperationClosed {
+				event, err := ExternalUsageDisplay(external)
+				if err != nil {
+					return err
+				}
+				if event != nil {
+					projection.rememberHistoryRow(record.Location)
+				}
+			}
+			projection.advanceUpdatedAt(external.CreatedAt)
+		}
 		return err
 	}
 	var typed struct {
@@ -205,6 +247,16 @@ func (projection *sessionJournalProjection) Apply(record conversationjournal.Rec
 		return projection.applyHeader(record.Payload)
 	}
 	switch typed.Type {
+	case platformRecordType:
+		value, err := decodePlatformRecord(record.Payload)
+		if err != nil {
+			return err
+		}
+		if projection.PlatformRecords == nil {
+			projection.PlatformRecords = map[string]conversationjournal.Cursor{}
+		}
+		projection.PlatformRecords[value.Key] = record.Location.Cursor
+		return nil
 	case "":
 		return projection.applyLegacyMessage(record)
 	case historyTypeMessage, historyTypeContextMessage:
@@ -217,9 +269,13 @@ func (projection *sessionJournalProjection) Apply(record conversationjournal.Rec
 			return err
 		}
 		projection.clearAssistantDigests()
-		projection.rememberHistoryRow(record.Location.Cursor, true)
+		projection.rememberHistoryRow(record.Location)
 		projection.ClearAfter = projection.MessageCount
 		projection.ClearCursor = record.Location.Cursor
+		projection.CanonicalCount = 0
+		projection.CanonicalPendingUser = false
+		projection.CanonicalAnchors = nil
+		projection.External.Reset()
 		clear(projection.ReleasedContextCompactions)
 		projection.advanceRevision(marker.ContextRevision)
 		projection.advanceUpdatedAt(marker.CreatedAt)
@@ -232,11 +288,11 @@ func (projection *sessionJournalProjection) Apply(record conversationjournal.Rec
 		if strings.TrimSpace(display.Role) == "" {
 			return fmt.Errorf("display record role is empty")
 		}
+		projection.rememberHistoryRow(record.Location)
 		projection.rememberAssistantDisplay(display)
-		projection.rememberHistoryRow(record.Location.Cursor, false)
 		projection.advanceUpdatedAt(display.CreatedAt)
 		return nil
-	case historyTypeSessionPatch:
+	case historyTypeSessionPatch, historyTypeRuntimePatch:
 		var patch sessionPatchRecord
 		if err := json.Unmarshal(record.Payload, &patch); err != nil {
 			return err
@@ -301,6 +357,7 @@ func (projection *sessionJournalProjection) Apply(record conversationjournal.Rec
 		if err := json.Unmarshal(record.Payload, &patch); err != nil {
 			return err
 		}
+		projection.rememberDisplayPatch(patch.TargetRecordID, record.Location)
 		projection.appendAssistantDisplayPatch(patch)
 		projection.advanceUpdatedAt(patch.CreatedAt)
 		return nil
@@ -356,6 +413,7 @@ func (projection *sessionJournalProjection) applyContextBatch(record conversatio
 		return fmt.Errorf("session context batch revision is not contiguous")
 	}
 	for index := range batch.Messages {
+		projection.rememberCanonicalMessage(&batch.Messages[index], record.Location, index)
 		projection.rememberMessage(record.Location, batch.Messages[index].Role, MessageMetadata{}, "")
 	}
 	projection.RecentContextBatches = append(projection.RecentContextBatches, contextBatchLocator{
@@ -430,21 +488,25 @@ func (projection *sessionJournalProjection) applyMessage(record conversationjour
 			return err
 		}
 	}
+	projection.rememberCanonicalMessage(&message.Message, record.Location, 0)
 	projection.rememberMessage(record.Location, message.Message.Role, metadata, commitHash)
 	if kind == historyTypeMessage {
 		projection.VisibleMessageCount++
 		visible := true
-		safeBoundary := message.Message.Role == agent.User
+		safeBoundary := message.Message.Role == agentschema.User
 		if safeBoundary {
 			projection.clearAssistantDigests()
-		} else if message.Message.Role == agent.Assistant && !metadata.SubAgent {
+		} else if message.Message.Role == agentschema.Assistant && !metadata.SubAgent {
 			visible = !projection.consumeCompleteAssistantRun(metadata.RunID, message.Message.Content)
 		}
 		if visible {
-			projection.rememberHistoryRow(record.Location.Cursor, safeBoundary)
+			projection.rememberHistoryRow(record.Location)
+		} else {
+			anchor := &projection.HistoryAnchors[len(projection.HistoryAnchors)-1]
+			anchor.Hidden = append(anchor.Hidden, hiddenHistoryRecord{Cursor: record.Location.Cursor, Index: record.Location.RecordIndex})
 		}
 	}
-	if projection.Title == defaultSessionTitle && message.Message.Role == agent.User && strings.TrimSpace(message.Message.Content) != "" {
+	if projection.Title == defaultSessionTitle && message.Message.Role == agentschema.User && strings.TrimSpace(message.Message.Content) != "" {
 		projection.Title = deriveTitle(message.Message.Content)
 	}
 	projection.advanceRevision(metadata.ContextRevision)
@@ -453,21 +515,22 @@ func (projection *sessionJournalProjection) applyMessage(record conversationjour
 }
 
 func (projection *sessionJournalProjection) applyLegacyMessage(record conversationjournal.Record) error {
-	var message agent.Message
+	var message agentschema.Message
 	if err := json.Unmarshal(record.Payload, &message); err != nil {
 		return err
 	}
 	if message.Role == "" && message.Content == "" && len(message.ToolCalls) == 0 {
 		return fmt.Errorf("legacy session message is empty")
 	}
+	projection.rememberCanonicalMessage(&message, record.Location, 0)
 	projection.rememberMessage(record.Location, message.Role, MessageMetadata{}, "")
 	projection.VisibleMessageCount++
-	safeBoundary := message.Role == agent.User
+	safeBoundary := message.Role == agentschema.User
 	if safeBoundary {
 		projection.clearAssistantDigests()
 	}
-	projection.rememberHistoryRow(record.Location.Cursor, safeBoundary)
-	if projection.Title == defaultSessionTitle && message.Role == agent.User && strings.TrimSpace(message.Content) != "" {
+	projection.rememberHistoryRow(record.Location)
+	if projection.Title == defaultSessionTitle && message.Role == agentschema.User && strings.TrimSpace(message.Content) != "" {
 		projection.Title = deriveTitle(message.Content)
 	}
 	projection.advanceRevision(0)
@@ -485,7 +548,7 @@ func (projection *sessionJournalProjection) rememberCursor(cursor conversationjo
 	}
 }
 
-func (projection *sessionJournalProjection) rememberMessage(location conversationjournal.Location, role agent.RoleType, metadata MessageMetadata, hash string) {
+func (projection *sessionJournalProjection) rememberMessage(location conversationjournal.Location, role agentschema.RoleType, metadata MessageMetadata, hash string) {
 	index := projection.MessageCount
 	projection.MessageCount++
 	locator := messageLocator{Index: index, Cursor: location.Cursor, RecordIndex: location.RecordIndex}
@@ -508,13 +571,6 @@ func (projection *sessionJournalProjection) rememberMessage(location conversatio
 	if overflow := len(projection.RecentCommits) - sessionRecentCommitLimit; overflow > 0 {
 		projection.RecentCommits = append([]domainCommitLocator(nil), projection.RecentCommits[overflow:]...)
 	}
-}
-
-func (projection *sessionJournalProjection) rememberHistoryRow(cursor conversationjournal.Cursor, safeBoundary bool) {
-	if len(projection.HistoryAnchors) == 0 || (safeBoundary && projection.HistoryCount-projection.HistoryAnchors[len(projection.HistoryAnchors)-1].Before >= sessionHistoryAnchorEvery) {
-		projection.HistoryAnchors = append(projection.HistoryAnchors, historyAnchor{Before: projection.HistoryCount, Cursor: cursor})
-	}
-	projection.HistoryCount++
 }
 
 func (projection *sessionJournalProjection) rememberAssistantDisplay(display displayRecord) {
@@ -724,4 +780,30 @@ func (projection *sessionJournalProjection) messageBaseForCursor(cursor conversa
 		}
 	}
 	return projection.MessageCount
+}
+
+func (projection *sessionJournalProjection) CurrentCheckpoint() (json.RawMessage, error) {
+	return projection.AgentSessions.CurrentCheckpoint()
+}
+
+// Anchors start where context-state ordering has no deferred user. External
+// tool starts have their own exact journal locators and can be read on demand.
+func (projection *sessionJournalProjection) rememberCanonicalMessage(message *agentschema.Message, location conversationjournal.Location, batchIndex int) {
+	contextState := agenthistory.IsContextStateMessage(message)
+	if projection.CanonicalPendingUser && !contextState {
+		projection.CanonicalCount++
+		projection.CanonicalPendingUser = false
+	}
+	if !projection.CanonicalPendingUser && (len(projection.CanonicalAnchors) == 0 || projection.CanonicalCount-projection.CanonicalAnchors[len(projection.CanonicalAnchors)-1].Index >= 256) {
+		projection.CanonicalAnchors = append(projection.CanonicalAnchors, canonicalAnchor{Index: projection.CanonicalCount, Cursor: location.Cursor, RecordIndex: location.RecordIndex, BatchIndex: batchIndex})
+	}
+	if message.Role == agentschema.User && !contextState {
+		projection.CanonicalPendingUser = true
+	} else {
+		projection.CanonicalCount++
+	}
+}
+
+func (projection *sessionJournalProjection) CurrentReadCursors() []conversationjournal.Cursor {
+	return projection.AgentSessions.CurrentReadCursors()
 }

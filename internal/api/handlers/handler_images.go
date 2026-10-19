@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"denova/internal/analytics"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
@@ -88,8 +89,10 @@ func (h *Handlers) HandleImageGenerate(ctx context.Context, c *app.RequestContex
 		writeErrorKey(c, consts.StatusBadRequest, "api.common.invalidRequestWithDetail", "detail", err.Error())
 		return
 	}
+	usageRun := h.app.Analytics().BeginRun(analytics.Image, analytics.Native, analytics.User)
 	result, err := h.app.Images().Generate(ctx, req)
 	if err != nil {
+		usageRun.Finish(analytics.Failure)
 		if err == novaApp.ErrNoWorkspace {
 			writeErrorKey(c, consts.StatusBadRequest, "api.settings.workspaceMissing")
 			return
@@ -97,5 +100,6 @@ func (h *Handlers) HandleImageGenerate(ctx context.Context, c *app.RequestContex
 		writeError(c, consts.StatusBadRequest, err.Error())
 		return
 	}
+	usageRun.Finish(analytics.Success)
 	writeJSON(c, consts.StatusOK, result)
 }

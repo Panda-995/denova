@@ -49,12 +49,6 @@ func PreserveStableLeadingMessage(messages []*agents.Message, content string) []
 	return agentcompaction.PreserveLeadingMessage(messages, content)
 }
 
-func interactiveCompactionResultForMessages(result agentcompaction.Result, messages []*agents.Message, tools []*agents.ToolInfo) agentcompaction.Result {
-	result = agentcompaction.RecalculateProjection(result, agentcontext.EstimateTokens(messages, tools))
-	result.MessageCountAfter = len(messages)
-	return result
-}
-
 func interactiveStoryContextSources(title, origin, protagonist string, teller teller.Definition, historyCheckpoint, branchPlan, residentLore, loreRevision, loreRuntime, ruleSummary, actorStateRuntime, stateSchemaInitialization string, turnHistory interactiveTurnHistory, userAction string) []interactiveContextSource {
 	parts := []interactiveContextSource{
 		{Source: "InteractiveStory", Title: "Story Title", Content: title, Note: "metadata_only", MetadataOnly: true},
@@ -83,10 +77,10 @@ func interactiveStoryContextSources(title, origin, protagonist string, teller te
 	if strings.TrimSpace(residentLore) != "" {
 		parts = append(parts, interactiveContextSource{
 			Source:  "ResidentLore",
-			Title:   "Enabled Resident Lore Content",
+			Title:   "Lore Index and Always-loaded Settings",
 			Purpose: "stable leading model context",
 			Content: residentLore,
-			Note:    fmt.Sprintf("complete=true; source=enabled resident lore; body_max_bytes=%d; revision=%s", lore.ResidentLoreSafetyMaxBytes, strings.TrimSpace(loreRevision)),
+			Note:    fmt.Sprintf("complete=true; source=lore index guide and enabled items; context_max_bytes=%d; revision=%s", lore.IndexContextMaxBytes, strings.TrimSpace(loreRevision)),
 			Limit:   interactiveResidentLoreMessageMaxBytes,
 		})
 	}
@@ -116,12 +110,6 @@ func interactiveStoryContextSources(title, origin, protagonist string, teller te
 		parts = append(parts, interactiveContextSource{
 			Source: "StoryMeta.state_schema_policy", Title: "Opening State Schema Contract", Purpose: "opening-only schema initialization protocol",
 			Content: stateSchemaInitialization, Note: "source=story policy + initialization status; bounded", Limit: StoryRuntimeContextMaxBytes,
-		})
-	}
-	if strings.TrimSpace(turnHistory.PreviousSummary) != "" {
-		parts = append(parts, interactiveContextSource{
-			Source: "HistoricalTurn", Title: fmt.Sprintf("Earlier %d-Turn History Checkpoint", turnHistory.PreviousCount),
-			Content: turnHistory.PreviousSummary, Note: "compressed", Limit: StoryRuntimeContextMaxBytes,
 		})
 	}
 	for i, turn := range turnHistory.Turns {

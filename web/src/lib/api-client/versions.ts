@@ -31,9 +31,10 @@ export async function createVersion(projectId: string, message = ''): Promise<Ve
   })
 }
 
-export async function getVersionDiff(projectId: string, id: string, path?: string, comparison: VersionDiffComparison = 'workspace'): Promise<VersionDiff> {
+export async function getVersionDiff(projectId: string, id: string, path?: string, comparison: VersionDiffComparison = 'workspace', view: 'all' | 'initial' = 'all'): Promise<VersionDiff> {
   const query = new URLSearchParams({ comparison })
   if (path) query.set('path', path)
+  if (view === 'initial') query.set('view', view)
   return requestJSON(`${projectAPIPath(projectId, `versions/${encodeURIComponent(id)}/diff`)}?${query.toString()}`)
 }
 

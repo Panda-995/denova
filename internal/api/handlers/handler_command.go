@@ -30,15 +30,6 @@ func (h *Handlers) HandleCommand(ctx context.Context, c *app.RequestContext) {
 	var result string
 	localizer := requestLocalizer(c)
 	switch cmd {
-	case "clear":
-		if !h.requireWorkspace(c) {
-			return
-		}
-		if err := h.app.ClearSession(); err != nil {
-			result = localizer.T("api.command.clearFailed", "detail", err.Error())
-		} else {
-			result = localizer.T("api.command.cleared")
-		}
 	case "compact":
 		if !h.requireWorkspace(c) {
 			return
@@ -46,8 +37,10 @@ func (h *Handlers) HandleCommand(ctx context.Context, c *app.RequestContext) {
 		compaction, err := h.app.CompactContext(ctx)
 		if err != nil {
 			result = localizer.T("api.command.compactFailed", "detail", err.Error())
+		} else if compaction.RuntimeManaged {
+			result = localizer.T("api.command.runtimeCompacted")
 		} else {
-			result = localizer.T("api.command.compacted", "epoch", compaction.Epoch, "before", compaction.TokensBefore, "after", compaction.TokensAfter)
+			result = localizer.T("api.command.compacted", "epoch", compaction.Revision, "before", compaction.TokensBefore, "after", compaction.TokensAfter)
 		}
 	case "status":
 		if !h.requireWorkspace(c) {

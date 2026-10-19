@@ -2,8 +2,6 @@ package tools
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -11,14 +9,16 @@ import (
 	"strings"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
+	"denova/internal/assetstore"
 	"denova/internal/book"
 	booklore "denova/internal/book/lore"
 	imageasset "denova/internal/image/asset"
 	imagegen "denova/internal/image/generation"
 	imageprompting "denova/internal/image/prompting"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 const (
@@ -36,20 +36,21 @@ const (
 const GenerateImageToolName = generateImageToolName
 
 type generateImageInput struct {
-	Purpose      string `json:"purpose,omitempty" jsonschema:"description=Image purpose. Leave empty or use general for ordinary images; use chapter_illustration for chapter art; use interactive_image for interactive art; use book_cover for the canonical book cover; use lore_item for one lore item."`
-	TargetPath   string `json:"target_path,omitempty" jsonschema:"description=Related workspace-relative path. For chapter illustrations, provide a chapter path such as chapters/001.md; ordinary images may omit it."`
-	LoreItemID   string `json:"lore_item_id,omitempty" jsonschema:"description=Exact lore item ID; required only when purpose=lore_item."`
-	StoryID      string `json:"story_id,omitempty" jsonschema:"description=Story ID for an interactive image; provide only when purpose=interactive_image."`
-	BranchID     string `json:"branch_id,omitempty" jsonschema:"description=Branch ID for an interactive image; provide only when purpose=interactive_image."`
-	TurnID       string `json:"turn_id,omitempty" jsonschema:"description=Turn ID for an interactive image; provide only when purpose=interactive_image."`
-	Prompt       string `json:"prompt" jsonschema:"required,description=Complete visual prompt for the image model, including subject, scene, composition, style, lighting, mood, and text or watermarks to avoid."`
-	AltText      string `json:"alt_text,omitempty" jsonschema:"description=Markdown image alt text; generated from the chapter name when omitted."`
-	N            int    `json:"n,omitempty" jsonschema:"description=Number of images. Ordinary images accept 1 to 10; chapter illustrations and interactive images always generate one."`
-	Size         string `json:"size,omitempty" jsonschema:"description=Optional image dimensions such as 1024x1024. Support depends on the selected provider."`
-	AspectRatio  string `json:"aspect_ratio,omitempty" jsonschema:"description=Optional aspect ratio such as 1:1, 16:9, or 9:16. The provider chooses the nearest supported ratio when needed."`
-	Resolution   string `json:"resolution,omitempty" jsonschema:"description=Optional provider resolution tier such as 1K or 2K."`
-	Quality      string `json:"quality,omitempty" jsonschema:"description=Optional image quality, such as auto, standard, hd, low, medium, or high."`
-	OutputFormat string `json:"output_format,omitempty" jsonschema:"description=Optional output format: png, jpeg, or webp."`
+	Purpose      string               `json:"purpose,omitempty" jsonschema:"description=Image purpose. Leave empty or use general for ordinary images; use chapter_illustration for chapter art; use interactive_image for interactive art; use book_cover for the canonical book cover; use lore_item for one lore item."`
+	TargetPath   string               `json:"target_path,omitempty" jsonschema:"description=Related workspace-relative path. For chapter illustrations, provide a chapter path such as chapters/001.md; ordinary images may omit it."`
+	LoreItemID   string               `json:"lore_item_id,omitempty" jsonschema:"description=Exact lore item ID; required only when purpose=lore_item."`
+	LoreCover    booklore.CoverPolicy `json:"lore_cover,omitempty" jsonschema:"enum=if_missing,description=Only for purpose=lore_item. Use if_missing when the user requests a cover: attach the generated image and set it as cover only if the item still has no cover. Omit to preserve the cover. Existing images and text are always retained."`
+	StoryID      string               `json:"story_id,omitempty" jsonschema:"description=Story ID for an interactive image; provide only when purpose=interactive_image."`
+	BranchID     string               `json:"branch_id,omitempty" jsonschema:"description=Branch ID for an interactive image; provide only when purpose=interactive_image."`
+	TurnID       string               `json:"turn_id,omitempty" jsonschema:"description=Turn ID for an interactive image; provide only when purpose=interactive_image."`
+	Prompt       string               `json:"prompt" jsonschema:"required,description=Complete visual prompt for the image model, including subject, scene, composition, style, lighting, mood, and text or watermarks to avoid."`
+	AltText      string               `json:"alt_text,omitempty" jsonschema:"description=Markdown image alt text; generated from the chapter name when omitted."`
+	N            int                  `json:"n,omitempty" jsonschema:"description=Number of images. Ordinary images accept 1 to 10; chapter illustrations and interactive images always generate one."`
+	Size         string               `json:"size,omitempty" jsonschema:"description=Optional image dimensions such as 1024x1024. Support depends on the selected provider."`
+	AspectRatio  string               `json:"aspect_ratio,omitempty" jsonschema:"description=Optional aspect ratio such as 1:1, 16:9, or 9:16. The provider chooses the nearest supported ratio when needed."`
+	Resolution   string               `json:"resolution,omitempty" jsonschema:"description=Optional provider resolution tier such as 1K or 2K."`
+	Quality      string               `json:"quality,omitempty" jsonschema:"description=Optional image quality, such as auto, standard, hd, low, medium, or high."`
+	OutputFormat string               `json:"output_format,omitempty" jsonschema:"description=Optional output format: png, jpeg, or webp."`
 }
 
 type generatedImageToolResult struct {
@@ -122,51 +123,51 @@ type generatedImageReceiptFile struct {
 	SizeBytes int    `json:"size_bytes,omitempty"`
 }
 
-func newIllustrationTools(cfg *config.Config) ([]agent.ToolDefinition, error) {
+func newIllustrationTools(cfg *config.Config) ([]agenttool.ToolDefinition, error) {
 	if cfg == nil {
 		return nil, nil
 	}
 	workspace := strings.TrimSpace(cfg.Workspace)
 	description := imageprompting.Append(
-		"Generate images with the selected image-provider profile and save them to the workspace. Ordinary images go to assets/image/generated/. With purpose=chapter_illustration, generate one spoiler-free illustration from the chapter at target_path and save it under assets/illustrations/. With purpose=interactive_image, story_id, branch_id, and turn_id are required. With purpose=book_cover, replace the canonical book cover. With purpose=lore_item, lore_item_id is required and the generated asset is attached to that exact item. Provider-specific options are validated by the configured adapter. The `prompt` argument must be the complete final prompt for the image model. Denova forwards it unchanged and does not add a negative prompt. Generate each requested lore item with a separate tool call so failures remain independent.",
+		"Generate images with the selected image-provider profile and save them to the workspace. Ordinary images go to assets/writing/. With purpose=chapter_illustration, generate one spoiler-free illustration from the chapter at target_path and save it under assets/writing/. With purpose=interactive_image, story_id, branch_id, and turn_id are required. With purpose=book_cover, replace the canonical book cover. With purpose=lore_item, lore_item_id is required and the generated asset is attached to that exact item. Provider-specific options are validated by the configured adapter. The `prompt` argument must be the complete final prompt for the image model. Denova forwards it unchanged and does not add a negative prompt. Generate each requested lore item with a separate tool call so failures remain independent.",
 		imageprompting.ToolPromptContext(cfg),
 		imageprompting.SelectedGuide(cfg),
 	)
-	generateTool, err := agent.InferTool(generateImageToolName, description, func(ctx context.Context, input generateImageInput) (agent.ToolResult, error) {
+	generateTool, err := agenttool.InferTool(generateImageToolName, description, func(ctx context.Context, input generateImageInput) (agentschema.ToolResult, error) {
 		if workspace == "" {
-			return agent.ToolResult{}, fmt.Errorf("cannot generate an image because the current workspace is unavailable")
+			return agentschema.ToolResult{}, fmt.Errorf("cannot generate an image because the current workspace is unavailable")
 		}
 		bookService := book.NewService(workspace)
 		result, err := generateImageForTool(ctx, cfg, bookService, input)
 		if err != nil {
-			return agent.ToolResult{}, err
+			return agentschema.ToolResult{}, err
 		}
 		return newGeneratedImageToolResult(result)
 	})
 	if err != nil {
 		return nil, err
 	}
-	definedGenerateTool, err := defineTool(generateTool, workspaceWriteDescriptor(ToolSourceImage, config.AgentToolImageGeneration, agent.ToolRecoveryNonIdempotent))
+	definedGenerateTool, err := defineTool(generateTool, workspaceWriteDescriptor(ToolSourceImage, config.AgentToolImageGeneration, agenttool.ToolRecoveryNonIdempotent))
 	if err != nil {
 		return nil, err
 	}
-	return []agent.ToolDefinition{definedGenerateTool}, nil
+	return []agenttool.ToolDefinition{definedGenerateTool}, nil
 }
 
-func newGeneratedImageToolResult(value any) (agent.ToolResult, error) {
+func newGeneratedImageToolResult(value any) (agentschema.ToolResult, error) {
 	content, err := json.Marshal(value)
 	if err != nil {
-		return agent.ToolResult{}, fmt.Errorf("encode generated image result: %w", err)
+		return agentschema.ToolResult{}, fmt.Errorf("encode generated image result: %w", err)
 	}
 	receipt, target, err := generatedImageReceipt(value)
 	if err != nil {
-		return agent.ToolResult{}, err
+		return agentschema.ToolResult{}, err
 	}
 	details, err := json.Marshal(receipt)
 	if err != nil {
-		return agent.ToolResult{}, fmt.Errorf("encode generated image receipt: %w", err)
+		return agentschema.ToolResult{}, fmt.Errorf("encode generated image receipt: %w", err)
 	}
-	result := agent.TextToolResult(string(content))
+	result := agentschema.TextToolResult(string(content))
 	result.Details = details
 	result.Metadata.Target = target
 	return result, nil
@@ -212,7 +213,7 @@ func generatedImageReceipt(value any) (generatedImageReceiptDetails, string, err
 			Path: result.ImagePath, MetaPath: result.MetaPath, Markdown: result.Markdown,
 			AltText: result.AltText, MIMEType: result.MIMEType, SizeBytes: result.SizeBytes,
 		}}
-		return receipt, result.MetaPath, nil
+		return receipt, result.ImagePath, nil
 	case imageasset.InteractiveResult:
 		receipt.ResultSchema = result.Schema
 		receipt.Purpose = generateImagePurposeInteractiveImage
@@ -230,7 +231,7 @@ func generatedImageReceipt(value any) (generatedImageReceiptDetails, string, err
 			Path: result.ImagePath, MetaPath: result.MetaPath, AltText: result.AltText,
 			MIMEType: result.MIMEType, SizeBytes: result.SizeBytes,
 		}}
-		return receipt, result.MetaPath, nil
+		return receipt, result.ImagePath, nil
 	case imageasset.CoverResult:
 		receipt.ResultSchema = result.Schema
 		receipt.Purpose = generateImagePurposeBookCover
@@ -247,7 +248,7 @@ func generatedImageReceipt(value any) (generatedImageReceiptDetails, string, err
 		receipt.Images = []generatedImageReceiptFile{{
 			Path: result.CoverPath, MetaPath: result.MetaPath, MIMEType: result.MIMEType, SizeBytes: result.SizeBytes,
 		}}
-		return receipt, result.MetaPath, nil
+		return receipt, result.SourcePath, nil
 	default:
 		return generatedImageReceiptDetails{}, "", fmt.Errorf("unsupported generated image result %T", value)
 	}
@@ -296,6 +297,9 @@ func generateImageForTool(ctx context.Context, cfg *config.Config, bookService *
 }
 
 func generateLoreImageForTool(ctx context.Context, cfg *config.Config, bookService *book.Service, input generateImageInput) (generatedImageToolResult, error) {
+	if input.LoreCover != booklore.CoverPreserve && input.LoreCover != booklore.CoverIfMissing {
+		return generatedImageToolResult{}, fmt.Errorf("unsupported lore_cover: %s", input.LoreCover)
+	}
 	itemID := strings.TrimSpace(input.LoreItemID)
 	if itemID == "" {
 		return generatedImageToolResult{}, fmt.Errorf("lore_item_id is required when purpose=lore_item")
@@ -312,7 +316,8 @@ func generateLoreImageForTool(ctx context.Context, cfg *config.Config, bookServi
 	if err != nil {
 		return generatedImageToolResult{}, err
 	}
-	if _, err := store.SetImage(item.ID, &generated); err != nil {
+	if _, err := store.AppendImageWithCover(item.ID, &generated, input.LoreCover); err != nil {
+		imageasset.DiscardUnlinkedLore(ctx, store, generated)
 		return generatedImageToolResult{}, err
 	}
 	return generatedImageToolResult{
@@ -393,8 +398,8 @@ func persistGeneratedImages(bookService *book.Service, input generateImageInput,
 		if result.OutputFormat == "" {
 			result.OutputFormat = ext
 		}
-		imagePath := generatedToolImagePath(createdAt, index, ext)
-		if err := bookService.WriteBinaryFile(imagePath, image.Data); err != nil {
+		imagePath := assetstore.NewPath(assetstore.Writing, ext)
+		if err := assetstore.Save(context.Background(), bookService.Workspace(), assetstore.File{Path: imagePath, Data: image.Data}); err != nil {
 			message := fmt.Sprintf("Failed to save generated image: %v", err)
 			result.Failures = append(result.Failures, generatedImageToolFailure{
 				Index: index, Path: imagePath, Code: "save_failed", Message: message,
@@ -493,6 +498,9 @@ func parseGeneratedImageToolTarget(toolName, content string) string {
 	}
 	var receipt generatedImageReceiptDetails
 	if err := json.Unmarshal([]byte(body), &receipt); err == nil && receipt.Schema == generatedImageReceiptSchema {
+		if receipt.ResultSchema == imageasset.CoverResultSchema {
+			return strings.TrimSpace(receipt.SourcePath)
+		}
 		if len(receipt.Images) == 0 {
 			return ""
 		}
@@ -642,23 +650,6 @@ func normalizeGeneratedImageExtension(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func generatedToolImagePath(createdAt time.Time, index int, extension string) string {
-	return filepath.ToSlash(filepath.Join(
-		"assets",
-		"image",
-		"generated",
-		fmt.Sprintf("%s-%s-%02d.%s", createdAt.Format("20060102-150405"), imageToolRandomSuffix(), index+1, extension),
-	))
-}
-
-func imageToolRandomSuffix() string {
-	var buf [4]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(buf[:])
 }
 
 func escapeGeneratedImageAlt(text string) string {

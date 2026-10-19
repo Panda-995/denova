@@ -3,6 +3,7 @@
 package conversationapp
 
 import (
+	"context"
 	"denova/config"
 	"denova/internal/agents/execution"
 	"denova/internal/agents/prompts"
@@ -15,6 +16,9 @@ import (
 // replace Config and IDETeller in the returned value but never re-resolves host
 // state, preserving one project generation throughout admission.
 type Runtime struct {
+	// PageInstructions is supplied by the application host, never by a plugin frame.
+	PageInstructions func(context.Context, string, string, string) (string, error)
+
 	ProjectID        string
 	ProjectType      projectdomain.Type
 	ProjectStore     string

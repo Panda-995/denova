@@ -2,8 +2,9 @@ package interactive
 
 import (
 	"fmt"
-	agent "github.com/alfredxw/denova/agent"
 	"strings"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 // ResolvedPlayerInputContext is the durable model-history record for an older
@@ -124,7 +125,7 @@ func normalizePlayerInputAcceptedEvent(event PlayerInputAcceptedEvent) (PlayerIn
 		V: event.V, Type: StoryEventTypePlayerInput,
 		ID: deterministicPlayerInputID(identity), ParentID: strings.TrimSpace(event.ParentID),
 		BranchID: canonical.BranchID, Ts: strings.TrimSpace(event.Ts), Text: canonical.Text,
-		Attachments: append([]agent.Attachment(nil), canonical.Attachments...), ContextOnly: canonical.ContextOnly,
+		Attachments: append([]agentschema.Attachment(nil), canonical.Attachments...), ContextOnly: canonical.ContextOnly,
 		AcceptedTurnCount: event.AcceptedTurnCount,
 		AgentCommandID:    identity.CommandID, AgentOperationID: identity.OperationID,
 		AgentCycle: identity.Cycle, AgentCommitHash: canonical.Hash,

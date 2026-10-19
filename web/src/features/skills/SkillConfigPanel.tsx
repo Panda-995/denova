@@ -13,7 +13,7 @@ import { isRevisionConflict, saveWithRevisionRecovery } from '@/lib/revision-con
 import { rebaseTextWithRecovery } from '@/lib/autosave/rebase-with-recovery'
 import { SkillAgentSelector, SkillClassificationFields } from './skill-form-fields'
 import { SkillIdentityFields } from './SkillIdentityFields'
-import { parseAgentKeys, skillFilePath, skillNamePattern, updateSkillConfigContent } from './skill-utils'
+import { isValidSkillName, parseAgentKeys, skillFilePath, updateSkillConfigContent } from './skill-utils'
 
 interface SkillConfigPanelProps {
   target: SkillCatalogTarget
@@ -68,7 +68,7 @@ export const SkillConfigPanel = forwardRef<SkillConfigPanelHandle, SkillConfigPa
   const [savingIdentity, setSavingIdentity] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const trimmedName = name.trim()
-  const invalidName = trimmedName !== '' && !skillNamePattern.test(trimmedName)
+  const invalidName = trimmedName !== '' && !isValidSkillName(trimmedName)
   const trimmedDescription = description.trim()
   const targetName = trimmedName || document.name
   const targetPath = skillFilePath(scopes.find((item) => item.scope === scope), targetName)
@@ -153,7 +153,7 @@ export const SkillConfigPanel = forwardRef<SkillConfigPanelHandle, SkillConfigPa
 
   const applyIdentityChange = async () => {
     if (!document.editable || !identityChanged) return
-    if (!skillNamePattern.test(trimmedName)) {
+    if (!isValidSkillName(trimmedName)) {
       setError(t('skills.create.invalidName'))
       return
     }

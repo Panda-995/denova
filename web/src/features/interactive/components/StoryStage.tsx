@@ -1,34 +1,42 @@
+import { visibleStoryPresentation } from '../presentation'
+import { Eye, EyeOff, Maximize2, Square } from 'lucide-react'
+import { StoryStageArtwork } from './story-stage/StoryStageArtwork'
+import { useGameStories } from '@/features/platform/game-story-context'
+import { GameStorySetup } from '@/features/platform/GameStorySetup'
+import { useStorySpeech } from '../use-story-speech'
+import { useImageModelConfigured } from '@/features/settings/use-image-model-configured'
+import { SpeechPlayback } from '@/features/speech/SpeechPlayback'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
 import { LoadingState } from '@/components/common/LoadingState'
 import { Button } from '@/components/ui/button'
+import { AgentTaskControls } from '@/components/Chat/AgentTaskControls'
 import { CONTEXT_ANALYSIS_SIMULATED_MESSAGE } from '@/components/Chat/ContextAnalysisDialog'
 import { MessageList, type TurnScrollRequest } from '@/components/Chat/MessageList'
 import { AgentSubAgentSessionPanel } from '@/components/Chat/AgentSubAgentSessionPanel'
+import { useToolNavigation } from '@/components/Chat/tool-navigation'
 import type { ComposerTokenInputHandle, ComposerTokenSpec, ComposerTrigger } from '@/components/Chat/composer-token-input'
 import type { ContextAnalysis } from '@/lib/api'
 import type { AgentUIMessage } from '@/lib/agent-ui'
 import { agentMessageDisplayText, createAgentDataMessage } from '@/lib/agent-ui-message'
-import { agentSubAgentSessionKey, agentViewContent, type AgentMessageView } from '@/lib/agent-message-view'
+import { agentSubAgentSessionKey, agentViewContent, agentViewAskID, agentViewAskInteraction, type AgentMessageView } from '@/lib/agent-message-view'
 import { useSkillCommands } from '@/hooks/useSkillCommands'
 import { useConversationConfig } from '@/features/conversation-config/use-conversation-config'
 import type { ConversationConfigBinding, ConversationConfigChanges } from '@/features/conversation-config/types'
-import { useConversationGoal } from '@/features/agent-goal/use-conversation-goal'
-import { analyzeInteractiveContext, getInteractiveHistoryPage, removeInteractiveContextCompaction, switchInteractiveTurnVersion, updateInteractiveTurnNarrative } from '../api'
+import { supportsRuntimeOperation } from '@/features/conversation-config/types'
+import { analyzeInteractiveContext, getActiveInteractiveChat, getInteractiveHistoryPage, removeInteractiveContextCompaction, resolveInteractiveAsk, switchInteractiveTurnVersion, updateInteractiveTurnNarrative } from '../api'
 import { sanitizeStoredNarrative } from '../stream-parser'
 import { emptyStoryStageRun, useInteractiveStore } from '../stores/interactive-store'
 import type { StoryStageRunState } from '../stores/interactive-store'
 import { useInteractiveAgentCommands, type StoryStageRuntimeUpdater } from '../use-interactive-agent-commands'
-import { DEFAULT_NARRATIVE_STYLE_ID } from '../narrative-style'
 import { StoryStageControls } from './story-stage/StoryStageControls'
 import { NewStorySetupPanel } from './NewStorySetupPanel'
 import { TurnNavigator } from './TurnNavigator'
 import { DEFAULT_STORY_STATE_DISPLAY, type StoryStateDisplayPreference } from './story-state/display-preference'
 import { StoryStateLedger } from './story-state/StoryStateLedger'
+import { StateDetailsDialog } from './story-state/StateDetailsDialog'
 import { buildStoryStateModel } from './story-state/model'
-import { storyRuleVisibilityMode } from './story-stage/rule-roll'
 import { useStagePreferences } from './story-stage/use-stage-preferences'
 import { parseInlineStyleScenes, storyStageSnapshotKey } from './story-stage/utils'
 import { useLiveMessageAccumulator } from './story-stage/use-live-message-accumulator'
@@ -37,19 +45,24 @@ import { useStoryHistoryWindow } from './story-stage/use-story-history-window'
 import { useStoryImages } from './story-stage/use-story-images'
 import { useStoryStageRuntime } from './story-stage/use-story-stage-runtime'
 import { StoryStageComposer } from './story-stage/StoryStageComposer'
+import { StoryOpeningSummary } from './story-stage/StoryOpeningSummary'
 import { StoryStageHeader } from './story-stage/StoryStageHeader'
 import { buildStoryStageCommandMenu } from './story-stage/story-stage-commands'
 import { branchCreationSourceFromMessage, branchCreationSourceFromTurn } from './branching/model'
 import type { StoryStageProps } from './story-stage/story-stage-props'
 import { useIsMobile } from '@/hooks/useIsMobile'
-import type { InputAreaSendOptions } from '@/components/Chat/InputArea'
 
 const DEFAULT_READING_FONT_SIZE = 18
 const EMPTY_STAGE_RUN = emptyStoryStageRun()
 
-export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], stories = [], story, tellers = [], planningTemplates = [], imagePresets = [], recentNarrativeStyleID = DEFAULT_NARRATIVE_STYLE_ID, narrativeStyleLoading = false, storyId, branchId, snapshot, snapshotLoading = false, loreItems = [], bookOpeningPresets = [], directorPanelVisible = true, stateDisplayPreference = DEFAULT_STORY_STATE_DISPLAY, onStorySelect = noop, onStoryCreate = noop, onStorySetupUpdate = noop, onNarrativeStyleChange, onStoryDelete = noop, onStoryRename, onRequestLoreInit, onOpenDirectorConfig, onToggleDirectorPanel, onOpenDirectorState, onRequestCreateBranch, onStateDisplayPreferenceChange = noopStateDisplayPreferenceChange, onTurnPersisted = noopTurnPersisted, onDone }: StoryStageProps) {
+export function StoryStage({ active = true, projectId, workspace, styleSceneSuggestions = [], stories = [], story, tellers = [], planningTemplates = [], imagePresets = [], storyId, branchId, snapshot, snapshotLoading = false, loreItems = [], bookOpeningPresets = [], directorPanelVisible = true, stateDisplayPreference = DEFAULT_STORY_STATE_DISPLAY, onStorySelect = noop, onStoryCreate = noop, onStorySetupUpdate = noop, onStoryDelete = noop, onStoryRename, onRequestLoreInit, onOpenDirectorConfig, onToggleDirectorPanel, onRequestCreateBranch, onStateDisplayPreferenceChange = noopStateDisplayPreferenceChange, onTurnPersisted = noopTurnPersisted, onDone }: StoryStageProps) {
+  const navigation = useToolNavigation()
   const { t } = useTranslation()
-  const [creatingStory, setCreatingStory] = useState(false)
+  const gameStories = useGameStories()
+  const [localCreating, setLocalCreating] = useState(false)
+  const creatingStory = gameStories?.creating ?? localCreating
+  const setCreatingStory = gameStories?.setCreating ?? setLocalCreating
+  const imageConfigured = useImageModelConfigured(projectId)
   const conversationBinding = useMemo<ConversationConfigBinding | undefined>(() => storyId ? {
     mode: 'interactive', project_id: projectId, story_id: storyId,
     branch_id: branchId || snapshot?.branch_id || 'main',
@@ -62,13 +75,14 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
   const isMobile = useIsMobile()
   const storyStateModel = useMemo(() => buildStoryStateModel(snapshot), [snapshot])
   const [input, setInput] = useState('')
-  const [goalMode, setGoalMode] = useState(false)
   const [styleScenes, setStyleScenes] = useState<string[]>([])
   const [styleSceneQuery, setStyleSceneQuery] = useState<string | null>(null)
   const [showSkillCommands, setShowSkillCommands] = useState(false)
   const [skillCommandQuery, setSkillCommandQuery] = useState<string | null>(null)
   const [activeSkillCommandIndex, setActiveSkillCommandIndex] = useState(0)
   const [inputFloatHeight, setInputFloatHeight] = useState(0)
+  const [messageScroller, setMessageScroller] = useState<HTMLElement | null>(null)
+  const [scrollbarWidth, setScrollbarWidth] = useState(0)
   const inputRef = useRef<ComposerTokenInputHandle | null>(null)
   const inputFloatRef = useRef<HTMLDivElement | null>(null)
   const skillCommands = useSkillCommands({
@@ -77,21 +91,22 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
   })
   const snapshotKey = storyStageSnapshotKey(storyId, branchId, snapshot)
   const stageKey = `${workspace || 'current'}:${storyId || 'none'}:${branchId || snapshot?.branch_id || 'main'}`
-  const { displaySnapshot, historyWindow, prependPage: prependHistoryPage, resetToLatest: resetHistoryToLatest } = useStoryHistoryWindow(stageKey, snapshot)
+  const { displaySnapshot, historyWindow, prependPage: prependHistoryPage, resetToLatest: resetHistoryToLatest, loadExecutionDetails } = useStoryHistoryWindow(stageKey, snapshot)
+  const speech = useStorySpeech({ owner: stageKey, story, snapshot: displaySnapshot, active })
   const [historyLoading, setHistoryLoading] = useState(false)
+  const historyStageRef = useRef(stageKey)
+  useEffect(() => {
+    historyStageRef.current = stageKey
+    setHistoryLoading(false)
+  }, [stageKey])
   const stageRun = useInteractiveStore((state) => state.storyStageRuns[stageKey] || EMPTY_STAGE_RUN)
   const setStoryStageRun = useInteractiveStore((state) => state.setStoryStageRun)
   const clearStoryStageRun = useInteractiveStore((state) => state.clearStoryStageRun)
   const streaming = stageRun.streaming
-  const conversationGoal = useConversationGoal(conversationBinding, streaming)
   const activityContent = stageRun.activityContent
   const liveMessages = stageRun.liveMessages
   const rewindTurnId = stageRun.rewindTurnId
   const branchTerminal = snapshot?.current_turn?.terminal_outcome?.terminal === true
-  const publicRuleRollVisible = useMemo(
-	() => storyRuleVisibilityMode(story) === 'public_roll',
-	[story],
-  )
   const [replyEditTarget, setReplyEditTarget] = useState<{
     turnId: string
     branchId: string
@@ -112,11 +127,18 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
   const [contextAnalysis, setContextAnalysis] = useState<ContextAnalysis | null>(null)
   const [activeSubAgentSessionKey, setActiveSubAgentSessionKey] = useState('')
   const [activeTurnAnchorId, setActiveTurnAnchorId] = useState('')
+  const [textHidden, setTextHidden] = useState(false)
+  useEffect(() => setTextHidden(false), [stageKey])
+  useEffect(() => {
+    if (!textHidden) return
+    const restore = (event: KeyboardEvent) => { if (event.key === 'Escape') setTextHidden(false) }
+    window.addEventListener('keydown', restore)
+    return () => window.removeEventListener('keydown', restore)
+  }, [textHidden])
   const [turnScrollRequest, setTurnScrollRequest] = useState<TurnScrollRequest>()
 
   useEffect(() => {
     setReplyEditTarget(null)
-    setGoalMode(false)
   }, [stageKey])
   useEffect(() => {
     if (streaming && !historyWindow.followLatest) resetHistoryToLatest()
@@ -189,9 +211,9 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
   )
 
   const liveAccumulator = useLiveMessageAccumulator({
-    publicRuleRollVisible,
     setMessages: setStageLiveMessages,
   })
+  const currentTurnPersisted = liveAccumulator.isCurrentTurnPersisted(snapshot?.current_turn?.id || '')
   const storyImages = useStoryImages({
     stageKey,
     storyId,
@@ -208,13 +230,13 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
     turnNavigationItems,
     turnsById,
   } = useStoryStageMessages({
+    pendingAsk: stageRun.runtime.pendingAsk,
     snapshot: displaySnapshot,
     rewindTurnId,
     liveMessages,
     streaming,
     stageKey,
     liveTurnNavigationAnchorId,
-    publicRuleRollVisible,
     optimisticInteractiveImages: storyImages.optimisticImages,
     belongsToStage: liveAccumulator.belongsToStage,
     renderKeyFor: liveAccumulator.renderKeyFor,
@@ -226,9 +248,6 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
   } = useMemo(() => buildStoryStageCommandMenu(skillCommandQuery, skillCommands, {
     compactDescription: t('chat.command.compact.desc'),
     compactHint: t('chat.command.compact.hint'),
-    goalDescription: t('chat.command.goal.desc'),
-    goalHint: t('chat.command.goal.hint'),
-    skillHint: t('chat.command.skill.hint'),
   }), [skillCommandQuery, skillCommands, t])
 
   useEffect(() => {
@@ -277,19 +296,32 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
   const canUseHotChoices = hotChoices.length > 0 && !branchTerminal && !streaming && !editingTurn && Boolean(storyId)
   const showHotChoices = canUseHotChoices && hotChoicesExpanded
   const messageListBottomPadding = inputFloatHeight > 0 ? inputFloatHeight + 20 : undefined
-  const loadEarlierMessages = useCallback(async () => {
+  const loadHistoryThroughTurn = useCallback(async (targetIndex?: number) => {
     if (!storyId || !historyWindow.beforeCursor || historyLoading) return
     setHistoryLoading(true)
     try {
-      const page = await getInteractiveHistoryPage(storyId, branchId || snapshot?.branch_id || 'main', historyWindow.beforeCursor)
-      prependHistoryPage(page)
+      let cursor = historyWindow.beforeCursor
+      let turnStart = historyWindow.turnStart
+      do {
+        const page = await getInteractiveHistoryPage(storyId, branchId || snapshot?.branch_id || 'main', cursor)
+        if (historyStageRef.current !== stageKey) return
+        prependHistoryPage(page)
+        turnStart -= page.turns.length
+        if (targetIndex !== undefined && targetIndex >= turnStart) {
+          const turn = page.turns[targetIndex - turnStart]
+          if (turn) handleTurnNavigationSelect(turn.id)
+          break
+        }
+        cursor = page.before_cursor || ''
+      } while (targetIndex !== undefined && cursor)
     } catch (error) {
       console.error('[interactive-stage] load earlier story history failed', error)
       setStageLiveMessages((current) => [...current, errorMessage(error instanceof Error ? error.message : t('chat.history.loadEarlierFailed'))])
     } finally {
-      setHistoryLoading(false)
+      if (historyStageRef.current === stageKey) setHistoryLoading(false)
     }
-  }, [branchId, historyLoading, historyWindow.beforeCursor, prependHistoryPage, setStageLiveMessages, snapshot?.branch_id, storyId, t])
+  }, [branchId, handleTurnNavigationSelect, historyLoading, historyWindow.beforeCursor, historyWindow.turnStart, prependHistoryPage, setStageLiveMessages, snapshot?.branch_id, stageKey, storyId, t])
+  const loadEarlierMessages = useCallback(() => loadHistoryThroughTurn(), [loadHistoryThroughTurn])
   const latestTurnID = snapshot?.current_turn?.id || snapshot?.turns?.at(-1)?.id || ''
   const canMutateStoryView = useCallback((view: AgentMessageView) => {
     const turnID = view.metadata.turn_id
@@ -303,8 +335,18 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
   }, [])
 
   useLayoutEffect(() => {
+    // Classic scrollbars consume reading width; overlay scrollbars do not.
+    const syncScrollbarWidth = () => setScrollbarWidth(messageScroller ? messageScroller.offsetWidth - messageScroller.clientWidth : 0)
+    syncScrollbarWidth()
+    if (!messageScroller || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(syncScrollbarWidth)
+    observer.observe(messageScroller)
+    return () => observer.disconnect()
+  }, [messageScroller])
+
+  useLayoutEffect(() => {
     syncInputFloatHeight()
-  }, [conversationGoal.goal?.revision, editingTurn, goalMode, hotChoices.length, input, showHotChoices, stageRun.runtime.queue.length, syncInputFloatHeight])
+  }, [editingTurn, hotChoices.length, input, showHotChoices, stageRun.runtime.queue.length, syncInputFloatHeight])
 
   useEffect(() => {
     const element = inputFloatRef.current
@@ -324,8 +366,8 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
   }, [snapshotKey])
 
   function clearSubmittedComposer() {
+    speech.stop()
     setInput('')
-    setGoalMode(false)
     setEditingTurn(null)
     setStyleScenes([])
     setStyleSceneQuery(null)
@@ -334,7 +376,7 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
     setActiveSkillCommandIndex(0)
   }
 
-  const { commandSubmitting, deleteQueuedCommand, queueActionPendingCommandID, send, steerQueuedCommand, stop } = useStoryStageRuntime({
+  const { commandSubmitting, deleteQueuedCommand, queueActionPendingCommandID, send, steerQueuedCommand, stop, suspend, resumeTask } = useStoryStageRuntime({
     stageKey,
     storyId,
     branchId,
@@ -343,7 +385,7 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
     styleScenes,
     streaming,
     branchTerminal,
-    blocked: !approvalReady,
+    blocked: !approvalReady || (streaming && !supportsRuntimeOperation(conversationConfig.snapshot, 'queue')),
     stageRun,
     liveTurnNavigationAnchorId,
     t,
@@ -357,7 +399,10 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
     setActivity: setStageActivityContent,
     setMessages: setStageLiveMessages,
     clearComposer: clearSubmittedComposer,
-    onTurnPersisted,
+    onTurnPersisted: (event, options) => {
+      speech.onPersisted(event, options)
+      return onTurnPersisted(event, options)
+    },
     onDone,
   })
 
@@ -373,51 +418,6 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
       setPendingOpeningStoryId('')
     })
   }, [agentMessages.length, approvalReady, pendingOpeningStoryId, send, snapshot?.story_id, snapshot?.turn_count, snapshotLoading, storyId, streaming])
-
-  const enterGoalMode = () => {
-    setEditingTurn(null)
-    setGoalMode(true)
-    setShowSkillCommands(false)
-    setSkillCommandQuery(null)
-    setActiveSkillCommandIndex(0)
-    window.requestAnimationFrame(() => inputRef.current?.focus())
-  }
-
-  const submitComposer = async (options?: InputAreaSendOptions) => {
-    if (!goalMode) return send(options)
-    const objective = input.trim()
-    if (!objective || conversationGoal.saving) return false
-    const next = await conversationGoal.set(objective)
-    if (!next) {
-      toast.error(t('chat.goal.updateFailed'))
-      return false
-    }
-    return send(options)
-  }
-
-  const editGoal = () => {
-    if (!conversationGoal.goal) return
-    setInput(conversationGoal.goal.objective)
-    enterGoalMode()
-  }
-
-  const pauseGoal = async () => {
-    const next = await conversationGoal.pause()
-    if (!next) {
-      toast.error(t('chat.goal.updateFailed'))
-      return
-    }
-    if (streaming) await stop()
-  }
-
-  const clearGoal = async () => {
-    const next = await conversationGoal.clear()
-    if (!next) {
-      toast.error(t('chat.goal.updateFailed'))
-      return
-    }
-    if (streaming) await stop()
-  }
 
   const analyzeCurrentContext = async (rawMessage: string) => {
     const message = rawMessage.trim()
@@ -461,6 +461,7 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
     const currentIndex = view.metadata.turn_version_index ?? versions.findIndex((version) => version.current)
     const nextVersion = versions[currentIndex + direction]
     if (!nextVersion) return
+    speech.stop()
     setSwitchingVersionTurnId(turnId)
     setStageActivityContent(direction > 0 ? t('storyStage.activity.switchNewer') : t('storyStage.activity.switchOlder'))
     try {
@@ -502,6 +503,7 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
     if (!turnId) return
     const turn = turnsById.get(turnId)
     if (!turn) return
+    speech.stop()
     setReplyEditTarget({
       turnId: turn.id,
       branchId: turn.branch_id || branchId,
@@ -523,6 +525,11 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
     if (streaming) return
     const turnId = view.metadata.turn_id
     if (!turnId) {
+      if (stageRun.runtime.phase === 'suspended') {
+        // Retry resumes the original operation, including its regeneration target.
+        void resumeTask()
+        return
+      }
       const liveUserMessage = [...liveMessages].reverse().find((item) => item.role === 'user')
       const source = stageRun.retryMessage || (liveUserMessage ? agentMessageDisplayText(liveUserMessage) : '')
       if (source.trim()) void send({ message: source, rewindTurnId: stageRun.rewindTurnId })
@@ -568,10 +575,7 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
 
   const selectSkillCommand = (name: string) => {
     const command = filteredSkillCommands.find((item) => item.name === name)
-    if (command?.builtIn && name === 'goal') {
-      inputRef.current?.replaceActiveTriggerText('')
-      enterGoalMode()
-    } else if (command?.builtIn) {
+    if (command?.builtIn) {
       inputRef.current?.replaceActiveTriggerText(`/${name} `)
     } else {
       inputRef.current?.replaceActiveTriggerWithToken({ kind: 'skill', value: name, label: name })
@@ -619,21 +623,7 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
     await onDone({ silent: true })
   }
 
-  const stageControls = (
-    <StoryStageControls
-      isMobile={isMobile}
-      picker={{
-        stories, currentStoryId: storyId,
-        onSelect: (id) => { setCreatingStory(false); setPendingOpeningStoryId(''); onStorySelect(id) },
-        onCreate: () => { setPendingOpeningStoryId(''); setCreatingStory(true) },
-        onDeleteStories: onStoryDelete, onRenameStory: onStoryRename,
-      }}
-      history={{ items: turnNavigationItems, activeAnchorId: activeTurnAnchorId, onSelect: handleTurnNavigationSelect }}
-      directorPanelVisible={directorPanelVisible}
-      onToggleDirectorPanel={onToggleDirectorPanel}
-    />
-  )
-  const waitingToStartOpening = pendingOpeningStoryId === storyId
+  const waitingToStartOpening = Boolean(pendingOpeningStoryId) && pendingOpeningStoryId === storyId
   const committedTurnCount = Math.max(story?.turn_count || 0, snapshot?.turn_count || 0, snapshot?.turns?.length || 0)
   const openingRuntimeActive = streaming
     || Boolean(stageRun.runtime.operationId)
@@ -649,33 +639,62 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
     && !openingRuntimeActive
   )
 
-  return (
-    <main className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--nova-surface-2)]">
-      <div data-testid="story-stage-card" className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--nova-surface-2)]">
-        <StoryStageHeader isMobile={isMobile} controls={stageControls} />
+  const presentationTurn = streaming ? snapshot?.current_turn : turnsById.get(activeTurnAnchorId) ?? displaySnapshot?.current_turn
+  const presentation = visibleStoryPresentation(presentationTurn?.turn_result?.presentation, story?.presentation_settings)
+  const hasStageArtwork = !storySetupVisible && Boolean(presentation.background || presentation.characters?.length)
+  useEffect(() => { if (!hasStageArtwork) setTextHidden(false) }, [hasStageArtwork])
+  const presentationTurnIndex = displaySnapshot?.turns.findIndex(turn => turn.id === presentationTurn?.id) ?? -1
+  const previousPresentationTurnId = presentationTurnIndex > 0 ? displaySnapshot?.turns[presentationTurnIndex - 1]?.id : undefined
+  const artworkOnly = textHidden && hasStageArtwork
+  const stageControls = (
+    <>
 
-        <div className="nova-story-stage-content flex min-h-0 flex-1 overflow-hidden bg-[var(--nova-surface-2)]">
-          {!isMobile && <TurnNavigator items={turnNavigationItems} activeAnchorId={activeTurnAnchorId} onSelect={handleTurnNavigationSelect} />}
-          <section className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--nova-surface-2)]">
+    <StoryStageControls
+      isMobile={isMobile}
+      picker={gameStories?.picker ?? {
+        stories, currentStoryId: storyId,
+        onSelect: (id) => { setCreatingStory(false); setPendingOpeningStoryId(''); onStorySelect(id) },
+        onCreate: () => { setPendingOpeningStoryId(''); setCreatingStory(true) },
+        onDeleteStories: onStoryDelete, onRenameStory: onStoryRename,
+      }}
+      history={{ items: turnNavigationItems, activeAnchorId: activeTurnAnchorId, onSelect: handleTurnNavigationSelect, earlierCount: displaySnapshot?.turn_start || 0, loadingEarlier: historyLoading, onSelectEarlier: loadHistoryThroughTurn }}
+      directorPanelVisible={directorPanelVisible}
+      onToggleDirectorPanel={onToggleDirectorPanel}
+    />
+    {hasStageArtwork && <Button type="button" variant="ghost" size="icon-sm" aria-label={t(artworkOnly ? 'storyStage.presentation.showText' : 'storyStage.presentation.hideText')} title={t(artworkOnly ? 'storyStage.presentation.showText' : 'storyStage.presentation.hideText')} aria-pressed={artworkOnly} onClick={() => setTextHidden(!artworkOnly)}>
+      {artworkOnly ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+    </Button>}
+    {artworkOnly && streaming && <Button type="button" variant="ghost" size="icon-sm" aria-label={t('chat.runtime.abort')} disabled={commandSubmitting || stageRun.runtime.abortPending} onClick={() => void stop()}><Square className="size-4" /></Button>}
+    </>
+  )
+
+  return (
+    <main className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--nova-surface-2)]" style={{ '--nova-story-text-max-width': `${stagePreferences.textMaxWidth}px`, '--nova-story-scrollbar-width': `${scrollbarWidth}px` } as CSSProperties}>
+      {!storySetupVisible && <StoryStageArtwork key={`${projectId}:${stageKey}`} previousTurnId={previousPresentationTurnId} projectId={projectId} turn={presentationTurn} latest={historyWindow.followLatest && presentationTurn?.id === snapshot?.current_turn?.id} settings={story?.presentation_settings} textHidden={artworkOnly} scrimOpacity={stagePreferences.scrimOpacity} characterLayout={stagePreferences.characterLayout} characterSize={stagePreferences.characterSize} />}
+      <div data-testid="story-stage-card" className="nova-story-stage-card relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        <StoryStageHeader isMobile={isMobile} controls={stageControls} />
+        <div className="nova-story-speech-playback shrink-0 px-3" style={{ visibility: artworkOnly ? 'hidden' : undefined }} inert={artworkOnly}><SpeechPlayback owner={stageKey} /></div>
+
+        <div className="nova-story-stage-content flex min-h-0 flex-1 overflow-hidden" data-setup={storySetupVisible || undefined} data-artwork={hasStageArtwork ? 'true' : undefined} style={{ visibility: artworkOnly ? 'hidden' : undefined }} inert={artworkOnly} aria-hidden={artworkOnly || undefined}>
+          {!isMobile && <TurnNavigator items={turnNavigationItems} activeAnchorId={activeTurnAnchorId} onSelect={handleTurnNavigationSelect} earlierCount={displaySnapshot?.turn_start || 0} loadingEarlier={historyLoading} onSelectEarlier={loadHistoryThroughTurn} />}
+          <section className="relative flex min-h-0 min-w-0 flex-1 flex-col">
             {historyWindow.stageKey === stageKey && !historyWindow.followLatest ? (
-              <Button type="button" variant="secondary" size="sm" className="absolute right-4 top-3 z-30 shadow-md" onClick={resetHistoryToLatest}>
+              <Button type="button" variant="secondary" size="sm" className="absolute right-4 top-3 z-30 shadow-md lg:top-12" onClick={resetHistoryToLatest}>
                 {t('storyStage.history.backToLatest')}
               </Button>
             ) : null}
             {storySetupVisible ? (
+              <GameStorySetup enabled={creatingStory || !story || (story.title_source === 'pending' && committedTurnCount === 0 && !openingRuntimeActive)}>
               <NewStorySetupPanel
-                key={creatingStory ? 'new-story' : story?.id || 'new-story'}
+                key={`${projectId}:${creatingStory ? 'new-story' : story?.id || 'new-story'}`}
                 projectId={projectId}
                 tellers={tellers}
 				planningTemplates={planningTemplates}
                 imagePresets={imagePresets}
                 loreItems={loreItems}
                 bookOpeningPresets={bookOpeningPresets}
-                recentNarrativeStyleID={recentNarrativeStyleID}
-                narrativeStyleLoading={narrativeStyleLoading}
                 conversationConfig={conversationConfig}
                 story={creatingStory ? undefined : story}
-                onNarrativeStyleChange={onNarrativeStyleChange}
                 onRequestLoreInit={onRequestLoreInit}
                 onOpenPresets={onOpenDirectorConfig}
                 onCancel={() => setCreatingStory(false)}
@@ -699,6 +718,7 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
                   setCreatingStory(false)
                 }}
               />
+              </GameStorySetup>
             ) : (snapshotLoading || waitingToStartOpening) && agentMessages.length === 0 && !streaming ? (
               <LoadingState
                 label={t('common.loading')}
@@ -710,21 +730,51 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
                 projectId={projectId}
                 attachmentScope={storyId ? { kind: 'story', id: storyId } : undefined}
                 messages={agentMessages}
+                onResolveAsk={async (view, action) => {
+                  const askID = agentViewAskID(view)
+                  const result = await resolveInteractiveAsk(storyId, branchId, askID, action)
+                  const previous = agentViewAskInteraction(view)
+                  if (previous && result.status !== 'pending') {
+                    setStageLiveMessages(current => [...current, createAgentDataMessage({ id: `ask-${askID}`, type: 'agent-ask', data: { ...previous, ...result } })])
+                  }
+                  interactiveAgentCommands.project(await getActiveInteractiveChat(storyId, branchId))
+                  return result
+                }}
                 isStreaming={streaming}
                 activityContent={stageRun.runtime.recoveryPaused ? t('storyStage.activity.recoveryPaused') : activityContent}
                 highlightDialogue
+                contentClassName="nova-story-reading-column"
+                beforeContent={story && <StoryOpeningSummary key={story.id} story={story} />}
+                onScrollerChange={setMessageScroller}
                 scrollResetKey={scrollResetKey}
                 bottomPaddingClassName="pb-36"
                 bottomPaddingPx={messageListBottomPadding}
                 hasEarlierMessages={historyWindow.stageKey === stageKey && historyWindow.hasMore}
                 isLoadingEarlierMessages={historyLoading}
                 onLoadEarlierMessages={loadEarlierMessages}
-                afterContent={historyWindow.followLatest && !streaming && storyStateModel.hasState && stateDisplayPreference !== 'director-only' ? (
+                autoLoadEarlierMessages
+                onLoadExecutionDetails={loadExecutionDetails}
+                afterContentScroll="reveal-heading"
+                afterContent={historyWindow.followLatest && (!streaming || currentTurnPersisted) && storyStateModel.hasState && stateDisplayPreference !== 'director-only' ? (
                   <StoryStateLedger
+                    animateEntrance={Boolean(liveAccumulator.renderKeyFor(snapshot?.current_turn?.id || '', 'assistant'))}
                     snapshot={snapshot}
+                    actorLore={{
+                      projectId,
+                      items: loreItems,
+                      protagonist: story?.protagonist,
+                      onOpenItem: navigation ? (id) => navigation.open({ kind: 'lore_item', id }) : undefined,
+                    }}
                     displayPreference={stateDisplayPreference}
                     onDisplayPreferenceChange={onStateDisplayPreferenceChange}
-                    onOpenDirectorState={onOpenDirectorState}
+                    detailsAction={
+                      <StateDetailsDialog projectId={projectId} loreItems={loreItems} protagonist={story?.protagonist} snapshot={snapshot} trigger={
+                        <Button type="button" variant="ghost" size="sm" aria-label={t('storyStage.state.viewAll')}>
+                          <Maximize2 data-icon="inline-start" />
+                          <span className="story-state-ledger__details-label">{t('storyStage.state.viewAll')}</span>
+                        </Button>
+                      } />
+                    }
                   />
                 ) : undefined}
                 afterContentKey={snapshot?.current_turn?.id || ''}
@@ -738,7 +788,11 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
                 onCreateBranch={onRequestCreateBranch ? startCreatingBranchFromView : undefined}
                 onRegenerateMessage={regenerateView}
                 onSwitchMessageVersion={switchViewVersion}
-                onGenerateInteractiveImage={generateImageForView}
+                onReadAloud={speech.configured ? (view) => {
+                  const turn = turnsById.get(view.metadata.turn_id || '')
+                  if (turn) speech.read(turn)
+                } : undefined}
+                onGenerateInteractiveImage={imageConfigured ? generateImageForView : undefined}
                 generatingInteractiveImageTurnId={storyImages.generatingTurnId || undefined}
                 onOpenSubAgentSession={openSubAgentSession}
                 activeRunId={stageRun.runtime.operationId}
@@ -757,18 +811,18 @@ export function StoryStage({ projectId, workspace, styleSceneSuggestions = [], s
                 />
               </div>
             )}
+            <StoryStageComposer
+              taskControls={<AgentTaskControls suspended={stageRun.runtime.phase === 'suspended'} pending={commandSubmitting || stageRun.runtime.abortPending} onResume={() => void resumeTask()} onAbort={() => void stop()} />}
+              layout={{ projectId, creatingStory: storySetupVisible, isMobile, inputTextStyle, workspace, inputFloatRef, inputRef, t, attachmentDraftKey: stageKey }}
+              editor={{ input, editingTurn, styleScenes, styleSceneQuery, styleSceneSuggestions, showSkillCommands, activeSkillCommandIndex, skillCommands, filteredSkillCommands, filteredBuiltInCommandItems, filteredSkillCommandItems, setStyleSceneQuery, setShowSkillCommands, setSkillCommandQuery, setActiveSkillCommandIndex }}
+              story={{ storyId, branchTerminal, hotChoices, showHotChoices, canUseHotChoices }}
+              runtime={{ streaming, approvalReady, conversationConfig, abortPending: stageRun.runtime.abortPending, recoveryPaused: stageRun.runtime.recoveryPaused, recoveryAbortAvailable: stageRun.runtime.recoveryAbortAvailable, pendingInterruptionId: stageRun.runtime.pendingInterruptionId, operationId: stageRun.runtime.operationId, connection: stageRun.runtime.connection, commandSubmitting, queue: stageRun.runtime.queue, queueActionPendingCommandID }}
+              dialogs={{ contextAnalysisOpen, contextAnalysisLoading, contextAnalysisError, contextAnalysis, tokenUsageOpen, tokenUsageMessages, replyEditTarget, setContextAnalysisOpen, setTokenUsageOpen, closeReplyEditor: () => setReplyEditTarget(null), saveReply: saveEditedReply }}
+              actions={{ cancelEditing, selectHotChoice, selectStyleScene, selectSkillCommand, handleInputChange, handleInputTriggerChange, handleTokenRemove, toggleHotChoices, openContextAnalysis, removeContextCompaction, send, steerQueuedCommand, deleteQueuedCommand, stop: stageRun.runtime.recoveryPaused || stageRun.runtime.connection !== 'connected' || !supportsRuntimeOperation(conversationConfig.snapshot, 'pause') ? stop : suspend }}
+            />
           </section>
         </div>
       </div>
-      <StoryStageComposer
-        layout={{ projectId, creatingStory: storySetupVisible || (waitingToStartOpening && (!isMobile || !streaming)), isMobile, inputTextStyle, workspace, inputFloatRef, inputRef, t, attachmentDraftKey: stageKey }}
-        editor={{ input, editingTurn, styleScenes, styleSceneQuery, styleSceneSuggestions, showSkillCommands, activeSkillCommandIndex, skillCommands, filteredSkillCommands, filteredBuiltInCommandItems, filteredSkillCommandItems, setStyleSceneQuery, setShowSkillCommands, setSkillCommandQuery, setActiveSkillCommandIndex }}
-        story={{ storyId, branchTerminal, hotChoices, hotChoicesExpanded, showHotChoices, canUseHotChoices, setHotChoicesExpanded }}
-        runtime={{ streaming, approvalReady, conversationConfig, abortPending: stageRun.runtime.abortPending, recoveryPaused: stageRun.runtime.recoveryPaused, recoveryAbortAvailable: stageRun.runtime.recoveryAbortAvailable, pendingInterruptionId: stageRun.runtime.pendingInterruptionId, operationId: stageRun.runtime.operationId, connection: stageRun.runtime.connection, commandSubmitting, queue: stageRun.runtime.queue, queueActionPendingCommandID }}
-        goal={{ value: conversationGoal.goal, mode: goalMode, pending: conversationGoal.saving, enter: enterGoalMode, exit: () => setGoalMode(false), edit: editGoal, pause: pauseGoal, clear: clearGoal }}
-        dialogs={{ contextAnalysisOpen, contextAnalysisLoading, contextAnalysisError, contextAnalysis, tokenUsageOpen, tokenUsageMessages, replyEditTarget, setContextAnalysisOpen, setTokenUsageOpen, closeReplyEditor: () => setReplyEditTarget(null), saveReply: saveEditedReply }}
-        actions={{ cancelEditing, selectHotChoice, selectStyleScene, selectSkillCommand, handleInputChange, handleInputTriggerChange, handleTokenRemove, toggleHotChoices, openContextAnalysis, removeContextCompaction, send: submitComposer, steerQueuedCommand, deleteQueuedCommand, stop }}
-      />
     </main>
   )
 

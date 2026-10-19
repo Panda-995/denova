@@ -139,7 +139,8 @@ describe('useWorkspace', () => {
   it('routes every workspace tree mutation through the project-scoped operations API', async () => {
     let workspace: ReturnType<typeof useWorkspace> | null = null
     render(<WorkspaceHarness autoRefreshEnabled={false} onChange={(value) => { workspace = value }} />)
-    await waitFor(() => expect(screen.getByTestId('workspace-meta')).toHaveTextContent('|project-demo'))
+    // The DOM can commit before the harness effect publishes the new callbacks.
+    await waitFor(() => expect(workspace?.projectId).toBe('project-demo'))
 
     await act(async () => {
       await workspace?.createItem('notes/new.md', 'file')
@@ -386,6 +387,64 @@ describe('useWorkspace', () => {
 
     expect(apiMock.readFile).not.toHaveBeenCalled()
     expect(screen.getByTestId('workspace-state')).toHaveTextContent('chapters/ch01.md|章节正文|rev-1')
+  })
+
+  it('shows retained documents immediately and rechecks reads overlapping saves without rolling back acknowledged content', async () => {
+    const path = 'chapters/cached.md'
+    const initial = { workspace: '/books/demo', path, content: 'Initial', revision: 'r1' }
+    const background = deferred<typeof initial>()
+    const rechecked = deferred<typeof initial>()
+    apiMock.readFile.mockResolvedValueOnce(initial).mockReturnValueOnce(background.promise).mockReturnValueOnce(rechecked.promise)
+    apiMock.saveFile.mockResolvedValue({ path, revision: 'r2' })
+    let workspace: ReturnType<typeof useWorkspace> | null = null
+    render(<WorkspaceHarness autoRefreshEnabled={false} retainedFilePaths={[path]} onChange={value => { workspace = value }} />)
+    await waitFor(() => expect(workspace?.projectId).toBe('project-demo'))
+    await act(async () => { await workspace?.selectFile(path) })
+    act(() => workspace?.clearSelectedFile())
+    await act(async () => { expect(await workspace?.selectFile(path)).toBe('selected') })
+    expect(screen.getByTestId('workspace-state')).toHaveTextContent(`${path}|Initial|r1`)
+    expect(apiMock.readFile).toHaveBeenCalledTimes(2)
+
+    await act(async () => { await workspace?.saveFileDraft(path, 'New draft', 'r1') })
+    await act(async () => { background.resolve(initial); await background.promise })
+    expect(screen.getByTestId('workspace-state')).toHaveTextContent(`${path}|New draft|r2`)
+    expect(apiMock.readFile).toHaveBeenCalledTimes(3)
+    await act(async () => { rechecked.resolve({ ...initial, content: 'Newer external change', revision: 'r3' }); await rechecked.promise })
+    expect(screen.getByTestId('workspace-state')).toHaveTextContent(`${path}|Newer external change|r3`)
+  })
+
+  it('refreshes inactive open documents and releases snapshots after close or a project switch', async () => {
+    const first = 'chapters/first.md'
+    const second = 'chapters/second.md'
+    apiMock.readFile.mockImplementation(async (path: string) => ({ workspace: '/books/demo', path, content: path, revision: 'r1' }))
+    let workspace: ReturnType<typeof useWorkspace> | null = null
+    const onChange = (value: ReturnType<typeof useWorkspace>) => { workspace = value }
+    const { rerender } = render(<WorkspaceHarness autoRefreshEnabled={false} retainedFilePaths={[first, second]} onChange={onChange} />)
+    await waitFor(() => expect(workspace?.projectId).toBe('project-demo'))
+    await act(async () => { await workspace?.selectFile(first) })
+    await act(async () => { await workspace?.selectFile(second) })
+
+    apiMock.readFile.mockResolvedValueOnce({ workspace: '/books/demo', path: first, content: 'Changed externally', revision: 'r2' })
+    await act(async () => { await emitWorkspaceChange([{ path: first, type: 'updated' }]) })
+    expect(workspace!.fileDocuments.get(first)?.content).toBe('Changed externally')
+    expect(workspace!.selectedFile).toBe(second)
+
+    const lateRead = deferred<{ workspace: string; path: string; content: string; revision: string }>()
+    apiMock.readFile.mockReturnValueOnce(lateRead.promise)
+    let refresh!: Promise<void>
+    act(() => { refresh = emitWorkspaceChange([{ path: first, type: 'updated' }]) })
+    rerender(<WorkspaceHarness autoRefreshEnabled={false} retainedFilePaths={[second]} onChange={onChange} />)
+    expect([...workspace!.fileDocuments.keys()]).toEqual([second])
+    await act(async () => {
+      lateRead.resolve({ workspace: '/books/demo', path: first, content: 'Late read', revision: 'r3' })
+      await refresh
+    })
+    expect([...workspace!.fileDocuments.keys()]).toEqual([second])
+
+    apiMock.getCurrentWorkspace.mockResolvedValue({ workspace: '/books/other', project_id: 'project-other', has_state: true })
+    await act(async () => { await workspace?.refreshAll() })
+    expect(workspace!.projectId).toBe('project-other')
+    expect(workspace!.fileDocuments.size).toBe(0)
   })
 
   it('reports a missing restored file so persisted tabs can discard it', async () => {
@@ -823,12 +882,14 @@ describe('useWorkspace', () => {
 
 function WorkspaceHarness({
   autoRefreshEnabled,
+  retainedFilePaths,
   onChange,
 }: {
   autoRefreshEnabled?: boolean
+  retainedFilePaths?: readonly string[]
   onChange: (workspace: ReturnType<typeof useWorkspace>) => void
 }) {
-  const workspace = useWorkspace({ autoRefreshEnabled })
+  const workspace = useWorkspace({ autoRefreshEnabled, retainedFilePaths })
   useEffect(() => onChange(workspace), [onChange, workspace])
   return (
     <>

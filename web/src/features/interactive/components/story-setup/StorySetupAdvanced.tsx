@@ -1,5 +1,5 @@
 import { Bot, Dices, ImagePlus, UserRound } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -41,6 +41,9 @@ export interface StorySetupSettings {
 }
 
 interface StorySetupAdvancedProps {
+  // The setup owner supplies these controls; this component owns their column placement.
+  planningControl: ReactNode
+  presentationControl: ReactNode
   projectId: string
   newStory: boolean
   tellers: Teller[]
@@ -50,7 +53,6 @@ interface StorySetupAdvancedProps {
   runtimeConfigLoading?: boolean
   runtimeConfigError?: string | null
   onRuntimeConfigReload?: () => void
-  onNarrativeStyleChange?: (id: string) => void | Promise<unknown>
   onOpenPresets?: () => void
 }
 
@@ -58,6 +60,8 @@ type ModuleIDKey = 'narrative_style_id' | 'rule_system_id' | 'actor_state_id' | 
 type ModuleDisabledKey = 'narrative_style_disabled' | 'rule_system_disabled' | 'actor_state_disabled' | 'image_preset_disabled'
 
 export function StorySetupAdvanced({
+  planningControl,
+  presentationControl,
   projectId,
   newStory,
   tellers,
@@ -67,7 +71,6 @@ export function StorySetupAdvanced({
   runtimeConfigLoading = false,
   runtimeConfigError,
   onRuntimeConfigReload,
-  onNarrativeStyleChange,
   onOpenPresets,
 }: StorySetupAdvancedProps) {
   const { t } = useTranslation()
@@ -154,7 +157,6 @@ export function StorySetupAdvanced({
     } else {
       patchRefs(next)
     }
-    if (idKey === 'narrative_style_id' && nextID) void onNarrativeStyleChange?.(nextID)
   }
   const setRuleChecksEnabled = (enabled: boolean) => {
     const next = cloneRefs(refs)
@@ -172,234 +174,223 @@ export function StorySetupAdvanced({
 
   return (
     <div className="grid gap-3 lg:grid-cols-2">
-      <ControlSection
-        icon={<Bot className="size-4" />}
-        title={t('directorPanel.tuning.agent.title')}
-        action={<TuningLinkButton label={t('directorPanel.tuning.editPresets')} onClick={onOpenPresets} />}
-      >
-        {newStory ? (
-          <TuningRow title={t('agents.custom.select')} description={t('agents.custom.switchNote')}>
-            <CustomAgentSelect
-              projectId={projectId}
-              runtimeKind="interactive_story"
-              value={value.customAgentId}
-              onValueChange={(customAgentId) => patch({ customAgentId: customAgentId || '' })}
-              className="director-control-select h-7 w-[min(10rem,60cqw)]"
+      <div className="flex min-w-0 flex-col gap-3">
+        {planningControl}
+        <ControlSection
+          icon={<Bot className="size-4" />}
+          title={t('directorPanel.tuning.agent.title')}
+          action={<TuningLinkButton label={t('directorPanel.tuning.editPresets')} onClick={onOpenPresets} />}
+        >
+          {newStory ? (
+            <TuningRow title={t('agents.custom.select')} description={t('agents.custom.switchNote')}>
+              <CustomAgentSelect
+                projectId={projectId}
+                runtimeKind="interactive_story"
+                value={value.customAgentId}
+                onValueChange={(customAgentId) => patch({ customAgentId: customAgentId || '' })}
+                className="director-control-select h-7 w-[min(10rem,60cqw)]"
+              />
+            </TuningRow>
+          ) : null}
+          <TuningRow
+            title={t('storyPicker.setup.model.profile')}
+            description={modelDescription}
+            busy={runtimeConfigLoading || modelCatalogLoading}
+            disabled={modelSelectionUnavailable}
+          >
+            {runtimeConfigError || modelCatalogFailed ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                onClick={() => {
+                  if (runtimeConfigError) onRuntimeConfigReload?.()
+                  if (modelCatalogFailed) loadModelCatalog()
+                }}
+              >
+                {t('common.retry')}
+              </Button>
+            ) : (
+              <TuningSelect
+                value={value.modelProfileId}
+                options={modelOptions}
+                label={t('storyPicker.setup.model.profile')}
+                disabled={modelSelectionUnavailable}
+                onChange={(modelProfileId) => patch({ modelProfileId })}
+              />
+            )}
+          </TuningRow>
+          <TuningRow title={t('storyPicker.setup.model.thinking')} disabled={runtimeSelectionUnavailable}>
+            <TuningSelect
+              value={value.thinkingLevel}
+              options={thinkingLevelOptions(t)}
+              label={t('storyPicker.setup.model.thinking')}
+              disabled={runtimeSelectionUnavailable}
+              onChange={(thinkingLevel) => patch({ thinkingLevel: thinkingLevel as ThinkingLevel })}
             />
           </TuningRow>
-        ) : null}
-        <TuningRow
-          title={t('storyPicker.setup.model.profile')}
-          description={modelDescription}
-          busy={runtimeConfigLoading || modelCatalogLoading}
-          disabled={modelSelectionUnavailable}
-        >
-          {runtimeConfigError || modelCatalogFailed ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              onClick={() => {
-                if (runtimeConfigError) onRuntimeConfigReload?.()
-                if (modelCatalogFailed) loadModelCatalog()
-              }}
-            >
-              {t('common.retry')}
-            </Button>
-          ) : (
-            <TuningSelect
-              value={value.modelProfileId}
-              options={modelOptions}
-              label={t('storyPicker.setup.model.profile')}
-              disabled={modelSelectionUnavailable}
-              onChange={(modelProfileId) => patch({ modelProfileId })}
+          <TuningRow title={t('directorPanel.tuning.agent.planning')}>
+            <Switch
+              checked={value.planningEnabled}
+              aria-label={t('directorPanel.tuning.agent.planning')}
+              onCheckedChange={(planningEnabled) => patch({ planningEnabled })}
             />
-          )}
-        </TuningRow>
-        <TuningRow title={t('storyPicker.setup.model.thinking')} disabled={runtimeSelectionUnavailable}>
-          <TuningSelect
-            value={value.thinkingLevel}
-            options={thinkingLevelOptions(t)}
-            label={t('storyPicker.setup.model.thinking')}
-            disabled={runtimeSelectionUnavailable}
-            onChange={(thinkingLevel) => patch({ thinkingLevel: thinkingLevel as ThinkingLevel })}
+          </TuningRow>
+          <ModuleSelectRow
+            label={t('directorPanel.tuning.agent.narrativeStyle')}
+            value={String(refs.narrative_style_id || '')}
+            moduleDisabled={Boolean(refs.narrative_style_disabled)}
+            options={narrativeOptions}
+            busy={false}
+            disabled={false}
+            onChange={(selected) => updateModule('narrative_style_id', 'narrative_style_disabled', selected)}
           />
-        </TuningRow>
-        <TuningRow title={t('directorPanel.tuning.agent.planning')}>
-          <Switch
-            checked={value.planningEnabled}
-            aria-label={t('directorPanel.tuning.agent.planning')}
-            onCheckedChange={(planningEnabled) => patch({ planningEnabled })}
+          <EventPackagesRow
+            refs={refs}
+            options={eventPackages}
+            busy={false}
+            disabled={false}
+            onChange={(event_package_ids, event_packages_disabled) => patchRefs({
+              ...cloneRefs(refs),
+              event_package_ids,
+              event_packages_disabled,
+            })}
           />
-        </TuningRow>
-        <ModuleSelectRow
-          label={t('directorPanel.tuning.agent.narrativeStyle')}
-          value={String(refs.narrative_style_id || '')}
-          moduleDisabled={Boolean(refs.narrative_style_disabled)}
-          options={narrativeOptions}
-          busy={false}
-          disabled={false}
-          onChange={(selected) => updateModule('narrative_style_id', 'narrative_style_disabled', selected)}
-        />
-        <EventPackagesRow
-          refs={refs}
-          options={eventPackages}
-          busy={false}
-          disabled={false}
-          onChange={(event_package_ids, event_packages_disabled) => patchRefs({
-            ...cloneRefs(refs),
-            event_package_ids,
-            event_packages_disabled,
-          })}
-        />
-        <TuningRow title={t('directorPanel.tuning.agent.replyLength')}>
-          <ReplyLengthSetting
-            value={value.replyTargetChars}
-            label={t('directorPanel.tuning.agent.replyLength')}
-            onCommit={(replyTargetChars) => patch({ replyTargetChars })}
+          <TuningRow title={t('directorPanel.tuning.agent.replyLength')}>
+            <ReplyLengthSetting
+              value={value.replyTargetChars}
+              label={t('directorPanel.tuning.agent.replyLength')}
+              onCommit={(replyTargetChars) => patch({ replyTargetChars })}
+            />
+          </TuningRow>
+          <TuningRow title={t('directorPanel.tuning.agent.choiceCount')}>
+            <NumberSettingInput
+              value={value.choiceCount}
+              min={MIN_INTERACTIVE_CHOICE_COUNT}
+              max={MAX_INTERACTIVE_CHOICE_COUNT}
+              label={t('directorPanel.tuning.agent.choiceCount')}
+              onCommit={(choiceCount) => patch({ choiceCount })}
+            />
+          </TuningRow>
+        </ControlSection>
+        <ControlSection icon={<ImagePlus className="size-4" />} title={t('directorPanel.tuning.image.title')}>
+          <TuningRow title={t('directorPanel.tuning.image.automatic')}>
+            <Switch
+              checked={value.imageSettings.mode === 'interval'}
+              aria-label={t('directorPanel.tuning.image.automatic')}
+              onCheckedChange={(automatic) => patch({
+                imageSettings: { ...value.imageSettings, mode: automatic ? 'interval' : 'manual' },
+              })}
+            />
+          </TuningRow>
+          <TuningRow title={t('directorPanel.tuning.image.interval')}>
+            <NumberSettingInput
+              value={value.imageSettings.interval_turns}
+              min={1}
+              max={50}
+              label={t('directorPanel.tuning.image.interval')}
+              disabled={value.imageSettings.mode !== 'interval'}
+              onCommit={(intervalTurns) => patch({
+                imageSettings: {
+                  ...value.imageSettings,
+                  interval_turns: normalizeImageIntervalTurns(intervalTurns),
+                },
+              })}
+            />
+          </TuningRow>
+          <ModuleSelectRow
+            label={t('directorPanel.tuning.image.preset')}
+            value={value.imageSettings.preset_id || String(refs.image_preset_id || '')}
+            moduleDisabled={Boolean(refs.image_preset_disabled)}
+            options={imageOptions}
+            busy={false}
+            disabled={false}
+            onChange={(selected) => updateModule('image_preset_id', 'image_preset_disabled', selected)}
           />
-        </TuningRow>
-        <TuningRow title={t('directorPanel.tuning.agent.choiceCount')}>
-          <NumberSettingInput
-            value={value.choiceCount}
-            min={MIN_INTERACTIVE_CHOICE_COUNT}
-            max={MAX_INTERACTIVE_CHOICE_COUNT}
-            label={t('directorPanel.tuning.agent.choiceCount')}
-            onCommit={(choiceCount) => patch({ choiceCount })}
-          />
-        </TuningRow>
-      </ControlSection>
-
-      <ControlSection icon={<Dices className="size-4" />} title={t('directorPanel.tuning.check.title')}>
-        <TuningRow title={t('directorPanel.tuning.check.enabled')}>
-          <Switch
-            checked={ruleEnabled}
-            aria-label={t('directorPanel.tuning.check.enabled')}
-            onCheckedChange={setRuleChecksEnabled}
-          />
-        </TuningRow>
-        <ModuleSelectRow
-          label={t('directorPanel.tuning.check.system')}
-          value={String(refs.rule_system_id || '')}
-          moduleDisabled={!ruleEnabled}
-          options={ruleOptions}
-          busy={false}
-          disabled={!ruleEnabled}
-          onChange={(selected) => updateModule('rule_system_id', 'rule_system_disabled', selected)}
-        />
-        <TuningRow title={t('directorPanel.tuning.check.difficulty')}>
-          <TuningSelect
-            value={String(value.checkSettings.difficulty_shift)}
-            options={difficultyOptions(t)}
-            label={t('directorPanel.tuning.check.difficulty')}
+        </ControlSection>
+      </div>
+      <div className="flex min-w-0 flex-col gap-3">
+        {presentationControl}
+        <ControlSection icon={<Dices className="size-4" />} title={t('directorPanel.tuning.check.title')}>
+          <TuningRow title={t('directorPanel.tuning.check.enabled')}>
+            <Switch
+              checked={ruleEnabled}
+              aria-label={t('directorPanel.tuning.check.enabled')}
+              onCheckedChange={setRuleChecksEnabled}
+            />
+          </TuningRow>
+          <ModuleSelectRow
+            label={t('directorPanel.tuning.check.system')}
+            value={String(refs.rule_system_id || '')}
+            moduleDisabled={!ruleEnabled}
+            options={ruleOptions}
+            busy={false}
             disabled={!ruleEnabled}
-            onChange={(difficulty) => patch({
-              checkSettings: { ...value.checkSettings, difficulty_shift: Number(difficulty) },
+            onChange={(selected) => updateModule('rule_system_id', 'rule_system_disabled', selected)}
+          />
+          <TuningRow title={t('directorPanel.tuning.check.difficulty')}>
+            <TuningSelect
+              value={String(value.checkSettings.difficulty_shift)}
+              options={difficultyOptions(t)}
+              label={t('directorPanel.tuning.check.difficulty')}
+              disabled={!ruleEnabled}
+              onChange={(difficulty) => patch({
+                checkSettings: { ...value.checkSettings, difficulty_shift: Number(difficulty) },
+              })}
+            />
+          </TuningRow>
+          <TuningRow
+            title={t('directorPanel.tuning.check.rollModifier')}
+            description={t('directorPanel.tuning.check.formula', {
+              modifier: formatSigned(value.checkSettings.roll_modifier),
             })}
+          >
+            <NumberSettingInput
+              value={value.checkSettings.roll_modifier}
+              min={-20}
+              max={20}
+              label={t('directorPanel.tuning.check.rollModifier')}
+              disabled={!ruleEnabled}
+              onCommit={(rollModifier) => patch({
+                checkSettings: { ...value.checkSettings, roll_modifier: rollModifier },
+              })}
+            />
+          </TuningRow>
+          <TuningRow title={t('directorPanel.tuning.check.stateConsumption')}>
+            <TuningSelect
+              value={value.checkSettings.rule_state_consumption_mode || 'hybrid_auto'}
+              options={ruleStateConsumptionOptions(t)}
+              label={t('directorPanel.tuning.check.stateConsumption')}
+              disabled={!ruleEnabled}
+              onChange={(ruleStateConsumptionMode) => patch({
+                checkSettings: {
+                  ...value.checkSettings,
+                  rule_state_consumption_mode: ruleStateConsumptionMode as StoryCheckSettings['rule_state_consumption_mode'],
+                },
+              })}
+            />
+          </TuningRow>
+        </ControlSection>
+        <ControlSection icon={<UserRound className="size-4" />} title={t('directorPanel.tuning.state.title')}>
+          <ModuleSelectRow
+            label={t('directorPanel.tuning.state.system')}
+            value={String(refs.actor_state_id || '')}
+            moduleDisabled={Boolean(refs.actor_state_disabled)}
+            options={stateOptions}
+            busy={false}
+            disabled={value.stateSchemaMode === 'generate'}
+            onChange={(selected) => updateModule('actor_state_id', 'actor_state_disabled', selected)}
           />
-        </TuningRow>
-        <TuningRow
-          title={t('directorPanel.tuning.check.rollModifier')}
-          description={t('directorPanel.tuning.check.formula', {
-            modifier: formatSigned(value.checkSettings.roll_modifier),
-          })}
-        >
-          <NumberSettingInput
-            value={value.checkSettings.roll_modifier}
-            min={-20}
-            max={20}
-            label={t('directorPanel.tuning.check.rollModifier')}
-            disabled={!ruleEnabled}
-            onCommit={(rollModifier) => patch({
-              checkSettings: { ...value.checkSettings, roll_modifier: rollModifier },
-            })}
-          />
-        </TuningRow>
-        <TuningRow title={t('directorPanel.tuning.check.stateConsumption')}>
-          <TuningSelect
-            value={value.checkSettings.rule_state_consumption_mode || 'hybrid_auto'}
-            options={ruleStateConsumptionOptions(t)}
-            label={t('directorPanel.tuning.check.stateConsumption')}
-            disabled={!ruleEnabled}
-            onChange={(ruleStateConsumptionMode) => patch({
-              checkSettings: {
-                ...value.checkSettings,
-                rule_state_consumption_mode: ruleStateConsumptionMode as StoryCheckSettings['rule_state_consumption_mode'],
-              },
-            })}
-          />
-        </TuningRow>
-        <TuningRow title={t('directorPanel.tuning.check.visibility')}>
-          <TuningSelect
-            value={value.checkSettings.rule_visibility_mode || 'audit_only'}
-            options={ruleVisibilityOptions(t)}
-            label={t('directorPanel.tuning.check.visibility')}
-            disabled={!ruleEnabled}
-            onChange={(ruleVisibilityMode) => patch({
-              checkSettings: {
-                ...value.checkSettings,
-                rule_visibility_mode: ruleVisibilityMode as StoryCheckSettings['rule_visibility_mode'],
-              },
-            })}
-          />
-        </TuningRow>
-      </ControlSection>
-
-      <ControlSection icon={<ImagePlus className="size-4" />} title={t('directorPanel.tuning.image.title')}>
-        <TuningRow title={t('directorPanel.tuning.image.automatic')}>
-          <Switch
-            checked={value.imageSettings.mode === 'interval'}
-            aria-label={t('directorPanel.tuning.image.automatic')}
-            onCheckedChange={(automatic) => patch({
-              imageSettings: { ...value.imageSettings, mode: automatic ? 'interval' : 'manual' },
-            })}
-          />
-        </TuningRow>
-        <TuningRow title={t('directorPanel.tuning.image.interval')}>
-          <NumberSettingInput
-            value={value.imageSettings.interval_turns}
-            min={1}
-            max={50}
-            label={t('directorPanel.tuning.image.interval')}
-            disabled={value.imageSettings.mode !== 'interval'}
-            onCommit={(intervalTurns) => patch({
-              imageSettings: {
-                ...value.imageSettings,
-                interval_turns: normalizeImageIntervalTurns(intervalTurns),
-              },
-            })}
-          />
-        </TuningRow>
-        <ModuleSelectRow
-          label={t('directorPanel.tuning.image.preset')}
-          value={value.imageSettings.preset_id || String(refs.image_preset_id || '')}
-          moduleDisabled={Boolean(refs.image_preset_disabled)}
-          options={imageOptions}
-          busy={false}
-          disabled={false}
-          onChange={(selected) => updateModule('image_preset_id', 'image_preset_disabled', selected)}
-        />
-      </ControlSection>
-
-      <ControlSection icon={<UserRound className="size-4" />} title={t('directorPanel.tuning.state.title')}>
-        <ModuleSelectRow
-          label={t('directorPanel.tuning.state.system')}
-          value={String(refs.actor_state_id || '')}
-          moduleDisabled={Boolean(refs.actor_state_disabled)}
-          options={stateOptions}
-          busy={false}
-          disabled={value.stateSchemaMode === 'generate'}
-          onChange={(selected) => updateModule('actor_state_id', 'actor_state_disabled', selected)}
-        />
-        <TuningRow title={t('storyPicker.setup.stateSchema.title')} description={t('storyPicker.setup.stateSchema.description')}>
-          <TuningSelect
-            value={value.stateSchemaMode}
-            options={stateSchemaOptions(t)}
-            label={t('storyPicker.setup.stateSchema.title')}
-            onChange={(mode) => setStateSchemaMode(mode as StoryStateSchemaMode)}
-          />
-        </TuningRow>
-      </ControlSection>
+          <TuningRow title={t('storyPicker.setup.stateSchema.title')} description={t('storyPicker.setup.stateSchema.description')}>
+            <TuningSelect
+              value={value.stateSchemaMode}
+              options={stateSchemaOptions(t)}
+              label={t('storyPicker.setup.stateSchema.title')}
+              onChange={(mode) => setStateSchemaMode(mode as StoryStateSchemaMode)}
+            />
+          </TuningRow>
+        </ControlSection>
+      </div>
     </div>
   )
 }
@@ -437,13 +428,6 @@ function ruleStateConsumptionOptions(t: ReturnType<typeof useTranslation>['t']):
   return ['hybrid_auto', 'suggestions_only'].map((mode) => ({
     id: mode,
     label: t(`directorPanel.tuning.check.stateConsumption.${mode}`),
-  }))
-}
-
-function ruleVisibilityOptions(t: ReturnType<typeof useTranslation>['t']): TuningSelectOption[] {
-  return ['audit_only', 'public_roll'].map((mode) => ({
-    id: mode,
-    label: t(`directorPanel.tuning.check.visibility.${mode}`),
   }))
 }
 

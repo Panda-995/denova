@@ -31,6 +31,7 @@ type Config struct {
 	ImageAPIEndpoints        []ImageAPIEndpointSettings   `toml:"image_api_endpoints"`
 	ImageAPIProfiles         []ImageAPIProfileSettings    `toml:"image_api_profiles"`
 	AgentModels              AgentModelSettings           `toml:"agent_models"`
+	AgentRuntimes            AgentRuntimeSettings         `toml:"agent_runtimes"`
 	AgentTools               AgentToolSettings            `toml:"agent_tools"`
 	AgentPrompts             AgentPromptSettings          `toml:"agent_prompts"`
 	AgentSkills              AgentSkillSettings           `toml:"agent_skills"`
@@ -40,6 +41,7 @@ type Config struct {
 	CustomAgents             []CustomAgentConfig          `toml:"custom_agents"`
 	DefaultImageAgentID      string                       `toml:"default_image_agent_id"`
 	WebAccess                WebAccessConfig              `toml:"web_access"`
+	Market                   MarketSettings               `toml:"market"`
 	Labs                     ResolvedLabs                 `toml:"labs"`
 	SkillsDir                string                       `toml:"skills_dir"`
 	BackendPort              int                          `toml:"backend_port"`
@@ -53,9 +55,14 @@ type Config struct {
 	Workspace                string                       `toml:"workspace"`
 	// ProjectID and ProjectStoreDir are runtime-owned bindings. They never
 	// persist into user configuration or enter the content workspacelayout.
-	ProjectID                   string                    `toml:"-"`
-	ProjectStoreDir             string                    `toml:"-"`
-	ActiveCustomAgentID         string                    `toml:"-"`
+	ProjectID           string `toml:"-"`
+	ProjectStoreDir     string `toml:"-"`
+	ActiveCustomAgentID string `toml:"-"`
+	// Plugin calls are scoped to the current conversation at runtime.
+	AgentPluginScope AgentPluginScope `toml:"-" json:"-"`
+	// ActiveAgentRuntime is request-local and is resolved from the conversation
+	// snapshot. Agent defaults must never override it during execution.
+	ActiveAgentRuntime          *RuntimeSelection         `toml:"-" json:"-"`
 	ActiveCustomAgentName       string                    `toml:"-"`
 	ActiveCustomAgentRevision   string                    `toml:"-"`
 	RuntimeWebPort              int                       `toml:"-"`
@@ -65,7 +72,6 @@ type Config struct {
 	TraceExporter               string                    `toml:"trace_exporter"`
 	TraceRetentionRuns          int                       `toml:"trace_retention_runs"`
 	IDEStoryTellerID            string                    `toml:"-"`
-	InteractiveStoryTellerID    string                    `toml:"-"`
 	IDEImagePresetID            string                    `toml:"-"`
 	ImagePresetToolPrompt       string                    `toml:"-"`
 	WritingSkillDefault         string                    `toml:"writing_skill_default"`
@@ -129,6 +135,7 @@ func configFromLayered(novaDir, workspace string, layered LayeredSettings) *Conf
 		ImageAPIEndpoints:           s.ImageAPIEndpoints,
 		ImageAPIProfiles:            s.ImageAPIProfiles,
 		AgentModels:                 s.AgentModels,
+		AgentRuntimes:               s.AgentRuntimes,
 		AgentTools:                  s.AgentTools,
 		AgentPrompts:                s.AgentPrompts,
 		AgentSkills:                 s.AgentSkills,
@@ -138,10 +145,11 @@ func configFromLayered(novaDir, workspace string, layered LayeredSettings) *Conf
 		CustomAgents:                s.CustomAgents,
 		DefaultImageAgentID:         settingsOptionalString(s.DefaultImageAgentID),
 		WebAccess:                   ResolveWebAccessSettings(s.WebAccess),
+		Market:                      s.Market,
 		Labs:                        ResolveLabs(s.Labs),
 		SkillsDir:                   s.SkillsDir,
-		BackendPort:                 settingsInt(s.BackendPort, 8080),
-		FrontendPort:                settingsInt(s.FrontendPort, 5173),
+		BackendPort:                 settingsInt(s.BackendPort, 7789),
+		FrontendPort:                settingsInt(s.FrontendPort, 7788),
 		AllowLANAccess:              settingsBool(s.AllowLANAccess, false),
 		RemoteAccessUsername:        s.RemoteAccessUsername,
 		RemoteAccessPasswordHash:    s.RemoteAccessPasswordHash,
@@ -150,7 +158,6 @@ func configFromLayered(novaDir, workspace string, layered LayeredSettings) *Conf
 		NovaDir:                     novaDir,
 		Workspace:                   workspace,
 		IDEStoryTellerID:            s.IDEStoryTellerID,
-		InteractiveStoryTellerID:    s.InteractiveStoryTellerID,
 		IDEImagePresetID:            s.IDEImagePresetID,
 		WritingSkillDefault:         s.WritingSkillDefault,
 		MaxIteration:                settingsInt(s.MaxIteration, 0),
@@ -273,6 +280,7 @@ func settingsFromConfig(cfg *Config) Settings {
 		ImageAPIEndpoints:        cfg.ImageAPIEndpoints,
 		ImageAPIProfiles:         cfg.ImageAPIProfiles,
 		AgentModels:              cfg.AgentModels,
+		AgentRuntimes:            cfg.AgentRuntimes,
 		AgentTools:               cfg.AgentTools,
 		AgentPrompts:             cfg.AgentPrompts,
 		AgentSkills:              cfg.AgentSkills,
@@ -282,6 +290,7 @@ func settingsFromConfig(cfg *Config) Settings {
 		CustomAgents:             cfg.CustomAgents,
 		DefaultImageAgentID:      stringPtr(cfg.DefaultImageAgentID),
 		WebAccess:                settingsFromWebAccessConfig(cfg.WebAccess),
+		Market:                   cfg.Market,
 		Labs: LabSettings{
 			DeveloperMode: boolPtr(cfg.Labs.DeveloperMode),
 		},
@@ -294,7 +303,6 @@ func settingsFromConfig(cfg *Config) Settings {
 		ChapterFilenameFormat:    cfg.ChapterFilenameFormat,
 		VolumeDirFormat:          cfg.VolumeDirFormat,
 		IDEStoryTellerID:         cfg.IDEStoryTellerID,
-		InteractiveStoryTellerID: cfg.InteractiveStoryTellerID,
 		IDEImagePresetID:         cfg.IDEImagePresetID,
 		WritingSkillDefault:      cfg.WritingSkillDefault,
 		TerminalCommands:         cloneTerminalCommands(cfg.TerminalCommands),
@@ -392,6 +400,7 @@ func Load() *Config {
 			ImageAPIEndpoints:           d.ImageAPIEndpoints,
 			ImageAPIProfiles:            d.ImageAPIProfiles,
 			AgentModels:                 d.AgentModels,
+			AgentRuntimes:               d.AgentRuntimes,
 			AgentTools:                  d.AgentTools,
 			AgentPrompts:                d.AgentPrompts,
 			AgentSkills:                 d.AgentSkills,
@@ -401,10 +410,11 @@ func Load() *Config {
 			CustomAgents:                d.CustomAgents,
 			DefaultImageAgentID:         settingsOptionalString(d.DefaultImageAgentID),
 			WebAccess:                   ResolveWebAccessSettings(d.WebAccess),
+			Market:                      d.Market,
 			Labs:                        ResolveLabs(d.Labs),
 			SkillsDir:                   d.SkillsDir,
-			BackendPort:                 settingsInt(d.BackendPort, 8080),
-			FrontendPort:                settingsInt(d.FrontendPort, 5173),
+			BackendPort:                 settingsInt(d.BackendPort, 7789),
+			FrontendPort:                settingsInt(d.FrontendPort, 7788),
 			AllowLANAccess:              settingsBool(d.AllowLANAccess, false),
 			RemoteAccessUsername:        d.RemoteAccessUsername,
 			RemoteAccessPasswordHash:    d.RemoteAccessPasswordHash,
@@ -412,7 +422,6 @@ func Load() *Config {
 			DenovaDir:                   normalizePath(d.DenovaDir),
 			NovaDir:                     normalizePath(d.NovaDir),
 			IDEStoryTellerID:            d.IDEStoryTellerID,
-			InteractiveStoryTellerID:    d.InteractiveStoryTellerID,
 			IDEImagePresetID:            d.IDEImagePresetID,
 			WritingSkillDefault:         d.WritingSkillDefault,
 			MaxIteration:                settingsInt(d.MaxIteration, 0),

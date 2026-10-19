@@ -87,8 +87,12 @@ func TestExecutionProfilesExposeOnlySupportedCapabilities(t *testing.T) {
 func newExecutionProfileTestApp(t *testing.T) *App {
 	t.Helper()
 	root := t.TempDir()
+	// Settings reloads must use the same isolated data directory as startup.
+	t.Setenv("DENOVA_DIR", root)
+	t.Setenv("NOVA_DIR", root)
 	application, err := New(context.Background(), &config.Config{
 		OpenAIModel: "test-model", NovaDir: root, Workspace: root,
+		OpenAIBaseURL: "http://127.0.0.1:1/v1",
 	})
 	if err != nil {
 		t.Fatal(err)

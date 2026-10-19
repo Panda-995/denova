@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 type Placement string
@@ -94,7 +94,7 @@ type Source struct {
 }
 
 type Result struct {
-	Messages      []*agent.Message
+	Messages      []*agentschema.Message
 	Ledger        []LedgerPart
 	AnalysisParts []AnalysisPart
 	Fragments     []Fragment
@@ -169,13 +169,13 @@ func SourceSummary(sources []Source, previewChars int) string {
 	return fmt.Sprintf("count=%d parts=[%s]", len(items), strings.Join(items, "; "))
 }
 
-func cloneMessages(messages []*agent.Message) []*agent.Message {
+func cloneMessages(messages []*agentschema.Message) []*agentschema.Message {
 	if len(messages) == 0 {
 		return nil
 	}
-	out := make([]*agent.Message, 0, len(messages))
+	out := make([]*agentschema.Message, 0, len(messages))
 	for _, msg := range messages {
-		out = append(out, agent.CloneMessage(msg))
+		out = append(out, agentschema.CloneMessage(msg))
 	}
 	return out
 }

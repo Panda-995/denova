@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, type ReactNode } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
 import { DEFAULT_THEMES, parseDiffFromFile } from '@pierre/diffs'
 import {
   CodeView,
@@ -11,7 +11,7 @@ import {
 import { ChevronDown, ChevronLeft, ChevronRight, Copy } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { InlineCollapsiblePane } from '@/components/layout/panel-motion'
 import { Button } from '@/components/ui/button'
 import { DiffFileIcon, DiffFileIconSprite } from './DiffFileIcon'
@@ -41,6 +41,7 @@ export interface CodeDiffSurfaceFile extends DiffFileDocument {
 }
 
 interface CodeDiffSurfaceProps<Annotation> {
+  singleFile?: boolean
   files: readonly CodeDiffSurfaceFile[]
   navigatorFiles: readonly DiffFileNavigationItem[]
   navigation: MultiFileDiffNavigation
@@ -69,14 +70,29 @@ interface ParsedFileCacheEntry extends ParsedFile {
 }
 
 /** Virtualized diff renderer shared by change review and version history. */
-export function CodeDiffSurface<Annotation>({ files, navigatorFiles, navigation, layout, ariaLabel, empty, annotationsByPath, annotationRevisionByPath, renderHeaderMeta, renderHeaderAction, renderAnnotation, onLineSelectionEnd }: CodeDiffSurfaceProps<Annotation>) {
+export function CodeDiffSurface<Annotation>({ files, navigatorFiles, navigation, layout, ariaLabel, empty, annotationsByPath, annotationRevisionByPath, renderHeaderMeta, renderHeaderAction, renderAnnotation, onLineSelectionEnd, singleFile = false }: CodeDiffSurfaceProps<Annotation>) {
   const { t } = useTranslation()
   const { resolvedTheme } = useTheme()
   const codeViewRef = useRef<CodeViewHandle<Annotation> | null>(null)
   const parseCacheRef = useRef(new Map<string, ParsedFileCacheEntry>())
   const versionCacheRef = useRef(new Map<string, { signature: string; version: number }>())
 
-  const parsedFiles = useMemo(() => files.map((file) => {
+  // Decide the rendering budget before diffing. Parsing every hidden file
+  // defeats virtualization, especially with large generated JSON documents.
+  const singleFileMode = useMemo(() => {
+    if (singleFile) return true
+    let lines = 0, bytes = 0
+    for (const file of files) {
+      bytes += file.before_content.length + file.after_content.length
+      lines += Math.max(file.before_content.split('\n').length, file.after_content.split('\n').length)
+      if (lines > LARGE_DIFF_LINE_LIMIT || bytes > 256_000) return true
+    }
+    return false
+  }, [files, singleFile])
+  const activeIndex = Math.max(0, files.findIndex((file) => file.path === navigation.activePath))
+  const filesToParse = useMemo(() => singleFileMode ? files.slice(activeIndex, activeIndex + 1) : files, [files, singleFileMode, activeIndex])
+
+  const parsedFiles = useMemo(() => filesToParse.map((file) => {
     const beforeExists = file.before_exists !== false
     const afterExists = file.after_exists !== false
     const cached = parseCacheRef.current.get(file.path)
@@ -98,15 +114,8 @@ export function CodeDiffSurface<Annotation>({ files, navigatorFiles, navigation,
     const entry: ParsedFileCacheEntry = { source: file, diff, stats, before: file.before_content, after: file.after_content, beforeExists, afterExists }
     parseCacheRef.current.set(file.path, entry)
     return entry
-  }), [files])
-
-  const totalRenderedLines = useMemo(() => parsedFiles.reduce(
-    (total, file) => total + Math.max(file.diff.splitLineCount, file.diff.unifiedLineCount),
-    0,
-  ), [parsedFiles])
-  const singleFileMode = totalRenderedLines > LARGE_DIFF_LINE_LIMIT
-  const activeIndex = Math.max(0, files.findIndex((file) => file.path === navigation.activePath))
-  const visibleFiles = singleFileMode ? parsedFiles.slice(activeIndex, activeIndex + 1) : parsedFiles
+  }), [filesToParse])
+  const visibleFiles = parsedFiles
   const fileByPath = useMemo(() => new Map(files.map((file) => [file.path, file])), [files])
   const parsedByPath = useMemo(() => new Map(parsedFiles.map((file) => [file.source.path, file])), [parsedFiles])
   const treeFiles = useMemo(() => navigatorFiles.map((file) => ({
@@ -151,6 +160,16 @@ export function CodeDiffSurface<Annotation>({ files, navigatorFiles, navigation,
     navigation.selectFile(path)
     if (!singleFileMode) codeViewRef.current?.scrollTo({ type: 'item', id: path, align: 'start', behavior: 'instant' })
   }, [navigation, singleFileMode])
+
+  const previousSingleFileMode = useRef(singleFileMode)
+  useLayoutEffect(() => {
+    // Completing a partial response must retain the file the user opened while
+    // it was loading, even when the full comparison fits the continuous view.
+    if (previousSingleFileMode.current && !singleFileMode && navigation.activePath) {
+      codeViewRef.current?.scrollTo({ type: 'item', id: navigation.activePath, align: 'start', behavior: 'instant' })
+    }
+    previousSingleFileMode.current = singleFileMode
+  }, [navigation.activePath, singleFileMode])
 
   const syncActiveFile = useCallback((scrollTop: number, viewer: NonNullable<ReturnType<CodeViewHandle<Annotation>['getInstance']>>) => {
     if (singleFileMode || files.length === 0) return

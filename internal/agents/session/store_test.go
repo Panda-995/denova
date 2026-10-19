@@ -9,10 +9,12 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	agent "github.com/alfredxw/denova/agent"
+	"time"
 
 	agentcontext "denova/internal/agents/context"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 func TestAgentMessageWireRoundTripsAllStableFields(t *testing.T) {
@@ -26,22 +28,22 @@ func TestAgentMessageWireRoundTripsAllStableFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	callIndex := 2
-	want := &agent.Message{
-		Role:                     agent.Assistant,
+	want := &agentschema.Message{
+		Role:                     agentschema.Assistant,
 		Content:                  "result",
 		MultiContent:             []json.RawMessage{json.RawMessage(`{"type":"text","text":"multi"}`)},
 		UserInputMultiContent:    []json.RawMessage{json.RawMessage(`{"type":"input_text","text":"input"}`)},
 		AssistantGenMultiContent: []json.RawMessage{json.RawMessage(`{"type":"output_text","text":"output"}`)},
 		Name:                     "writer",
-		ToolCalls:                []agent.ToolCall{{Index: &callIndex, ID: "call-1", Type: "function", Function: agent.FunctionCall{Name: "read", Arguments: `{"path":"chapter.md"}`}, Extra: map[string]any{"provider": "test"}}},
+		ToolCalls:                []agentschema.ToolCall{{Index: &callIndex, ID: "call-1", Type: "function", Function: agentschema.FunctionCall{Name: "read", Arguments: `{"path":"chapter.md"}`}, Extra: map[string]any{"provider": "test"}}},
 		ToolCallID:               "parent-call",
 		ToolName:                 "task",
 		ReasoningContent:         "bounded reasoning",
 		Extra:                    map[string]any{"request_id": "req-1", "cached": true},
-		ResponseMeta: &agent.ResponseMeta{
+		ResponseMeta: &agentschema.ResponseMeta{
 			FinishReason: "tool_calls",
-			Usage:        &agent.TokenUsage{PromptTokens: 10, PromptTokenDetails: agent.PromptTokenDetails{CachedTokens: 4}, CompletionTokens: 5, TotalTokens: 15, CompletionTokensDetails: agent.CompletionTokensDetails{ReasoningTokens: 2}},
-			LogProbs:     &agent.LogProbs{Content: []agent.LogProb{{Token: "x", LogProb: -0.1, Bytes: []int64{120}, TopLogProbs: []agent.TopLogProb{{Token: "y", LogProb: -0.2}}}}},
+			Usage:        &agentschema.TokenUsage{PromptTokens: 10, PromptTokenDetails: agentschema.PromptTokenDetails{CachedTokens: 4}, CompletionTokens: 5, TotalTokens: 15, CompletionTokensDetails: agentschema.CompletionTokensDetails{ReasoningTokens: 2}},
+			LogProbs:     &agentschema.LogProbs{Content: []agentschema.LogProb{{Token: "x", LogProb: -0.1, Bytes: []int64{120}, TopLogProbs: []agentschema.TopLogProb{{Token: "y", LogProb: -0.2}}}}},
 		},
 	}
 	if err := sess.Append(want); err != nil {
@@ -62,7 +64,26 @@ func TestAgentMessageWireRoundTripsAllStableFields(t *testing.T) {
 	}
 }
 
-func TestClearMarkerKeepsHistoryAndLimitsEffectiveContext(t *testing.T) {
+// Released journals may contain clear records even though new conversations no longer write them.
+func appendReleasedClearMarker(sess *Session) error {
+	legacy, err := loadSession(sess.filePath)
+	if err != nil {
+		return err
+	}
+	defer legacy.Close()
+	if err := legacy.withCanonicalMutation(context.Background(), "append released clear fixture", func() error {
+		return legacy.appendJournalRecordLocked(clearRecord{
+			Type: historyTypeClear, CreatedAt: time.Now().UTC(), ContextRevision: legacy.contextRevision + 1,
+		})
+	}); err != nil {
+		return err
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	return sess.refreshCanonicalTailLocked()
+}
+
+func TestReleasedClearMarkerKeepsHistoryAndLimitsEffectiveContext(t *testing.T) {
 	store, err := NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -71,18 +92,29 @@ func TestClearMarkerKeepsHistoryAndLimitsEffectiveContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.UserMessage("清理前用户")); err != nil {
+	if err := sess.Append(agentschema.UserMessage("清理前用户")); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.AssistantMessage("清理前助手", nil)); err != nil {
+	if err := sess.Append(agentschema.AssistantMessage("清理前助手", nil)); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Clear(); err != nil {
+	if err := appendReleasedClearMarker(sess); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.UserMessage("清理后用户")); err != nil {
+	if err := sess.Append(agentschema.UserMessage("清理后用户")); err != nil {
 		t.Fatal(err)
 	}
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(sess.filePath[:len(sess.filePath)-len(".jsonl")] + ".idx.json"); err != nil {
+		t.Fatal(err)
+	}
+	sess, err = loadSession(sess.filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
 
 	all := sess.GetMessages()
 	if len(all) != 3 {
@@ -147,10 +179,10 @@ func TestAssistantMessageMetadataPersistsRunID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.UserMessage("写一段")); err != nil {
+	if err := sess.Append(agentschema.UserMessage("写一段")); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.AppendWithMetadata(agent.AssistantMessage("已完成", nil), MessageMetadata{
+	if err := sess.AppendWithMetadata(agentschema.AssistantMessage("已完成", nil), MessageMetadata{
 		RunID:         "run-1",
 		AgentKind:     "ide",
 		AgentName:     "DenovaAgent",
@@ -192,7 +224,7 @@ func TestUserMessageReferencesPersistAcrossSessionReload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.AppendWithMetadata(agent.UserMessage("请修改"), MessageMetadata{UserReferences: []agentcontext.UserReference{
+	if err := sess.AppendWithMetadata(agentschema.UserMessage("请修改"), MessageMetadata{UserReferences: []agentcontext.UserReference{
 		{Kind: "file", Label: "chapters/ch01.md"},
 		{Kind: "review_comment", ID: "comment-1", Label: "setting/progress.md", Detail: "需要增加爽点"},
 	}}); err != nil {
@@ -226,24 +258,24 @@ func TestDisplayEventsPersistOutsideEffectiveContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.UserMessage("帮我规划下一章")); err != nil {
+	if err := sess.Append(agentschema.UserMessage("帮我规划下一章")); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.AppendDisplayEvent(DisplayEvent{Role: "thinking", Content: "先分析角色动机"}); err != nil {
 		t.Fatal(err)
 	}
-	presentation := agent.UniformToolPresentation(agent.ToolPresentationSearch)
+	presentation := agenttool.UniformToolPresentation(agenttool.ToolPresentationSearch)
 	if err := sess.AppendDisplayEvent(DisplayEvent{ID: "call-1", Role: "tool_call", Name: "read", Content: "read", Status: "running", ToolPresentation: &presentation}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.AppendDisplayToolArgs("call-1", "read", `{"path":"chapters/1.md"}`); err != nil {
 		t.Fatal(err)
 	}
-	resultPresentation := agent.ToolPresentation{Call: agent.ToolPresentationSearch, Result: agent.ToolPresentationInteractiveMedia}
+	resultPresentation := agenttool.ToolPresentation{Call: agenttool.ToolPresentationSearch, Result: agenttool.ToolPresentationInteractiveMedia}
 	if err := sess.UpdateDisplayToolResult("call-1", "read", "success", "章节内容", &resultPresentation); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.AssistantMessage("规划完成", nil)); err != nil {
+	if err := sess.Append(agentschema.AssistantMessage("规划完成", nil)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -260,13 +292,13 @@ func TestDisplayEventsPersistOutsideEffectiveContext(t *testing.T) {
 		t.Fatalf("展示事件不应进入 Agent 有效上下文: %#v", effective)
 	}
 	history := reloaded.History()
-	var persistedPresentation *agent.ToolPresentation
+	var persistedPresentation *agenttool.ToolPresentation
 	for _, entry := range history {
 		if entry.ID == "call-1" {
 			persistedPresentation = entry.ToolPresentation
 		}
 	}
-	if persistedPresentation == nil || persistedPresentation.Call != agent.ToolPresentationSearch || persistedPresentation.Result != agent.ToolPresentationInteractiveMedia {
+	if persistedPresentation == nil || persistedPresentation.Call != agenttool.ToolPresentationSearch || persistedPresentation.Result != agenttool.ToolPresentationInteractiveMedia {
 		t.Fatalf("display presentation changed across reload: %#v", persistedPresentation)
 	}
 	if len(history) != 4 {
@@ -293,7 +325,7 @@ func TestOrderedAssistantDisplaySegmentsReplaceAggregatedAssistantInHistory(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.UserMessage("继续创作")); err != nil {
+	if err := sess.Append(agentschema.UserMessage("继续创作")); err != nil {
 		t.Fatal(err)
 	}
 	for _, event := range []DisplayEvent{
@@ -306,7 +338,7 @@ func TestOrderedAssistantDisplaySegmentsReplaceAggregatedAssistantInHistory(t *t
 			t.Fatal(err)
 		}
 	}
-	if err := sess.AppendWithMetadata(agent.AssistantMessage("第一段正文。第二段正文。", nil), MessageMetadata{RunID: "run-order"}); err != nil {
+	if err := sess.AppendWithMetadata(agentschema.AssistantMessage("第一段正文。第二段正文。", nil), MessageMetadata{RunID: "run-order"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -348,7 +380,7 @@ func TestTerminalAssistantDisplaySegmentReplacesCanonicalAssistantAfterProgress(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.UserMessage("删除 ideas.md")); err != nil {
+	if err := sess.Append(agentschema.UserMessage("删除 ideas.md")); err != nil {
 		t.Fatal(err)
 	}
 	for _, event := range []DisplayEvent{
@@ -360,7 +392,7 @@ func TestTerminalAssistantDisplaySegmentReplacesCanonicalAssistantAfterProgress(
 		}
 	}
 	if err := sess.AppendWithMetadata(
-		agent.AssistantMessage("已完成，ideas.md 已删除。", nil),
+		agentschema.AssistantMessage("已完成，ideas.md 已删除。", nil),
 		MessageMetadata{RunID: "run-1"},
 	); err != nil {
 		t.Fatal(err)
@@ -406,7 +438,7 @@ func TestIncompleteAssistantDisplaySegmentsDoNotHideCanonicalHistory(t *testing.
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.AppendWithMetadata(agent.AssistantMessage("第一段。第二段。", nil), MessageMetadata{RunID: "run-incomplete"}); err != nil {
+	if err := sess.AppendWithMetadata(agentschema.AssistantMessage("第一段。第二段。", nil), MessageMetadata{RunID: "run-incomplete"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -426,23 +458,23 @@ func TestContextMessagesPersistInEffectiveContextButNotHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.UserMessage("读取第一章")); err != nil {
+	if err := sess.Append(agentschema.UserMessage("读取第一章")); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.AppendContextMessage(agent.AssistantMessage("", []agent.ToolCall{{
+	if err := sess.AppendContextMessage(agentschema.AssistantMessage("", []agentschema.ToolCall{{
 		ID:   "call-read",
 		Type: "function",
-		Function: agent.FunctionCall{
+		Function: agentschema.FunctionCall{
 			Name:      "read",
 			Arguments: `{"path":"chapters/1.md"}`,
 		},
 	}})); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.AppendContextMessage(agent.ToolMessage(agent.TextToolResult("第一章内容"), "call-read", agent.WithToolName("read"))); err != nil {
+	if err := sess.AppendContextMessage(agentschema.ToolMessage(agentschema.TextToolResult("第一章内容"), "call-read", agentschema.WithToolName("read"))); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.AssistantMessage("已读取", nil)); err != nil {
+	if err := sess.Append(agentschema.AssistantMessage("已读取", nil)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -458,7 +490,7 @@ func TestContextMessagesPersistInEffectiveContextButNotHistory(t *testing.T) {
 	if len(effective) != 4 {
 		t.Fatalf("context messages should enter effective context: %#v", effective)
 	}
-	if effective[1].Role != agent.Assistant || len(effective[1].ToolCalls) != 1 || effective[2].Role != agent.ToolRole || effective[2].Content != "第一章内容" {
+	if effective[1].Role != agentschema.Assistant || len(effective[1].ToolCalls) != 1 || effective[2].Role != agentschema.ToolRole || effective[2].Content != "第一章内容" {
 		t.Fatalf("context tool chain mismatch: %#v", effective)
 	}
 	history := reloaded.History()
@@ -529,7 +561,7 @@ func TestSubAgentAssistantDisplayChunksPersistOutsideEffectiveContext(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.UserMessage("委派调研")); err != nil {
+	if err := sess.Append(agentschema.UserMessage("委派调研")); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.AppendDisplayEvent(DisplayEvent{
@@ -750,7 +782,7 @@ func TestTokenUsageDisplayEventPersistsOutsideEffectiveContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.UserMessage("统计一下")); err != nil {
+	if err := sess.Append(agentschema.UserMessage("统计一下")); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.AppendDisplayEvent(DisplayEvent{
@@ -775,7 +807,7 @@ func TestTokenUsageDisplayEventPersistsOutsideEffectiveContext(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.AssistantMessage("统计完成", nil)); err != nil {
+	if err := sess.Append(agentschema.AssistantMessage("统计完成", nil)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -823,7 +855,7 @@ func TestExecutionSummaryPersistsOutsideEffectiveContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.UserMessage("run")); err != nil {
+	if err := sess.Append(agentschema.UserMessage("run")); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.AppendDisplayEvent(DisplayEvent{
@@ -933,14 +965,14 @@ func TestMultipleSessionsAreIsolatedAndActiveSessionPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := first.Append(agent.UserMessage("会话 A")); err != nil {
+	if err := first.Append(agentschema.UserMessage("会话 A")); err != nil {
 		t.Fatal(err)
 	}
 	second, err := store.Create("会话 B")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := second.Append(agent.UserMessage("会话 B")); err != nil {
+	if err := second.Append(agentschema.UserMessage("会话 B")); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.SetActiveID(second.ID); err != nil {
@@ -984,13 +1016,13 @@ func TestListUsesProjectionWithoutMaterializingColdSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.UserMessage("投影列表标题")); err != nil {
+	if err := sess.Append(agentschema.UserMessage("投影列表标题")); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.AppendContextMessage(agent.ToolMessage(agent.TextToolResult("仅模型上下文"), "projection-list-tool")); err != nil {
+	if err := sess.AppendContextMessage(agentschema.ToolMessage(agentschema.TextToolResult("仅模型上下文"), "projection-list-tool")); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(agent.AssistantMessage("投影列表回复", nil)); err != nil {
+	if err := sess.Append(agentschema.AssistantMessage("投影列表回复", nil)); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -1051,7 +1083,7 @@ func TestListAndDeleteByPrefixForInteractiveSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := matching.Append(agent.UserMessage("互动故事")); err != nil {
+	if err := matching.Append(agentschema.UserMessage("互动故事")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.GetOrCreate("interactive-story-st_002-main"); err != nil {
@@ -1186,7 +1218,7 @@ func TestStoreBoundsResidentSessionsWithoutInvalidatingInFlightHandles(t *testin
 	if store.cache[first.ID] != nil {
 		t.Fatal("least-recently-used session remained resident")
 	}
-	if err := first.Append(agent.UserMessage("still valid")); err != nil {
+	if err := first.Append(agentschema.UserMessage("still valid")); err != nil {
 		t.Fatalf("evicted in-flight session handle failed: %v", err)
 	}
 	reopened, err := store.Get(first.ID)

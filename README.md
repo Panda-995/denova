@@ -11,15 +11,15 @@
 </p>
 
 <p align="center">
-  <a href="https://discord.gg/QuHu2aPya"><img src="https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white" alt="加入 Denova Discord" /></a>
+  <a href="https://discord.gg/BM6dRmyvvZ"><img src="https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white" alt="加入 Denova Discord" /></a>
   <a href="https://github.com/alfredxw/denova/releases"><img alt="Release" src="https://img.shields.io/github/v/release/alfredxw/denova?style=flat-square"></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/github/license/alfredxw/denova?style=flat-square"></a>
-  <img alt="Go" src="https://img.shields.io/badge/Go-1.26.6%2B-00ADD8?style=flat-square&logo=go&logoColor=white">
+  <img alt="Go" src="https://img.shields.io/badge/Go-1.26.9%2B-00ADD8?style=flat-square&logo=go&logoColor=white">
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-22.13%2B-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white">
 </p>
 
 <p align="center">
-  当前版本：<strong>v0.4.4</strong>（2026-09-08） · Beta · <a href="https://github.com/alfredxw/denova/releases">下载最新版本</a>
+  当前版本：<strong>v0.6.1</strong>（2026-10-19） · Beta · <a href="https://github.com/alfredxw/denova/releases">下载最新版本</a>
 </p>
 
 ![Denova 写作](./img/ide.png)
@@ -35,9 +35,9 @@
 
 ![Denova 资料库](./img/setting.png)
 
-### 方案预设
+### 创作方案
 
-![Denova 方案预设](./img/story-teller.png)
+![Denova 创作方案](./img/story-teller.png)
 
 ### 修改审阅
 
@@ -62,19 +62,22 @@ Denova 把小说写作、互动故事、结构化资料库、AI Agent、图像�
 ## 核心能力
 
 - **小说写作**：Markdown 文档与源码编辑、多文档 Tab、查找替换、大纲与章节细纲、进度追踪、正文评论、修改审阅和现有小说导入。
-- **创作 Agent**：结合当前选区、项目文件和资料库进行创作，可通过 Skills 扩展工作流，并支持多个会话和按需的 SubAgent 协作。
-- **互动游戏**：通过玩家输入推进故事，支持剧情分支、故事线切换、行动建议、角色与世界状态、规则检定以及可调整的剧情规划。
-- **资料库与方案预设**：统一管理角色、地点、势力、世界规则和叙事风格，让稳定设定同时服务写作与游戏。
-- **图像创作**：生成章节插画、互动图像和书籍封面，并在界面中预览和管理结果。
+- **创作 Agent**：支持 Native、Codex 和 Claude Code，结合当前选区、项目文件、图片和资料库进行创作；支持多会话、SubAgent 协作和任务暂停恢复。
+- **互动游戏**：通过玩家输入推进故事，支持剧情分支、故事线切换、行动建议、角色与世界状态、规则检定、剧情规划和语音朗读；可用资料库背景与角色差分编排舞台演出，并随故事分支保存。
+- **资料库**：通过自定义分类、文档式索引、@ 引用和反向引用组织设定，按组为写作与游戏 Agent 提供上下文；资料支持多图、音频与封面管理。
+- **创作方案与 Skills**：复用叙事风格、图像风格和规则等创作配置，通过 Skills 扩展 Agent 工作流，让创作资源同时服务写作与游戏。
+- **资源中心**：发现、预览并按需导入创作方案、Skills、资料、插件和游戏；支持组合导出、来源追踪、更新审阅与备份恢复。
+- **插件与游戏扩展**：安装并管理插件与自定义游戏；插件可提供 Agent 工具、直接操作命令和独立面板，游戏可自定义界面、玩法与存档；工作台支持创建、构建、隔离预览和导出。
+- **图像创作**：生成书籍封面、章节插画、游戏背景与角色素材，并在界面中预览、关联资料和管理结果。
 - **版本与恢复**：保存本地版本、查看差异、恢复历史文件，并审阅或撤销 Agent 对工作区的修改。
 - **自动化**：按计划运行审阅、续写和自定义创作任务。
-- **跨平台体验**：支持中文与英文、浅色与深色主题、Windows / macOS / Linux、远程访问和添加到手机主屏幕。
+- **跨平台体验**：支持中文与英文、浅色与深色主题、Windows / macOS / Linux、远程访问和添加到手机主屏幕，提供应用内更新与安装包上传更新。
 
 ## 写作与游戏
 
 写作和游戏是工作台中并列的一级入口。写作侧重构思、设定、大纲、章节和进度；游戏侧重玩家行动、剧情分支、角色状态和故事线推进。
 
-资料库、方案预设、Skills 和版本管理由两类流程共享；章节进度和游戏状态则各自独立，避免一个入口的临时状态干扰另一个入口。
+资料库、创作方案、Skills 和版本管理由两类流程共享；章节进度和游戏状态则各自独立，避免一个入口的临时状态干扰另一个入口。
 
 ## 快速开始
 
@@ -90,8 +93,6 @@ curl -fsSL https://raw.githubusercontent.com/alfredxw/denova/master/scripts/inst
 
 稳定使用建议选择 Release；`master` 分支可能包含尚未发布的改动。
 
-从 v0.3.3 升级前，请阅读 [v0.4.0 更新与数据迁移说明](./CHANGELOG.md)：旧全局自动化需在项目内重新创建，部分模型和上下文选项需重新设置。
-
 ### 第一次使用
 
 1. 按启动引导添加语言模型的 API Key 和模型名。
@@ -100,7 +101,7 @@ curl -fsSL https://raw.githubusercontent.com/alfredxw/denova/master/scripts/inst
 
 ### 从源码运行
 
-需要 Go 1.26.6+、Node.js 22.13+、pnpm、ripgrep 和 Bash。Windows 请在 Git Bash 或 WSL 中运行以下命令。
+需要 Go 1.26.9+、Node.js 22.13+、pnpm、ripgrep 和 Bash。Windows 请在 Git Bash 或 WSL 中运行以下命令。
 
 ```bash
 git clone https://github.com/alfredxw/denova.git
@@ -111,12 +112,14 @@ corepack enable
 
 默认地址：
 
-- 前端：`http://localhost:5173`
-- 后端：`http://localhost:8080`
+- 前端：`http://localhost:7788`
+- 后端：`http://localhost:7789`
 
 ## 模型与配置
 
 推荐在设置页完成模型配置：先添加服务商连接，再选择或填写模型并测试连接。同一连接可以复用于多个模型。语言模型支持内置服务商和自定义兼容端点；图像模型支持 OpenAI、xAI/Grok、火山引擎 Seedream、Google Gemini Image、ComfyUI Workflow 和自定义端点。
+
+Google Gemini 文本模型可在连接的协议选项中选择「Gemini 原生协议」，使用原生工具调用、图片输入与推理续接；已有 OpenAI 兼容连接保持原协议。
 
 ## 远程访问与手机使用
 
@@ -125,6 +128,10 @@ corepack enable
 从源码运行时，二维码和连接链接使用后端端口提供的 `web/dist` 构建产物。首次使用或更新前端后，执行 `pnpm --dir web build` 并重启后端；本机 Vite 热更新入口可继续用于开发。
 
 通过公网或域名部署时，请使用 Caddy、Nginx 等反向代理提供 HTTPS，避免明文传输登录凭据。
+
+## 使用统计
+
+正式发布版本首次启动会说明使用统计，告知确认后才开始采集，默认开启，可在「设置 → 常规」随时关闭。统计只包含活跃、功能触达、留存、版本、平台、执行结果和毫秒耗时等固定字段，不包含正文、提示词、AI 回答、图片、项目名称、文件路径或密钥。随机本地标识用于关联留存，数据发送至 Umami Cloud，云端会接触连接 IP。源码和开发版本不发送统计；完整口径与字段见 [使用统计说明](./docs/analytics.md)。
 
 ## 开发
 
@@ -140,10 +147,10 @@ corepack enable
 
 Denova 仍在快速迭代中，欢迎反馈问题、分享用法或讨论创作工作流。
 
-[Discord 社区](https://discord.gg/QuHu2aPya)
+[Discord 社区](https://discord.gg/BM6dRmyvvZ)
 
 <p align="center">
-  <img src="./img/wechat.png" alt="微信交流" width="240">
+  <img src="./img/wechat.jpeg" alt="微信交流" width="240">
 </p>
 
 ## 赞助项目

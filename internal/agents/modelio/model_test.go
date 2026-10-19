@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alfredxw/denova/agent/providers"
-
 	"denova/config"
+
+	"github.com/alfredxw/denova/agent/model/providers"
 )
 
 func TestChatModelConfigFromResolvedKeepsNeutralThinkingLevel(t *testing.T) {

@@ -65,6 +65,9 @@ export function useWritingAgentHistory({ setMessages, client = writingAgentChatC
       const page = await client.getMessagesPage(targetSessionId || undefined)
       if (mode === 'when-idle' && transportStreamingRef.current) return
       if (generation !== historyRequestGenerationRef.current) {
+        // Background refreshes may overlap a tool completion or a resume.
+        // Only an authoritative caller requires proof that its read won.
+        if (mode === 'when-idle') return
         throw new Error('Writing history reload was superseded before it could become authoritative')
       }
 

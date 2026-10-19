@@ -1,15 +1,19 @@
-import { useEffect, useMemo, useState } from 'react'
-import { AlignLeft, AlertCircle, ChevronDown, ChevronUp, CircleCheck, Gauge, Globe2, LayoutDashboard, Loader2, Package, PanelRight, Sparkles, Tag } from 'lucide-react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { animate, motion, useMotionValue, useReducedMotionConfig } from 'motion/react'
+import { AlignLeft, AlertCircle, ChevronDown, ChevronUp, CircleCheck, Gauge, Globe2, LayoutDashboard, Loader2, Package, Sparkles, Tag } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useIsMobile } from '@/hooks/useIsMobile'
+import { novaEase } from '@/features/motion/motion-tokens'
+import { useMotionIntensity } from '@/features/motion/motion-preferences'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '@/components/ui/empty'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type { Snapshot } from '../../types'
-import { ChangesSummary } from './ChangesSummary'
 import { ActorArchiveList } from './ActorArchiveList'
+import { ActorLorePreview, type ActorLoreContext } from './ActorLorePreview'
+import { ActorReferenceProvider } from './actor-reference'
 import type { StoryStateDisplayPreference } from './display-preference'
 import { applyStoryStateLayout, readStoryStateLayouts, writeStoryStateTemplateLayout, type StoryStateLayouts, type StoryStateTemplateLayout } from './layout-preference'
 import { LedgerFieldView } from './ledger-fields'
@@ -43,9 +47,12 @@ const PANEL_MODE_BY_PREFERENCE: Record<StoryStateDisplayPreference, StoryStatePa
 
 interface StoryStateLedgerProps {
   snapshot: Snapshot | null
+  /** Reveal a newly confirmed turn without replaying entrance motion on history load. */
+  animateEntrance?: boolean
   displayPreference: StoryStateDisplayPreference
   onDisplayPreferenceChange: (value: StoryStateDisplayPreference) => void
-  onOpenDirectorState?: () => void
+  detailsAction?: ReactNode
+  actorLore?: ActorLoreContext
 }
 
 interface StateLedgerPresentation {
@@ -61,11 +68,13 @@ interface StateLedgerPresentation {
  * Fields lay out as bordered group sections on one page. Schema hints provide
  * the fallback grouping, while a story + template UI preference controls the
  * final section and field order. Preview mode shows the first two ordered
- * sections with a "show all" affordance; the turn's state delta surfaces once in the
- * summary row plus per-field change chips.
+ * sections with a "show all" affordance; the turn's change count appears in the
+ * header, with details available in per-field change chips.
  */
-export function StoryStateLedger({ snapshot, displayPreference, onDisplayPreferenceChange, onOpenDirectorState }: StoryStateLedgerProps) {
+export function StoryStateLedger({ snapshot, animateEntrance = false, displayPreference, onDisplayPreferenceChange, detailsAction, actorLore }: StoryStateLedgerProps) {
   const { t } = useTranslation()
+  const reducedMotion = useReducedMotionConfig()
+  const motionDisabled = useMotionIntensity() === 'off'
   const isMobile = useIsMobile()
   const { model, actorLedgers, worldLedger, allActors, actorTabs, hasWorldFacts, storyId } = useStoryStateLedgerData(snapshot)
   const [selectedTab, setSelectedTab] = useStoryStateTab(actorTabs, hasWorldFacts)
@@ -93,73 +102,22 @@ export function StoryStateLedger({ snapshot, displayPreference, onDisplayPrefere
   const collapsed = panelMode === 'collapsed'
 
   return (
-    <Collapsible
-      open={!collapsed}
-      onOpenChange={(nextOpen) => setPanelMode(nextOpen ? 'preview' : 'collapsed')}
-      asChild
-    >
-      <section
-        aria-label={t('storyStage.state.current')}
-        data-state-panel-mode={panelMode}
-        data-nova-chat-after-content-height-scope={panelMode}
-        className="story-state-ledger mt-3 overflow-hidden rounded-xl border border-[var(--nova-border)] bg-[var(--story-state-canvas)]"
+    <ActorReferenceProvider actors={allActors}>
+      <Collapsible
+        open={!collapsed}
+        onOpenChange={(nextOpen) => setPanelMode(nextOpen ? 'preview' : 'collapsed')}
+        asChild
       >
-        <header className="flex h-10 min-w-0 items-center gap-2 px-2.5">
-          {isMobile ? (
-            <CollapsibleTrigger asChild>
-              <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-label={collapsed ? t('storyStage.state.expand') : t('storyStage.state.collapse')}>
-                <StatusIndicator status={snapshot?.current_turn?.state_status} />
-                <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-semibold">{t('storyStage.state.current')}</span>
-                  <span className="block truncate text-xs text-muted-foreground">{turnStatusLabel(snapshot, t)}</span>
-                </span>
-                {collapsed ? <ChevronDown className="size-4 shrink-0" /> : <ChevronUp className="size-4 shrink-0" />}
-              </button>
-            </CollapsibleTrigger>
-          ) : <>
-          <StatusIndicator status={snapshot?.current_turn?.state_status} />
-          <div className="flex min-w-0 flex-1 items-baseline gap-2">
-            <h2 className="shrink-0 text-[13px] font-semibold tracking-tight text-[var(--nova-text)]">{t('storyStage.state.current')}</h2>
-            <p className="min-w-0 truncate text-[11px] text-[var(--nova-text-faint)]">{turnStatusLabel(snapshot, t)}</p>
-          </div>
-          </>}
-          {isMobile ? (
-            selectedLedger?.groups.length ? <Button type="button" variant="ghost" size="icon-sm" aria-label={t('storyStage.state.layout.customize')} onClick={() => setLayoutEditorOpen(true)}><LayoutDashboard /></Button> : null
-          ) : <StateDisplayPreferenceMenu
-            value={displayPreference}
-            onChange={onDisplayPreferenceChange}
-            onCustomizeLayout={selectedLedger?.groups.length ? () => setLayoutEditorOpen(true) : undefined}
-            compact
-          />}
-          {onOpenDirectorState ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={onOpenDirectorState}
-              aria-label={t('storyStage.state.openDirector')}
-            >
-              <PanelRight data-icon="inline-start" />
-              <span className="story-state-ledger__director-label">{t('storyStage.state.openDirector')}</span>
-            </Button>
-          ) : null}
-          {!isMobile ? <CollapsibleTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label={collapsed ? t('storyStage.state.expand') : t('storyStage.state.collapse')}
-            >
-              {collapsed ? <ChevronDown data-icon="inline-start" /> : <ChevronUp data-icon="inline-start" />}
-            </Button>
-          </CollapsibleTrigger> : null}
-        </header>
-
-        {isMobile && collapsed && model.changes.length > 0 ? <ChangesSummary changes={model.changes} actors={allActors} schema={snapshot?.actor_state_schema} /> : null}
-        <CollapsibleContent>
-          {model.changes.length > 0 ? (
-            <ChangesSummary changes={model.changes} actors={allActors} schema={snapshot?.actor_state_schema} />
-          ) : null}
+        <motion.section
+          // Keep intrinsic height stable for the virtual list. Reduced motion
+          // still gets a gentle fade; only the explicit off preference skips it.
+          initial={animateEntrance && !motionDisabled ? { opacity: 0, y: reducedMotion ? 0 : 12 } : false}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: motionDisabled ? 0 : reducedMotion ? 0.18 : 0.32, ease: 'easeOut' }}
+          aria-label={t('storyStage.state.current')}
+          data-state-panel-mode={panelMode}
+          className="story-state-ledger mt-3 overflow-clip rounded-xl border border-[var(--nova-border)] bg-[var(--story-state-canvas)]"
+        >
           <StateEntityPanels
             actorLedgers={actorLedgers}
             actorTabs={actorTabs}
@@ -167,43 +125,88 @@ export function StoryStateLedger({ snapshot, displayPreference, onDisplayPrefere
             showWorld={hasWorldFacts}
             selectedTab={selectedTab}
             layouts={layouts}
-            panelMode={panelMode === 'expanded' ? 'expanded' : 'preview'}
+            actorLore={actorLore}
+            panelMode={panelMode}
             onSelectedTabChange={setSelectedTab}
             onPanelModeChange={setPanelMode}
+            header={
+              <header data-nova-chat-after-content-reveal className="flex h-10 min-w-0 items-center gap-2 px-2.5">
+                {isMobile ? (
+                  <CollapsibleTrigger asChild>
+                    <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-label={collapsed ? t('storyStage.state.expand') : t('storyStage.state.collapse')}>
+                      <StatusIndicator status={snapshot?.current_turn?.state_status} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-semibold">{t('storyStage.state.current')}</span>
+                        <span className="block truncate text-xs text-muted-foreground">{stateStatusLabel(snapshot, model.changes.length, t)}</span>
+                      </span>
+                      {collapsed ? <ChevronDown className="size-4 shrink-0" /> : <ChevronUp className="size-4 shrink-0" />}
+                    </button>
+                  </CollapsibleTrigger>
+                ) : (
+                  <>
+                    <StatusIndicator status={snapshot?.current_turn?.state_status} />
+                    <div className="flex min-w-0 flex-1 items-baseline gap-2">
+                      <h2 className="shrink-0 text-[13px] font-semibold tracking-tight text-[var(--nova-text)]">{t('storyStage.state.current')}</h2>
+                      <p className="min-w-0 truncate text-[11px] text-[var(--nova-text-faint)]">{stateStatusLabel(snapshot, model.changes.length, t)}</p>
+                    </div>
+                  </>
+                )}
+                {isMobile ? (
+                  selectedLedger?.groups.length ? <Button type="button" variant="ghost" size="icon-sm" aria-label={t('storyStage.state.layout.customize')} onClick={() => setLayoutEditorOpen(true)}><LayoutDashboard /></Button> : null
+                ) : <StateDisplayPreferenceMenu
+                  value={displayPreference}
+                  onChange={onDisplayPreferenceChange}
+                  onCustomizeLayout={selectedLedger?.groups.length ? () => setLayoutEditorOpen(true) : undefined}
+                  compact
+                />}
+                {detailsAction}
+                {!isMobile ? <CollapsibleTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="story-state-ledger__action"
+                    aria-label={collapsed ? t('storyStage.state.expand') : t('storyStage.state.collapse')}
+                  >
+                    {collapsed ? <ChevronDown data-icon="inline-start" /> : <ChevronUp data-icon="inline-start" />}
+                  </Button>
+                </CollapsibleTrigger> : null}
+              </header>
+            }
+            afterContent={<ActorArchiveList entries={model.archivedActors} />}
           />
-          <ActorArchiveList entries={model.archivedActors} />
-        </CollapsibleContent>
-        {selectedLedger ? (
-          <StateLayoutEditor
-            open={layoutEditorOpen}
-            title={selectedLedger.id === WORLD_STATE_TAB ? t('storyStage.state.world') : selectedLedger.name}
-            groups={selectedLedger.groups}
-            value={layouts[selectedLedger.templateId]}
-            onOpenChange={setLayoutEditorOpen}
-            onChange={(layout) => {
-              const next = { ...layouts, [selectedLedger.templateId]: layout }
-              setLayoutState({ storyId, layouts: next })
-              writeStoryStateTemplateLayout(storyId, selectedLedger.templateId, layout)
-            }}
-            onReset={() => {
-              const next = { ...layouts }
-              delete next[selectedLedger.templateId]
-              setLayoutState({ storyId, layouts: next })
-              writeStoryStateTemplateLayout(storyId, selectedLedger.templateId, null)
-            }}
-          />
-        ) : null}
-      </section>
-    </Collapsible>
+          {selectedLedger ? (
+            <StateLayoutEditor
+              open={layoutEditorOpen}
+              title={selectedLedger.id === WORLD_STATE_TAB ? t('storyStage.state.world') : selectedLedger.name}
+              groups={selectedLedger.groups}
+              value={layouts[selectedLedger.templateId]}
+              onOpenChange={setLayoutEditorOpen}
+              onChange={(layout) => {
+                const next = { ...layouts, [selectedLedger.templateId]: layout }
+                setLayoutState({ storyId, layouts: next })
+                writeStoryStateTemplateLayout(storyId, selectedLedger.templateId, layout)
+              }}
+              onReset={() => {
+                const next = { ...layouts }
+                delete next[selectedLedger.templateId]
+                setLayoutState({ storyId, layouts: next })
+                writeStoryStateTemplateLayout(storyId, selectedLedger.templateId, null)
+              }}
+            />
+          ) : null}
+        </motion.section>
+      </Collapsible>
+    </ActorReferenceProvider>
   )
 }
 
 /**
- * Full-width state projection for secondary surfaces such as the Story Console
+ * Full-width state projection for secondary surfaces such as the Game Console
  * dialog. It reuses the stage ledger's grouping, field renderers, saved layout,
- * and Actor/world navigation without repeating the narrow sidebar treatment.
+ * and Actor/world navigation with an optional persistent character Lore sidebar.
  */
-export function StoryStateDetails({ snapshot }: { snapshot: Snapshot | null }) {
+export function StoryStateDetails({ snapshot, actorLore }: { snapshot: Snapshot | null; actorLore?: ActorLoreContext }) {
   const { t } = useTranslation()
   const { model, actorLedgers, worldLedger, allActors, actorTabs, hasWorldFacts, storyId } = useStoryStateLedgerData(snapshot)
   const layouts = useMemo(() => readStoryStateLayouts(storyId), [storyId])
@@ -217,23 +220,26 @@ export function StoryStateDetails({ snapshot }: { snapshot: Snapshot | null }) {
   if (!model.hasState) return <StateSectionEmpty label={t('directorPanel.stateEmpty')} />
 
   return (
-    <section className="story-state-ledger overflow-hidden rounded-xl border border-[var(--nova-border)] bg-[var(--story-state-canvas)]">
-      {model.changes.length > 0 ? (
-        <ChangesSummary changes={model.changes} actors={allActors} schema={snapshot?.actor_state_schema} standalone />
-      ) : null}
-      <StateEntityPanels
-        actorLedgers={actorLedgers}
-        actorTabs={actorTabs}
-        worldLedger={worldLedger}
-        showWorld={hasWorldFacts}
-        selectedTab={selectedTab}
-        layouts={layouts}
-        panelMode={panelMode === 'expanded' ? 'expanded' : 'preview'}
-        onSelectedTabChange={setSelectedTab}
-        onPanelModeChange={setPanelMode}
-      />
-      <ActorArchiveList entries={model.archivedActors} />
-    </section>
+    <ActorReferenceProvider actors={allActors}>
+      <Collapsible open asChild>
+        <section className="story-state-ledger flex min-h-0 flex-col overflow-hidden rounded-xl border border-[var(--nova-border)] bg-[var(--story-state-canvas)]">
+          <StateEntityPanels
+            actorLedgers={actorLedgers}
+            actorTabs={actorTabs}
+            worldLedger={worldLedger}
+            showWorld={hasWorldFacts}
+            selectedTab={selectedTab}
+            layouts={layouts}
+            panelMode={panelMode === 'expanded' ? 'expanded' : 'preview'}
+            actorLore={actorLore}
+            presentation="details"
+            onSelectedTabChange={setSelectedTab}
+            onPanelModeChange={setPanelMode}
+            afterContent={<ActorArchiveList entries={model.archivedActors} />}
+          />
+        </section>
+      </Collapsible>
+    </ActorReferenceProvider>
   )
 }
 
@@ -283,6 +289,10 @@ function StateEntityPanels({
   panelMode,
   onSelectedTabChange,
   onPanelModeChange,
+  actorLore,
+  presentation = 'stage',
+  header,
+  afterContent,
 }: {
   actorLedgers: StateLedgerPresentation[]
   actorTabs: Array<{ id: string; name: string }>
@@ -290,35 +300,109 @@ function StateEntityPanels({
   showWorld: boolean
   selectedTab: string
   layouts: StoryStateLayouts
-  panelMode: 'preview' | 'expanded'
+  panelMode: StoryStatePanelMode
   onSelectedTabChange: (tab: string) => void
   onPanelModeChange: (mode: StoryStatePanelMode) => void
+  actorLore?: ActorLoreContext
+  /** Stage navigation sticks to the page; details navigation sits above its own scrollable body. */
+  presentation?: 'stage' | 'details'
+  /** Navigation stays outside the animated body so it can stick to the scroll viewport. */
+  header?: ReactNode
+  afterContent?: ReactNode
 }) {
-  if (actorLedgers.length === 0 && !showWorld) return null
+  const reducedMotion = useReducedMotionConfig()
+  const tabsRef = useRef<HTMLDivElement>(null)
+  const navigationRef = useRef<HTMLDivElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const height = useMotionValue<number | 'auto'>('auto')
 
+  useLayoutEffect(() => {
+    if (presentation === 'details') {
+      if (bodyRef.current) bodyRef.current.scrollTop = 0
+      return
+    }
+    if (height.get() === 'auto' || !contentRef.current) return
+    // Animate real layout height so the chat footer can follow each frame.
+    // Return to intrinsic sizing afterward to avoid nesting height animations
+    // when sections expand, content changes, or the viewport resizes.
+    const controls = animate(height, contentRef.current.getBoundingClientRect().height, {
+      type: 'tween', duration: reducedMotion ? 0 : 0.16, ease: novaEase,
+    })
+    let cancelled = false
+    let resetFrame = 0
+    void controls.then(() => {
+      if (cancelled) return
+      height.set('auto')
+      // Wait for the virtualized footer to settle before deliberately leaving
+      // its preserved scroll position to show the newly selected entity's start.
+      resetFrame = requestAnimationFrame(() => {
+        const tabs = tabsRef.current
+        const navigation = navigationRef.current
+        if (tabs && navigation && tabs.getBoundingClientRect().top < navigation.getBoundingClientRect().top - 1) {
+          tabs.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'instant' })
+        }
+      })
+    })
+    return () => { cancelled = true; controls.stop(); cancelAnimationFrame(resetFrame) }
+  }, [selectedTab, presentation, reducedMotion, height])
+
+  const selectTab = (tab: string) => {
+    if (tab === selectedTab) return
+    if (presentation === 'stage' && viewportRef.current) height.set(viewportRef.current.getBoundingClientRect().height)
+    onSelectedTabChange(tab)
+  }
   return (
-    <Tabs value={selectedTab} onValueChange={onSelectedTabChange} className="gap-0">
-      <StateEntityTabs actors={actorTabs} showWorld={showWorld} />
-      {actorLedgers.map((ledger) => (
-        <TabsContent key={ledger.id} value={ledger.id} forceMount hidden={selectedTab !== ledger.id} className="mt-0">
-          <ActorLedgerBody
-            ledger={ledger}
-            layout={layouts[ledger.templateId]}
-            panelMode={panelMode}
-            onPanelModeChange={onPanelModeChange}
-          />
-        </TabsContent>
-      ))}
-      {showWorld ? (
-        <TabsContent value={WORLD_STATE_TAB} forceMount hidden={selectedTab !== WORLD_STATE_TAB} className="mt-0">
-          <WorldLedgerBody
-            ledger={worldLedger}
-            layout={layouts[worldLedger.templateId]}
-            panelMode={panelMode}
-            onPanelModeChange={onPanelModeChange}
-          />
-        </TabsContent>
-      ) : null}
+    <Tabs ref={tabsRef} value={selectedTab} onValueChange={selectTab} data-presentation={presentation} className="@container/state gap-0">
+      <div ref={navigationRef} className="story-state-ledger__navigation">
+        {header}
+        {panelMode !== 'collapsed' ? <StateEntityTabs actors={actorTabs} showWorld={showWorld} /> : null}
+      </div>
+      <CollapsibleContent ref={bodyRef} forceMount className="story-state-ledger__body">
+        <StateReveal open={panelMode !== 'collapsed'}>
+          <motion.div ref={viewportRef} style={{ height, overflow: 'hidden' }}>
+            <div ref={contentRef}>
+              {actorLedgers.map((ledger) => (
+                <TabsContent key={ledger.id} value={ledger.id} forceMount hidden={selectedTab !== ledger.id} className="mt-0">
+                  <motion.div
+                    className="grid min-w-0 items-start @min-[44rem]/state:has-[>aside]:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] [&>div]:min-w-0"
+                    initial={false}
+                    animate={{ opacity: selectedTab === ledger.id ? 1 : 0 }}
+                    transition={{ duration: reducedMotion ? 0 : 0.14, ease: novaEase }}
+                  >
+                    {actorLore && presentation === 'details' ? <ActorLorePreview actorId={ledger.id} name={ledger.name} context={actorLore} /> : null}
+                    <ActorLedgerBody
+                      ledger={ledger}
+                      layout={layouts[ledger.templateId]}
+                      panelMode={panelMode === 'expanded' ? 'expanded' : 'preview'}
+                      cover={actorLore && presentation === 'stage' ? <ActorLorePreview actorId={ledger.id} name={ledger.name} context={actorLore} variant="cover" /> : undefined}
+                      onPanelModeChange={onPanelModeChange}
+                    />
+                  </motion.div>
+                </TabsContent>
+              ))}
+              {showWorld ? (
+                <TabsContent value={WORLD_STATE_TAB} forceMount hidden={selectedTab !== WORLD_STATE_TAB} className="mt-0">
+                  <motion.div
+                    initial={false}
+                    animate={{ opacity: selectedTab === WORLD_STATE_TAB ? 1 : 0 }}
+                    transition={{ duration: reducedMotion ? 0 : 0.14, ease: novaEase }}
+                  >
+                    <WorldLedgerBody
+                      ledger={worldLedger}
+                      layout={layouts[worldLedger.templateId]}
+                      panelMode={panelMode === 'expanded' ? 'expanded' : 'preview'}
+                      onPanelModeChange={onPanelModeChange}
+                    />
+                  </motion.div>
+                </TabsContent>
+              ) : null}
+            </div>
+          </motion.div>
+          {afterContent}
+        </StateReveal>
+      </CollapsibleContent>
     </Tabs>
   )
 }
@@ -428,7 +512,7 @@ function buildWorldLedger(facts: Array<[string, unknown]>, changes: StoryStateCh
   }
 }
 
-function ActorLedgerBody({ ledger, layout, panelMode, onPanelModeChange }: { ledger: StateLedgerPresentation; layout?: StoryStateTemplateLayout; panelMode: 'preview' | 'expanded'; onPanelModeChange: (mode: StoryStatePanelMode) => void }) {
+function ActorLedgerBody({ ledger, layout, panelMode, onPanelModeChange, cover }: { ledger: StateLedgerPresentation; layout?: StoryStateTemplateLayout; panelMode: 'preview' | 'expanded'; onPanelModeChange: (mode: StoryStatePanelMode) => void; cover?: ReactNode }) {
   const { t } = useTranslation()
   const groups = applyStoryStateLayout(ledger.groups, layout)
 
@@ -436,8 +520,15 @@ function ActorLedgerBody({ ledger, layout, panelMode, onPanelModeChange }: { led
     <div>
       {ledger.traits.length > 0 ? <ActorTraits traits={ledger.traits} /> : null}
       {groups.length > 0
-        ? <LedgerSections groups={groups} mode={panelMode} onModeChange={onPanelModeChange} />
-        : <StateSectionEmpty label={t('storyStage.state.actorEmpty')} />}
+        ? <LedgerSections groups={groups} mode={panelMode} onModeChange={onPanelModeChange} cover={cover} />
+        : (
+          <div className="story-state-ledger__sections">
+            <div className="story-state-ledger__preview">
+              {cover}
+              <StateSectionEmpty label={t('storyStage.state.actorEmpty')} />
+            </div>
+          </div>
+        )}
     </div>
   )
 }
@@ -454,20 +545,32 @@ function WorldLedgerBody({ ledger, layout, panelMode, onPanelModeChange }: { led
  * preview mode only the first two ordered sections show, with a mode toggle that
  * reveals the rest without any height-clamped tricks.
  */
-function LedgerSections({ groups, mode, onModeChange }: { groups: LedgerFieldGroup[]; mode: 'preview' | 'expanded'; onModeChange: (mode: StoryStatePanelMode) => void }) {
+function LedgerSections({ groups, mode, onModeChange, cover }: { groups: LedgerFieldGroup[]; mode: 'preview' | 'expanded'; onModeChange: (mode: StoryStatePanelMode) => void; cover?: ReactNode }) {
   const { t } = useTranslation()
   const { preview, hidden } = useMemo(() => splitLedgerGroupsForPreview(groups), [groups])
   const expanded = mode === 'expanded'
   // Keep the already-visible preview sections anchored in place. Sections
   // revealed by the user's action append after them even when their schema
   // order originally placed them above the preview set.
-  const visibleGroups = expanded ? [...preview, ...hidden] : preview
   const decorated = groups.length > 1
   return (
     <div className="story-state-ledger__sections">
-      {visibleGroups.map((group) => (
-        <LedgerSectionBlock key={group.key} group={group} decorated={decorated} />
-      ))}
+      <div className="story-state-ledger__preview">
+        {cover}
+        <div className="story-state-ledger__group-flow">
+          {preview.map((group) => (
+            <LedgerSectionBlock key={group.key} group={group} decorated={decorated} />
+          ))}
+        </div>
+      </div>
+      {hidden.length > 0 ? (
+        // Offset the extra flex gap while closed; include group spacing in the animated height.
+        <StateReveal open={expanded} className="-my-1">
+          <div className="story-state-ledger__group-flow py-1">
+            {hidden.map((group) => <LedgerSectionBlock key={group.key} group={group} decorated={decorated} />)}
+          </div>
+        </StateReveal>
+      ) : null}
       {!expanded && hidden.length > 0 ? (
         <button
           type="button"
@@ -492,16 +595,37 @@ function LedgerSections({ groups, mode, onModeChange }: { groups: LedgerFieldGro
   )
 }
 
+/**
+ * Animate intrinsic content with grid tracks so opening and closing share the same
+ * path without temporarily expanding to measure an auto height in the virtualized list.
+ */
+function StateReveal({ open, children, className }: { open: boolean; children: ReactNode; className?: string }) {
+  const reducedMotion = useReducedMotionConfig()
+  return (
+    <motion.div
+      initial={false}
+      animate={{ gridTemplateRows: open ? '1fr' : '0fr', opacity: open ? 1 : 0 }}
+      transition={{ type: 'tween', duration: reducedMotion ? 0 : 0.16, ease: novaEase }}
+      aria-hidden={!open}
+      inert={!open}
+      className={className}
+      style={{ display: 'grid' }}
+    >
+      <div className="min-h-0 overflow-hidden">{children}</div>
+    </motion.div>
+  )
+}
+
 function LedgerSectionBlock({ group, decorated }: { group: LedgerFieldGroup; decorated: boolean }) {
   const { t } = useTranslation()
   const label = group.custom ? group.key : t(`storyStage.state.group.${group.key}`)
+  const compact = group.fields.every(({ renderer }) => renderer === 'inline' || renderer === 'stat')
   return (
-    <section aria-label={label} data-decorated={decorated || undefined} className="story-state-ledger__section">
+    <section aria-label={label} data-decorated={decorated || undefined} data-compact={compact || undefined} className="story-state-ledger__section">
       {decorated ? (
         <header className="story-state-ledger__section-header">
           <LedgerGroupIcon group={group} />
           <h3 className="story-state-ledger__section-title">{label}</h3>
-          <span className="story-state-ledger__section-count">{group.fields.length}</span>
         </header>
       ) : null}
       <LedgerGroupGrid group={group} />
@@ -525,8 +649,10 @@ function LedgerGroupIcon({ group }: { group: LedgerFieldGroup }) {
 }
 
 function LedgerGroupGrid({ group }: { group: LedgerFieldGroup }) {
+  // Keep four fields in two balanced rows instead of leaving one on its own.
+  const columns = group.fields.length === 4 ? 2 : Math.min(3, group.fields.length)
   return (
-    <div className="story-state-ledger__grid" data-group={group.custom ? 'custom' : group.key}>
+    <div className="story-state-ledger__grid" data-group={group.custom ? 'custom' : group.key} style={{ '--story-state-field-columns': columns } as CSSProperties}>
       {group.fields.map((item) => <LedgerFieldView key={item.id} item={item} />)}
     </div>
   )
@@ -559,14 +685,16 @@ function StateSectionEmpty({ label }: { label: string }) {
   )
 }
 
-function turnStatusLabel(snapshot: Snapshot | null, t: ReturnType<typeof useTranslation>['t']) {
+function stateStatusLabel(snapshot: Snapshot | null, changeCount: number, t: ReturnType<typeof useTranslation>['t']) {
+  const status = snapshot?.current_turn?.state_status
+  if (status !== 'pending' && status !== 'failed') return t('storyStage.state.changesTitle', { count: changeCount })
   const turnId = snapshot?.current_turn?.id
   const turns = snapshot?.turns || []
   const matchedIndex = turnId ? turns.findIndex((turn) => turn.id === turnId) : -1
-  const turn = matchedIndex >= 0 ? matchedIndex + 1 : Math.max(turns.length, turnId ? 1 : 0)
-  if (snapshot?.current_turn?.state_status === 'pending') return t('storyStage.state.syncing', { turn })
-  if (snapshot?.current_turn?.state_status === 'failed') return t('storyStage.state.failed', { turn })
-  return t('storyStage.state.updatedTurn', { turn })
+  const turn = matchedIndex >= 0
+    ? (snapshot?.turn_start || 0) + matchedIndex + 1
+    : snapshot?.turn_count ?? Math.max(turns.length, turnId ? 1 : 0)
+  return status === 'pending' ? t('storyStage.state.syncing', { turn }) : t('storyStage.state.failed', { turn })
 }
 
 function isRecordValue(value: unknown): value is Record<string, unknown> {

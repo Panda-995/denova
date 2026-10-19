@@ -6,6 +6,19 @@ export async function getAutomations(target: AutomationExecutionTarget): Promise
   return data.tasks || []
 }
 
+/** One read-only result per Project, including local failures. */
+export interface AutomationProjectCatalog {
+  project_id: string
+  tasks: AutomationTask[]
+  inbox: AutomationInboxItem[]
+  error?: string
+}
+
+export async function getAutomationCatalog(): Promise<AutomationProjectCatalog[]> {
+  const data = await requestJSON<{ projects: AutomationProjectCatalog[] }>('/api/automations/catalog')
+  return data.projects
+}
+
 export async function getAutomationTemplates(locale: string): Promise<AutomationTaskTemplate[]> {
   const data = await requestJSON<{ templates: AutomationTaskTemplate[] }>(`/api/automations/templates?locale=${encodeURIComponent(locale)}`)
   return data.templates || []

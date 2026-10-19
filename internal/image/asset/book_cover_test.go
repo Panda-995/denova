@@ -3,6 +3,7 @@ package asset
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"denova/config"
+	"denova/internal/assetstore"
 	"denova/internal/book"
 	imagegen "denova/internal/image/generation"
 )
@@ -49,9 +51,9 @@ func TestGenerateWritesCoverSourceMetaAndBackup(t *testing.T) {
 	}}
 	service := NewServiceWithGenerator(generator)
 	service.now = func() time.Time { return time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC) }
-	service.suffix = func() string { return "abcd1234" }
 
 	result, err := service.GenerateCover(context.Background(), &config.Config{}, bookService, CoverGenerateRequest{
+		Provenance:        ProvenanceDirectory,
 		Title:             "星河边境",
 		Description:       "舰队与边城。",
 		Instruction:       "冷色调",
@@ -72,13 +74,13 @@ func TestGenerateWritesCoverSourceMetaAndBackup(t *testing.T) {
 	if result.CoverPath != CoverPath {
 		t.Fatalf("展示封面路径不符合预期: %s", result.CoverPath)
 	}
-	if result.SourcePath != "assets/image/covers/20260628-120000-abcd1234/cover.png" {
+	if filepath.ToSlash(filepath.Dir(result.SourcePath)) != "assets/covers" {
 		t.Fatalf("原图路径不符合预期: %s", result.SourcePath)
 	}
-	if result.MetaPath != "assets/image/covers/20260628-120000-abcd1234/meta.json" {
+	if result.MetaPath != "assets/covers/meta.json" {
 		t.Fatalf("元数据路径不符合预期: %s", result.MetaPath)
 	}
-	if result.BackupPath != "assets/image/covers/backups/20260628-120000-previous.png" {
+	if filepath.ToSlash(filepath.Dir(result.BackupPath)) != "assets/covers" {
 		t.Fatalf("旧封面备份路径不符合预期: %s", result.BackupPath)
 	}
 
@@ -89,11 +91,18 @@ func TestGenerateWritesCoverSourceMetaAndBackup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取元数据失败: %v", err)
 	}
-	for _, required := range []string{`"schema": "book_cover.v1"`, `"cover_path": "assets/image/cover.png"`, `"backup_path": "assets/image/covers/backups/20260628-120000-previous.png"`} {
-		if !strings.Contains(string(meta), required) {
-			t.Fatalf("元数据缺少 %q:\n%s", required, string(meta))
-		}
+	metadata, err := assetstore.DecodeMetadata(meta)
+	if err != nil {
+		t.Fatal(err)
 	}
+	var detail generationMeta
+	if err := json.Unmarshal(metadata.Files[filepath.Base(result.SourcePath)], &detail); err != nil {
+		t.Fatal(err)
+	}
+	if len(metadata.Files) != 1 || detail.Prompt != generator.request.Prompt || detail.ImagePresetID != "realistic" || detail.Model != "gpt-image-1" {
+		t.Fatalf("unexpected cover provenance: %+v", metadata)
+	}
+
 }
 
 func TestBuildCoverPromptPreservesCustomFinalPrompt(t *testing.T) {
@@ -117,7 +126,6 @@ func TestGenerateWithoutExistingCoverSkipsBackup(t *testing.T) {
 	}}
 	service := NewServiceWithGenerator(generator)
 	service.now = func() time.Time { return time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC) }
-	service.suffix = func() string { return "abcd1234" }
 
 	result, err := service.GenerateCover(context.Background(), &config.Config{}, book.NewService(workspace), CoverGenerateRequest{Title: "无旧封面"})
 	if err != nil {
@@ -127,6 +135,27 @@ func TestGenerateWithoutExistingCoverSkipsBackup(t *testing.T) {
 		t.Fatalf("无旧封面时不应产生备份: %#v", result)
 	}
 	assertFileBytes(t, workspace, CoverPath, "cover")
+}
+
+func TestGenerateKeepsExistingCoverWhenProvenanceCannotBeSaved(t *testing.T) {
+	workspace := t.TempDir()
+	bookService := book.NewService(workspace)
+	if err := bookService.WriteBinaryFile(CoverPath, []byte("old-cover")); err != nil {
+		t.Fatal(err)
+	}
+	if err := bookService.WriteFile("assets/covers/meta.json", "invalid metadata"); err != nil {
+		t.Fatal(err)
+	}
+	service := NewServiceWithGenerator(&coverFakeGenerator{result: imagegen.Result{
+		OutputFormat: "png", Images: []imagegen.Image{{Data: []byte("new-cover"), Extension: "png"}},
+	}})
+	_, err := service.GenerateCover(context.Background(), &config.Config{}, bookService, CoverGenerateRequest{
+		Title: "Cover", Provenance: ProvenanceDirectory,
+	})
+	if err == nil {
+		t.Fatal("expected invalid provenance to prevent replacing the cover")
+	}
+	assertFileBytes(t, workspace, CoverPath, "old-cover")
 }
 
 func TestGenerateConvertsJPEGToCanonicalPNGCover(t *testing.T) {
@@ -141,20 +170,19 @@ func TestGenerateConvertsJPEGToCanonicalPNGCover(t *testing.T) {
 	}}
 	service := NewServiceWithGenerator(generator)
 	service.now = func() time.Time { return time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC) }
-	service.suffix = func() string { return "jpeg0001" }
 
 	result, err := service.GenerateCover(context.Background(), &config.Config{}, book.NewService(workspace), CoverGenerateRequest{Title: "JPEG cover"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.SourcePath != "assets/image/covers/20260628-120000-jpeg0001/cover.jpeg" {
+	if !strings.HasSuffix(result.SourcePath, ".jpeg") {
 		t.Fatalf("source path = %q", result.SourcePath)
 	}
 	assertFileBytesEqual(t, workspace, result.SourcePath, jpegData)
 	assertPNGFile(t, workspace, CoverPath)
 }
 
-func TestUploadWritesCoverSourceMetaAndBackup(t *testing.T) {
+func TestUploadWritesShallowCoverSourceAndBackup(t *testing.T) {
 	workspace := t.TempDir()
 	bookService := book.NewService(workspace)
 	if err := bookService.WriteBinaryFile(CoverPath, []byte("old-cover")); err != nil {
@@ -162,7 +190,6 @@ func TestUploadWritesCoverSourceMetaAndBackup(t *testing.T) {
 	}
 	service := NewServiceWithGenerator(nil)
 	service.now = func() time.Time { return time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC) }
-	service.suffix = func() string { return "upload01" }
 
 	result, err := service.UploadCover(bookService, CoverUploadRequest{
 		Filename: "cover.png",
@@ -174,28 +201,23 @@ func TestUploadWritesCoverSourceMetaAndBackup(t *testing.T) {
 	if result.CoverPath != CoverPath {
 		t.Fatalf("展示封面路径不符合预期: %s", result.CoverPath)
 	}
-	if result.SourcePath != "assets/image/covers/20260628-120000-upload01/upload.png" {
+	if filepath.ToSlash(filepath.Dir(result.SourcePath)) != "assets/covers" {
 		t.Fatalf("上传原图路径不符合预期: %s", result.SourcePath)
 	}
-	if result.MetaPath != "assets/image/covers/20260628-120000-upload01/meta.json" {
+	if result.MetaPath != "" {
 		t.Fatalf("元数据路径不符合预期: %s", result.MetaPath)
 	}
-	if result.BackupPath != "assets/image/covers/backups/20260628-120000-previous.png" {
+	if filepath.ToSlash(filepath.Dir(result.BackupPath)) != "assets/covers" {
 		t.Fatalf("旧封面备份路径不符合预期: %s", result.BackupPath)
 	}
 	assertFileBytes(t, workspace, result.BackupPath, "old-cover")
 	assertPNGFile(t, workspace, CoverPath)
 	assertPNGFile(t, workspace, result.SourcePath)
 
-	meta, err := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(result.MetaPath)))
-	if err != nil {
-		t.Fatalf("读取元数据失败: %v", err)
+	if _, err := os.Stat(filepath.Join(workspace, "assets/covers/meta.json")); !os.IsNotExist(err) {
+		t.Fatalf("upload created redundant generation metadata: %v", err)
 	}
-	for _, required := range []string{`"source": "book_cover_upload"`, `"provider": "user_upload"`, `"cover_path": "assets/image/cover.png"`} {
-		if !strings.Contains(string(meta), required) {
-			t.Fatalf("元数据缺少 %q:\n%s", required, string(meta))
-		}
-	}
+
 }
 
 func assertFileBytes(t *testing.T, workspace, relPath, want string) {

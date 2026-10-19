@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-	"github.com/alfredxw/denova/agent/providers"
+	"github.com/alfredxw/denova/agent/model/providers"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
-func contextAnalysisAssistantParts(id, source string, msg *agent.Message) []ContextAnalysisPart {
-	if msg == nil || msg.Role != agent.Assistant ||
+func contextAnalysisAssistantParts(id, source string, msg *agentschema.Message) []ContextAnalysisPart {
+	if msg == nil || msg.Role != agentschema.Assistant ||
 		(strings.TrimSpace(msg.ReasoningContent) == "" && len(providers.ContinuationExtra(msg.Extra)) == 0) {
 		return nil
 	}
@@ -18,19 +18,19 @@ func contextAnalysisAssistantParts(id, source string, msg *agent.Message) []Cont
 	if strings.TrimSpace(msg.ReasoningContent) != "" {
 		parts = append(parts, NewContextAnalysisPart(ContextAnalysisPartInput{
 			ID: id + "_reasoning", Source: source, Title: "推理摘要 / Reasoning summary",
-			Role: string(agent.Assistant), Kind: "reasoning", Content: msg.ReasoningContent,
+			Role: string(agentschema.Assistant), Kind: "reasoning", Content: msg.ReasoningContent,
 		}))
 	}
 	if strings.TrimSpace(msg.Content) != "" {
 		parts = append(parts, NewContextAnalysisPart(ContextAnalysisPartInput{
 			ID: id + "_body", Source: source, Title: "助手正文 / Assistant body",
-			Role: string(agent.Assistant), Kind: "body", Content: msg.Content,
+			Role: string(agentschema.Assistant), Kind: "body", Content: msg.Content,
 		}))
 	}
 	if len(msg.ToolCalls) > 0 {
 		parts = append(parts, NewContextAnalysisPart(ContextAnalysisPartInput{
 			ID: id + "_tool_calls", Source: source, Title: "工具调用 / Tool calls",
-			Role: string(agent.Assistant), Kind: "tool_call",
+			Role: string(agentschema.Assistant), Kind: "tool_call",
 			ToolName: contextAnalysisToolCallNames(msg.ToolCalls), ToolCallID: contextAnalysisToolCallIDs(msg.ToolCalls),
 			Content: contextAnalysisToolCallsContent(msg.ToolCalls),
 		}))
@@ -52,7 +52,7 @@ func contextAnalysisProviderContinuationPart(id, source string, extra map[string
 	}
 	input := ContextAnalysisPartInput{
 		ID: id, Source: source, Title: "不透明模型延续状态 / Opaque model continuation",
-		Role: string(agent.Assistant), Kind: "provider_continuation",
+		Role: string(agentschema.Assistant), Kind: "provider_continuation",
 		Content: "Opaque provider payload retained; raw content hidden.\n已保留不透明模型载荷；原始内容已隐藏。",
 	}
 	data, err := json.Marshal(stored)

@@ -53,8 +53,7 @@ export interface ModeRouterProps {
   loading: boolean
   selectedFile: string | null
   fileDocument: ProjectFileDocument | null
-  fileContent: string
-  fileRevision: string
+  fileDocuments?: ReadonlyMap<string, ProjectFileDocument>
   openTabs: Tab[]
   activeTabKey: string | null
   sidebarView: 'outline' | 'files' | 'search'
@@ -91,8 +90,8 @@ export interface ModeRouterProps {
   onQuickSwitchBook: (path: string) => Promise<boolean>
   onBeforeWorkspaceSwitch: EditorFlushHandler
   onBooksChange: () => void | Promise<void>
-  /** Synchronizes a Book created inside Agent Chat without leaving the shared Agent Chat route. */
-  onAgentChatBookCreated: (workspace: string) => void | Promise<void>
+  /** Synchronizes a newly created Book without leaving the current route. */
+  onBookCreated: (workspace: string) => void | Promise<void>
   onOpenCharacterCardImport: () => void
   onSetSidebarView: (view: 'outline' | 'files' | 'search') => void
   onSelectSearchResult: (result: WorkspaceSearchResult, query: string) => void | Promise<void>
@@ -123,6 +122,10 @@ export interface ModeRouterProps {
   onSend: (message: string, options?: ChatSendOptions) => boolean | Promise<boolean>
   onAnalyzeContext: (message: string, options?: { writingSkill?: string; ideContext?: { currentFile?: string; openFiles?: string[] }; imagePresetId?: string; tellerId?: string }) => Promise<ContextAnalysis>
   onStop: () => void
+  onSuspend?: () => void
+  onResumeTask?: () => void
+  recoveryFailed?: boolean
+  onRetryRecovery?: () => void
   onSteerQueuedCommand?: (item: AgentRuntimeQueuedCommand) => boolean | Promise<boolean>
   onDeleteQueuedCommand?: (item: AgentRuntimeQueuedCommand) => boolean | Promise<boolean>
   onEditQueuedCommand?: (item: AgentRuntimeQueuedCommand) => string | null | Promise<string | null>

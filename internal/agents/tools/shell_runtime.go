@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	agenttools "github.com/alfredxw/denova/agent/tools"
-
 	workspacechange "denova/internal/workspace/change"
+
+	agenttools "github.com/alfredxw/denova/agent/tool/builtin"
 )
 
 // newAgentCommandRunner binds the reusable Process implementation to Denova's

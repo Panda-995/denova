@@ -2,17 +2,16 @@ package chat
 
 import (
 	"context"
-
-	agent "github.com/alfredxw/denova/agent"
-
-	agentcontext "denova/internal/agents/context"
-	agentconversation "denova/internal/agents/conversation"
-	agentrun "denova/internal/agents/run"
 	"strings"
 	"testing"
 
 	"denova/config"
+	agentcontext "denova/internal/agents/context"
+	agentconversation "denova/internal/agents/conversation"
+	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestPrepareTurnContextIsPureUntilExplicitCommit(t *testing.T) {
@@ -58,9 +57,9 @@ func TestPrepareTurnContextIsPureUntilExplicitCommit(t *testing.T) {
 	}
 }
 
-func lastUserMessageContent(messages []*agent.Message) string {
+func lastUserMessageContent(messages []*agentschema.Message) string {
 	for index := len(messages) - 1; index >= 0; index-- {
-		if messages[index] != nil && messages[index].Role == agent.User {
+		if messages[index] != nil && messages[index].Role == agentschema.User {
 			return messages[index].Content
 		}
 	}

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"denova/internal/portablepath"
 )
 
 // StoredMeta is the v0.3.3 Book metadata representation. New metadata is a
@@ -33,6 +35,9 @@ func NewMetaStore(denovaDir string) *MetaStore {
 }
 
 func (store *MetaStore) Read(contentRoot, stateRoot string) (BookMeta, error) {
+	if err := store.MigrateLegacy(contentRoot, stateRoot); err != nil {
+		return BookMeta{}, err
+	}
 	data, err := os.ReadFile(store.metaPath(stateRoot))
 	if err == nil {
 		var meta BookMeta
@@ -70,6 +75,9 @@ func (store *MetaStore) Write(contentRoot, stateRoot string, meta BookMeta) (Boo
 // Project Store. It never deletes or rewrites the release source and refuses
 // ambiguous matches.
 func (store *MetaStore) MigrateLegacy(contentRoot, stateRoot string) error {
+	if err := portablepath.CheckPath(stateRoot, "meta.json"); err != nil {
+		return err
+	}
 	if _, err := os.Stat(store.metaPath(stateRoot)); err == nil {
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -80,6 +88,9 @@ func (store *MetaStore) MigrateLegacy(contentRoot, stateRoot string) error {
 		return err
 	}
 	if !found {
+		if err := portablepath.CheckPath(contentRoot, "book.json"); err != nil {
+			return err
+		}
 		if _, statErr := os.Stat(filepath.Join(contentRoot, "book.json")); statErr == nil {
 			meta, found = ReadBookMetaFromDir(contentRoot), true
 		} else if !errors.Is(statErr, os.ErrNotExist) {
@@ -95,6 +106,13 @@ func (store *MetaStore) MigrateLegacy(contentRoot, stateRoot string) error {
 func (store *MetaStore) findLegacy(contentRoot string) (BookMeta, bool, error) {
 	absolute, err := filepath.Abs(contentRoot)
 	if err != nil {
+		return BookMeta{}, false, err
+	}
+	legacyRelative, err := filepath.Rel(store.dataRoot, store.legacyMetaPath(absolute))
+	if err != nil {
+		return BookMeta{}, false, err
+	}
+	if err := portablepath.CheckPath(store.dataRoot, filepath.ToSlash(legacyRelative)); err != nil {
 		return BookMeta{}, false, err
 	}
 	if data, readErr := os.ReadFile(store.legacyMetaPath(absolute)); readErr == nil {
@@ -118,6 +136,9 @@ func (store *MetaStore) findLegacy(contentRoot string) (BookMeta, bool, error) {
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".json") {
 			continue
+		}
+		if err := portablepath.CheckPath(store.legacyDir, entry.Name()); err != nil {
+			return BookMeta{}, false, err
 		}
 		data, readErr := os.ReadFile(filepath.Join(store.legacyDir, entry.Name()))
 		if readErr != nil {
@@ -157,6 +178,9 @@ func (store *MetaStore) legacyOwnerMatches(legacyPath, contentRoot string) bool 
 }
 
 func (store *MetaStore) write(stateRoot string, meta BookMeta) error {
+	if err := portablepath.CheckPath(stateRoot, "meta.json"); err != nil {
+		return err
+	}
 	metaPath := store.metaPath(stateRoot)
 	if err := os.MkdirAll(filepath.Dir(metaPath), 0o700); err != nil {
 		return fmt.Errorf("create Book metadata directory: %w", err)

@@ -22,7 +22,7 @@ type ActorArchiveRecord struct {
 	SourceTurnID string `json:"source_turn_id,omitempty"`
 }
 
-// ActorArchiveSummary is the bounded, read-only archive entry exposed to
+// ActorArchiveSummary is the compact, read-only archive entry exposed to
 // runtime model contexts. It intentionally excludes the Actor's full fields.
 type ActorArchiveSummary struct {
 	ActorID      string `json:"actor_id"`
@@ -257,8 +257,8 @@ func actorArchiveFilterActorList(value any, actorID string) ([]any, bool) {
 
 // ActorStateRuntimeProjection returns a deterministic model-facing snapshot:
 // active Actors retain their full state, while archived Actors appear only in
-// a compact provenance index. Counts and truncation are explicit so callers do
-// not mistake an omitted Actor for a nonexistent one.
+// a compact provenance index. All identities are retained; the caller bounds
+// the complete context rather than silently hiding Actors by list position.
 func ActorStateRuntimeProjection(system StoryDirectorActorStateSystem, state map[string]any) map[string]any {
 	system = normalizeActorStateSystem(system)
 	projected := cloneActorStateRoot(state)
@@ -266,21 +266,12 @@ func ActorStateRuntimeProjection(system StoryDirectorActorStateSystem, state map
 		slog.ErrorContext(context.Background(), fmt.Sprintf("[interactive-state] project initial Actors into runtime projection failed err=%v location=internal/interactive/actor_archive.go", err))
 	}
 	rawActors, _ := projected[actorStateRoot].(map[string]any)
-	actorIDs := make([]string, 0, len(rawActors))
-	for actorID := range rawActors {
-		actorIDs = append(actorIDs, actorID)
-	}
-	sort.Strings(actorIDs)
 	activeActors := map[string]any{}
-	activeTotal := 0
-	for _, actorID := range actorIDs {
+	for actorID, record := range rawActors {
 		if actorIsArchived(projected, actorID) {
 			continue
 		}
-		activeTotal++
-		if len(activeActors) < maxInteractiveListItems {
-			activeActors[actorID] = rawActors[actorID]
-		}
+		activeActors[actorID] = record
 	}
 
 	rawArchives, _ := projected[actorArchiveRoot].(map[string]any)
@@ -289,11 +280,8 @@ func ActorStateRuntimeProjection(system StoryDirectorActorStateSystem, state map
 		archiveIDs = append(archiveIDs, actorID)
 	}
 	sort.Strings(archiveIDs)
-	archived := make([]ActorArchiveSummary, 0, min(len(archiveIDs), maxInteractiveListItems))
+	archived := make([]ActorArchiveSummary, 0, len(archiveIDs))
 	for _, actorID := range archiveIDs {
-		if len(archived) >= maxInteractiveListItems {
-			break
-		}
 		record, _ := rawActors[actorID].(map[string]any)
 		archive, _ := actorArchiveRecordFromState(projected, actorID)
 		archived = append(archived, ActorArchiveSummary{
@@ -307,15 +295,6 @@ func ActorStateRuntimeProjection(system StoryDirectorActorStateSystem, state map
 	return map[string]any{
 		actorStateRoot:   activeActors,
 		actorArchiveRoot: archived,
-		"projection": map[string]any{
-			"source":             "Snapshot.State.actors + Snapshot.State.actor_archives",
-			"active_total":       activeTotal,
-			"active_included":    len(activeActors),
-			"archived_total":     len(archiveIDs),
-			"archived_included":  len(archived),
-			"active_truncated":   activeTotal > len(activeActors),
-			"archived_truncated": len(archiveIDs) > len(archived),
-		},
 	}
 }
 

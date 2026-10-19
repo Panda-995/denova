@@ -1,4 +1,8 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useLoreCategories } from '@/features/lore/use-lore-categories'
+import { LoreDetailTabs } from './LoreDetailTabs'
+import { LoreIndexMemberships } from './LoreIndexMemberships'
+import { LoreTagsInput } from './LoreTagsInput'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   AtSign,
   BookMarked,
@@ -44,14 +48,15 @@ import {
   loreImportanceLabel,
   loreLoadModeLabel,
   loreTypeLabel,
-  TYPE_OPTIONS,
 } from './options'
 import { LoreContentEditor } from './LoreContentEditor'
+import { LoreRenameNotice } from './LoreReferences'
 import { hasLoreProtagonistTag, splitLoreTags, toggleLoreProtagonistTag } from './tags'
 
 interface LoreWorkspaceEditorProps {
   projectId: string
   draft: LoreItem
+  items: LoreItem[]
   tagDraft: string
   autosaveStatus: AutosaveStatus
   autosaveError: string | null
@@ -59,6 +64,7 @@ interface LoreWorkspaceEditorProps {
   navigationIntent?: DocumentReviewNavigationIntent | null
   highlightQuery?: string
   onDraftChange: (draft: LoreItem) => void
+  onSelectItem: (id: string) => void
   onTagDraftChange: (value: string) => void
   onPrepareSnapshot: () => Promise<{ content: string; revision: string }>
   onFlush: () => Promise<boolean>
@@ -66,12 +72,14 @@ interface LoreWorkspaceEditorProps {
   onOpenDirectory?: () => void
   onOpenLibrary?: () => void
   onReferenceItem?: (id: string) => void
+  autoFocusContent?: boolean
 }
 
 /** Focused lore editor for the writing workspace; bulk/library operations stay on the full page. */
 export function LoreWorkspaceEditor({
   projectId,
   draft,
+  items,
   tagDraft,
   autosaveStatus,
   autosaveError,
@@ -79,6 +87,7 @@ export function LoreWorkspaceEditor({
   navigationIntent,
   highlightQuery,
   onDraftChange,
+  onSelectItem,
   onTagDraftChange,
   onPrepareSnapshot,
   onFlush,
@@ -86,8 +95,10 @@ export function LoreWorkspaceEditor({
   onOpenDirectory,
   onOpenLibrary,
   onReferenceItem,
+  autoFocusContent,
 }: LoreWorkspaceEditorProps) {
   const { t } = useTranslation()
+  const { categories } = useLoreCategories(projectId)
   const [metadataOpen, setMetadataOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{
     id: string
@@ -121,16 +132,10 @@ export function LoreWorkspaceEditor({
         ) : null}
         <BookMarked className="h-4 w-4 shrink-0 text-[var(--nova-success)]" />
         <div className="min-w-0 flex-1">
-          <Input
-            value={draft.name}
-            onChange={(event) =>
-              onDraftChange({ ...draft, name: event.target.value })
-            }
-            aria-label={t('settingPanel.field.name')}
-            className="h-7 min-w-0 border-0 bg-transparent px-1 text-sm font-medium shadow-none focus-visible:ring-0"
-          />
+          <LoreWorkspaceName key={draft.id} name={draft.name} items={items} id={draft.id}
+            onChange={name => onDraftChange({ ...draft, name })} />
           <div className="flex min-w-0 items-center gap-1.5 px-1 text-[10px] text-[var(--nova-text-faint)]">
-            <span>{loreTypeLabel(draft.type, t)}</span>
+            <span>{categories.find((c) => c.id === draft.type)?.name || loreTypeLabel(draft.type, t)}</span>
             <span aria-hidden>·</span>
             <span>{loreImportanceLabel(draft.importance, t)}</span>
             <span aria-hidden>·</span>
@@ -177,10 +182,11 @@ export function LoreWorkspaceEditor({
         </Button>
       </div>
 
+      <LoreDetailTabs projectId={projectId} item={draft} onChange={onDraftChange}>
       <Collapsible
         open={metadataOpen}
         onOpenChange={setMetadataOpen}
-        className="shrink-0 border-b border-[var(--nova-border)] bg-[var(--nova-surface-2)]"
+        className="@container/lore-metadata max-h-[50%] shrink-0 overflow-y-auto border-b border-[var(--nova-border)] bg-[var(--nova-surface-2)]"
       >
         <div className="flex min-w-0 items-center">
           <CollapsibleTrigger asChild>
@@ -197,7 +203,7 @@ export function LoreWorkspaceEditor({
             </button>
           </CollapsibleTrigger>
         </div>
-        <CollapsibleContent className="grid min-w-0 gap-2 border-t border-[var(--nova-border)] px-4 py-3 sm:grid-cols-2 xl:grid-cols-4">
+        <CollapsibleContent className="grid min-w-0 gap-2 border-t border-[var(--nova-border)] px-4 py-3 @md/lore-metadata:grid-cols-2 @3xl/lore-metadata:grid-cols-4">
           <MetadataField label={t('settingPanel.field.enabled')}>
             <div className="flex h-8 items-center justify-between rounded-md border border-[var(--nova-border)] bg-[var(--nova-surface)] px-2">
               <span className="text-[11px] text-[var(--nova-text-muted)]">
@@ -230,9 +236,9 @@ export function LoreWorkspaceEditor({
               </SelectTrigger>
               <SelectContent>
                 <SelectGroup>
-                  {TYPE_OPTIONS.map(({ value }) => (
+                  {categories.map(({ id: value, name }) => (
                     <SelectItem key={value} value={value}>
-                      {loreTypeLabel(value, t)}
+                      {name || loreTypeLabel(value, t)}
                     </SelectItem>
                   ))}
                 </SelectGroup>
@@ -295,18 +301,14 @@ export function LoreWorkspaceEditor({
               </SelectContent>
             </Select>
           </MetadataField>
+          <LoreIndexMemberships projectId={projectId} memberships={draft.index_memberships}
+            onChange={index_memberships => onDraftChange({ ...draft, index_memberships })} />
           <MetadataField
             label={t('settingPanel.field.tags')}
-            className="sm:col-span-2"
+            className="@md/lore-metadata:col-span-2"
           >
             <div className="flex min-w-0 items-center gap-1.5">
-              <Input
-                aria-label={t('settingPanel.field.tags')}
-                className="nova-field h-8 min-w-0 flex-1"
-                value={tagDraft}
-                onChange={(event) => onTagDraftChange(event.target.value)}
-                placeholder={t('settingPanel.placeholder.tags')}
-              />
+              <LoreTagsInput key={draft.id} value={tagDraft} onChange={onTagDraftChange} suggestions={items.flatMap(item => item.tags || [])} />
               {draft.type === 'character' ? (
                 <TooltipIconButton
                   label={t(protagonistTagActive ? 'loreWorkspace.unmarkProtagonist' : 'loreWorkspace.markProtagonist')}
@@ -324,7 +326,7 @@ export function LoreWorkspaceEditor({
           </MetadataField>
           <MetadataField
             label={t('settingPanel.field.brief')}
-            className="sm:col-span-2"
+            className="@md/lore-metadata:col-span-2"
           >
             <SearchHighlightTextarea
               aria-label={t('settingPanel.field.brief')}
@@ -344,8 +346,11 @@ export function LoreWorkspaceEditor({
       </Collapsible>
 
       <LoreContentEditor
+          autoFocus={autoFocusContent}
           projectId={projectId}
           resourceKey={draft.id}
+          onSelectItem={onSelectItem}
+          items={items}
           value={draft.content || ''}
           onChange={(content) => onDraftChange({ ...draft, content })}
           onSaveShortcut={() => {
@@ -363,6 +368,7 @@ export function LoreWorkspaceEditor({
           sourceAriaLabel={t('loreWorkspace.rawContentLabel', { name: draft.name })}
           editorClassName="bg-[var(--nova-bg)] text-sm leading-7 [&_.tiptap]:mx-auto [&_.tiptap]:min-h-full [&_.tiptap]:w-full [&_.tiptap]:max-w-[880px] [&_.tiptap]:px-6 [&_.tiptap]:py-8 md:[&_.tiptap]:px-10 md:[&_.tiptap]:py-10"
       />
+      </LoreDetailTabs>
       <ConfirmDialog
         open={Boolean(deleteTarget)}
         onOpenChange={(open) => {
@@ -379,6 +385,56 @@ export function LoreWorkspaceEditor({
         }
       />
     </div>
+  )
+}
+
+/** Commit a complete name so autosave never persists an unfinished rename. */
+function LoreWorkspaceName({ name, items, id, onChange }: {
+  name: string
+  items: LoreItem[]
+  id: string
+  onChange: (name: string) => void
+}) {
+  const { t } = useTranslation()
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState(name)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const restoreFocus = useRef(false)
+  const composing = useRef(false)
+  useEffect(() => {
+    if (!editing && restoreFocus.current) {
+      trigger.current?.focus()
+      restoreFocus.current = false
+    }
+  }, [editing])
+  const commit = () => {
+    const nextName = value.trim()
+    if (nextName && nextName !== name) onChange(nextName)
+    setEditing(false)
+  }
+  return editing ? (
+    <>
+      <Input autoFocus value={value} aria-label={t('settingPanel.field.name')}
+        className="h-7 min-w-0 px-1 text-sm font-medium"
+        onFocus={event => event.target.select()}
+        onChange={event => setValue(event.target.value)}
+        onBlur={commit}
+        onCompositionStart={() => { composing.current = true }}
+        onCompositionEnd={() => { composing.current = false }}
+        onKeyDown={event => {
+          if (composing.current || event.nativeEvent.isComposing || event.keyCode === 229) return
+          if (event.key === 'Enter') { event.preventDefault(); restoreFocus.current = true; commit() }
+          if (event.key === 'Escape') { event.preventDefault(); restoreFocus.current = true; setEditing(false) }
+        }} />
+      <LoreRenameNotice items={items} id={id} />
+    </>
+  ) : (
+    <Button ref={trigger} type="button" variant="ghost"
+      className="h-7 max-w-full min-w-0 justify-start px-1"
+      aria-label={t('loreWorkspace.rename', { name })}
+      onClick={() => { setValue(name); setEditing(true) }}>
+      <span className="truncate">{name}</span>
+    </Button>
   )
 }
 

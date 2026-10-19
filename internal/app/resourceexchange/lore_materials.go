@@ -1,0 +1,179 @@
+package resourceexchange
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path"
+	"path/filepath"
+
+	"denova/internal/book/lore"
+)
+
+// Resource packages keep association text and file references; runtime provider
+// configuration and host paths are deliberately not part of the portable payload.
+type portableMaterials struct {
+	Entries   []portableMaterial `json:"entries"`
+	CoverPath string             `json:"cover_asset_path,omitempty"`
+	CoverURL  string             `json:"cover_url,omitempty"`
+}
+type portableMaterial struct {
+	AssetPath    string `json:"asset_path,omitempty"`
+	URL          string `json:"url,omitempty"`
+	SourceURL    string `json:"source_url,omitempty"`
+	OriginalName string `json:"original_name,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Description  string `json:"description,omitempty"`
+}
+
+func (s *Service) exportLoreMaterials(ctx context.Context, ref LocalRef, item lore.Item, raw []byte) (map[string][]byte, error) {
+	files := map[string][]byte{}
+	payload := portableMaterials{Entries: []portableMaterial{}}
+	for _, material := range item.ResolvedMaterials {
+		if material.URL != "" {
+			payload.Entries = append(payload.Entries, portableMaterial{URL: material.URL, OriginalName: material.OriginalName, Name: material.Name, Description: material.Description})
+			if item.Materials != nil && item.Materials.CoverAssetID == material.ID {
+				payload.CoverURL = material.URL
+			}
+			continue
+		}
+		snapshot, err := s.snapshot(ctx, FileTarget{ProjectID: ref.ProjectID, Path: material.Path})
+		if err != nil {
+			return nil, err
+		}
+		if !snapshot.Exists {
+			return nil, fmt.Errorf("lore material missing: %s", material.Path)
+		}
+		name := exportedMaterialPath(ref.ProjectID, material.Path)
+		files[name] = snapshot.Content
+		payload.Entries = append(payload.Entries, portableMaterial{AssetPath: name, SourceURL: material.Source.URL, OriginalName: material.OriginalName, Name: material.Name, Description: material.Description})
+		if item.Image != nil && item.Image.ImagePath == material.Path {
+			payload.CoverPath = name
+		}
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil, err
+	}
+	delete(body, "image")
+	body["materials"], _ = json.Marshal(payload)
+	encoded, err := json.MarshalIndent(body, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	files["resource.json"] = encoded
+	return files, nil
+}
+func importLoreMaterials(ctx context.Context, dir, previewDir string, resource PreviewResource, local LocalRef, raw []byte, staged map[FileTarget][]byte, extra *[]FileTarget, importedAssets map[FileTarget]lore.Asset) error {
+	var payload struct {
+		Materials *portableMaterials `json:"materials"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return err
+	}
+	materials := payload.Materials
+	if materials == nil {
+		materials = &portableMaterials{Entries: []portableMaterial{}}
+	}
+
+	if materials.Entries == nil {
+		return fmt.Errorf("material entries must be an array")
+	}
+	store := lore.NewStore(dir)
+	item, err := store.ReadAny(local.ID)
+	if err != nil {
+		return err
+	}
+	if len(item.ResolvedMaterials) == 0 && len(materials.Entries) == 0 && materials.CoverPath == "" && materials.CoverURL == "" {
+		return nil
+	}
+	// The temporary store is isolated; the outer exchange transaction commits the
+	// final collection and every staged file together.
+	for _, m := range item.ResolvedMaterials {
+		if _, err = store.MutateMaterial(local.ID, lore.MaterialMutation{Op: "remove", AssetID: m.ID}); err != nil {
+			return err
+		}
+	}
+	if _, err = store.MutateMaterial(local.ID, lore.MaterialMutation{Op: "cover"}); err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	if materials.CoverPath != "" && materials.CoverURL != "" {
+		return fmt.Errorf("multiple material covers")
+	}
+	coverFound := materials.CoverPath == "" && materials.CoverURL == ""
+	for _, m := range materials.Entries {
+		if (m.AssetPath == "") == (m.URL == "") {
+			return fmt.Errorf("material must have exactly one location")
+		}
+		key := "file:" + m.AssetPath
+		if m.URL != "" {
+			key = "url:" + m.URL
+		}
+		if seen[key] {
+			return fmt.Errorf("duplicate material location")
+		}
+		seen[key] = true
+		var asset lore.Asset
+		if m.URL != "" {
+			linked, err := store.RemoteMaterial(ctx, local.ID, lore.MaterialMutation{Op: "remote", URL: m.URL})
+			if err != nil {
+				return err
+			}
+			for _, material := range linked.ResolvedMaterials {
+				if material.URL == m.URL {
+					asset = material.Asset
+					break
+				}
+			}
+		} else {
+			data, err := resourceAsset(previewDir, resource, m.AssetPath)
+			if err != nil {
+				return err
+			}
+			// Reuse the same package file across items without conflating distinct
+			// assets that happen to have identical bytes or different descriptions.
+			key := FileTarget{ProjectID: local.ProjectID, Path: path.Join(resource.Root, m.AssetPath)}
+			asset = importedAssets[key]
+			if asset.ID == "" {
+				filename := m.OriginalName
+				if filename == "" {
+					filename = path.Base(m.AssetPath)
+				}
+				source := lore.AssetSource{Kind: "upload"}
+				if m.SourceURL != "" {
+					source = lore.AssetSource{Kind: "web", URL: m.SourceURL}
+				}
+				uploaded, err := store.SaveMaterial(ctx, local.ID, lore.MaterialFile{Filename: filename, Data: data, Source: source})
+				if err != nil {
+					return err
+				}
+				asset = uploaded.ResolvedMaterials[len(uploaded.ResolvedMaterials)-1].Asset
+				content, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(asset.Path)))
+				if err != nil {
+					return err
+				}
+				target := FileTarget{ProjectID: local.ProjectID, Path: asset.Path}
+				staged[target] = content
+				*extra = append(*extra, target)
+			} else if _, err = store.AttachAsset(local.ID, asset, lore.MaterialEntry{}); err != nil {
+				return err
+			}
+			importedAssets[key] = asset
+		}
+		if _, err = store.MutateMaterial(local.ID, lore.MaterialMutation{Op: "update", AssetID: asset.ID, Name: m.Name, Description: m.Description}); err != nil {
+			return err
+		}
+		if m.AssetPath != "" && m.AssetPath == materials.CoverPath || m.URL != "" && m.URL == materials.CoverURL {
+			coverFound = true
+			if _, err = store.MutateMaterial(local.ID, lore.MaterialMutation{Op: "cover", AssetID: asset.ID}); err != nil {
+				return err
+			}
+		}
+	}
+	if !coverFound {
+		return fmt.Errorf("cover references an unlisted material")
+	}
+	return nil
+}

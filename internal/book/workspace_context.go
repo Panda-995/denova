@@ -3,6 +3,7 @@ package book
 import (
 	"bytes"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -176,7 +177,8 @@ func latestContextPaths(paths []string, limit int) []string {
 func (s *State) progressiveLoreContext() string {
 	context, err := lore.NewStore(s.workspace).ProgressiveContextMarkdown()
 	if err != nil {
-		return ""
+		slog.Error("[lore] workspace index context unavailable", "error", err)
+		return "## Lore Index unavailable\n\nDo not assume setting coverage. Read needed canon with Lore tools before proceeding."
 	}
 	return strings.TrimSpace(context)
 }

@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/internal/agents/conversationjournal"
+	"denova/internal/agents/sessionjournal"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
 )
 
 type ContextBatchReceipt struct {
@@ -26,11 +29,12 @@ func (s *Session) CommitContextBatch(
 	expected ContextCursor,
 	identity DomainCommitIdentity,
 	sequence int,
-	messages []*agent.Message,
+	messages []*agentschema.Message,
+	checkpoint agentcanonical.CanonicalCheckpoint,
 ) (_ ContextBatchReceipt, resultErr error) {
 	var receipt ContextBatchReceipt
 	identity = normalizeDomainCommitIdentity(identity)
-	values := make([]agent.Message, len(messages))
+	values := make([]agentschema.Message, len(messages))
 	for index, message := range messages {
 		if message == nil {
 			return ContextBatchReceipt{}, fmt.Errorf("context batch message %d is nil", index)
@@ -60,7 +64,15 @@ func (s *Session) CommitContextBatch(
 		now := time.Now().UTC()
 		candidate.CreatedAt = now
 		candidate.ContextRevision = s.contextRevision + uint64(len(values))
-		if err := s.appendJournalRecordLocked(candidate); err != nil {
+		agentRecords, err := sessionjournal.CheckpointRecords(&s.projection.AgentSessions, checkpoint, strconv.FormatUint(candidate.ContextRevision, 10))
+		if err != nil {
+			return err
+		}
+		records := append([]any{candidate}, agentRecords...)
+		if _, err := s.appendJournalRecordsLocked(records...); err != nil {
+			if errors.Is(err, conversationjournal.ErrCommitUnknown) {
+				return err
+			}
 			if recoveryErr := s.refreshCanonicalTailLocked(); recoveryErr == nil {
 				reconciled, found, reconcileErr := s.findContextBatchLocked(ctx, identity, sequence, values)
 				if reconcileErr != nil {
@@ -110,7 +122,7 @@ func (s *Session) findContextBatchLocked(
 	ctx context.Context,
 	identity DomainCommitIdentity,
 	sequence int,
-	messages []agent.Message,
+	messages []agentschema.Message,
 ) (ContextBatchReceipt, bool, error) {
 	if s.projection == nil {
 		return ContextBatchReceipt{}, false, nil
@@ -154,21 +166,21 @@ func validateContextBatchRecord(batch contextBatchRecord) error {
 	if batch.Sequence < 0 || len(batch.Messages) == 0 {
 		return fmt.Errorf("invalid Agent context batch")
 	}
-	messages := make([]*agent.Message, len(batch.Messages))
+	messages := make([]*agentschema.Message, len(batch.Messages))
 	for index := range batch.Messages {
 		message := &batch.Messages[index]
-		if message.Role == "" || message.Role == agent.System {
+		if message.Role == "" || message.Role == agentschema.System {
 			return fmt.Errorf("context batch message %d has invalid role %q", index, message.Role)
 		}
 		messages[index] = message.Clone()
 	}
-	if err := agent.ValidateContextCommitMessages(messages); err != nil {
+	if err := agentcanonical.ValidateContextCommitMessages(messages); err != nil {
 		return fmt.Errorf("invalid Agent context batch messages: %w", err)
 	}
 	return nil
 }
 
-func contextBatchMessagesEqual(left, right []agent.Message) (bool, error) {
+func contextBatchMessagesEqual(left, right []agentschema.Message) (bool, error) {
 	leftJSON, err := json.Marshal(left)
 	if err != nil {
 		return false, fmt.Errorf("encode stored context batch messages: %w", err)

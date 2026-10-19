@@ -1,5 +1,6 @@
+import { useControlSectionLayout } from './SortableControlSections'
 import { useEffect, useState, type ReactNode } from 'react'
-import { Loader2, Settings2 } from 'lucide-react'
+import { ChevronRight, Loader2, Settings2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -20,14 +21,29 @@ export function ControlSection({
   action?: ReactNode
   children: ReactNode
 }) {
+  const layout = useControlSectionLayout()
   return (
     <section className="overflow-hidden rounded-xl border border-border bg-card">
       <header className="flex min-h-9 items-center gap-2 px-2.5 py-1.5">
+        {layout ? (
+          <h3 className="min-w-0 flex-1">
+            <button type="button" ref={layout.sortable.setActivatorNodeRef}
+              {...layout.sortable.attributes} {...layout.sortable.listeners}
+              aria-expanded={layout.expanded}
+              onClick={layout.toggle}
+              className="flex w-full touch-none select-none items-center gap-2 rounded-md text-left text-xs font-semibold text-foreground outline-none hover:text-[var(--director-brass)] focus-visible:ring-2 focus-visible:ring-ring">
+              <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-[var(--director-brass)]">{icon}</span>
+              <span className="min-w-0 flex-1 truncate">{title}</span>
+              <ChevronRight aria-hidden="true" className={`size-3 shrink-0 transition-transform ${layout.expanded ? 'rotate-90' : ''}`} />
+            </button>
+          </h3>
+        ) : <>
         <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-[var(--director-brass)]">{icon}</span>
         <h3 className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">{title}</h3>
+        </>}
         {action ? <div className="director-control-section__action shrink-0">{action}</div> : null}
       </header>
-      <FieldGroup className="gap-0 border-t border-border">{children}</FieldGroup>
+      {children ? <div hidden={layout ? !layout.expanded : false}><FieldGroup className="gap-0 border-t border-border">{children}</FieldGroup></div> : null}
     </section>
   )
 }
@@ -110,6 +126,7 @@ export function NumberSettingInput({
   value,
   min,
   max,
+  step = 1,
   label,
   disabled,
   onCommit,
@@ -117,19 +134,20 @@ export function NumberSettingInput({
   value: number
   min: number
   max?: number
+  step?: number
   label: string
   disabled?: boolean
   onCommit: (value: number) => void
 }) {
   const [draft, setDraft] = useState(String(value))
   const parsed = Number(draft)
-  const valid = Number.isInteger(parsed) && parsed >= min && (max === undefined || parsed <= max)
+  const valid = Number.isFinite(parsed) && (step < 1 || Number.isInteger(parsed)) && parsed >= min && (max === undefined || parsed <= max)
 
   useEffect(() => setDraft(String(value)), [value])
 
   const commit = () => {
     if (!valid) return
-    const next = Math.trunc(parsed)
+    const next = parsed
     setDraft(String(next))
     if (next !== value) onCommit(next)
   }
@@ -138,9 +156,10 @@ export function NumberSettingInput({
     <div className="flex min-w-0 flex-col items-end gap-1">
       <Input
         type="number"
-        inputMode="numeric"
+        inputMode={step < 1 ? 'decimal' : 'numeric'}
         min={min}
         max={max}
+        step={step}
         value={draft}
         disabled={disabled}
         aria-label={label}

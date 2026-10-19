@@ -11,7 +11,10 @@ import (
 	"strings"
 	"time"
 
-	agent "github.com/alfredxw/denova/agent"
+	"denova/internal/agents/sessionjournal"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
 )
 
 var ErrModelContextBatchIdentityConflict = errors.New("model context batch identity conflict")
@@ -20,11 +23,12 @@ var ErrModelContextBatchIdentityConflict = errors.New("model context batch ident
 // after its player input and before the final narrative exists. Sequence is
 // scoped to the durable Agent cycle and makes retries deterministic.
 type ModelContextBatchIntent struct {
-	Identity      DomainCommitIdentity  `json:"identity"`
-	BranchID      string                `json:"branch_id"`
-	PlayerInputID string                `json:"player_input_id"`
-	Sequence      int                   `json:"sequence"`
-	Messages      []ModelContextMessage `json:"messages"`
+	Identity      DomainCommitIdentity               `json:"identity"`
+	BranchID      string                             `json:"branch_id"`
+	PlayerInputID string                             `json:"player_input_id"`
+	Sequence      int                                `json:"sequence"`
+	Messages      []ModelContextMessage              `json:"messages"`
+	Checkpoint    agentcanonical.CanonicalCheckpoint `json:"-"`
 }
 
 // ModelContextBatchEvent is an append-only side event. It deliberately does
@@ -114,11 +118,18 @@ func newAgentContextBatchIntent(
 }
 
 func validateAgentContextMessages(messages []ModelContextMessage) error {
-	values := make([]*agent.Message, len(messages))
-	for index, message := range messages {
-		values[index] = AgentMessageFromModelContext(message)
+	values := make([]*agentschema.Message, 0, len(messages))
+	for _, message := range messages {
+		value := AgentMessageFromModelContext(message)
+		if UserGuidanceCommand(value) != "" {
+			continue
+		}
+		values = append(values, value)
 	}
-	if err := agent.ValidateContextCommitMessages(values); err != nil {
+	if len(values) == 0 {
+		return nil
+	}
+	if err := agentcanonical.ValidateContextCommitMessages(values); err != nil {
 		return fmt.Errorf("%w: %v", ErrModelContextBatchIdentityConflict, err)
 	}
 	return nil
@@ -238,6 +249,11 @@ func (s *Store) AppendModelContextBatch(storyID string, intent ModelContextBatch
 	meta.UpdatedAt = now
 	newEvents := []any{event}
 	newEvents = append(newEvents, continuationEvents...)
+	agentRecords, err := sessionjournal.CheckpointRecords(&s.storyJournals[storyID].projection.AgentSessions, intent.Checkpoint, event.ID)
+	if err != nil {
+		return ModelContextBatchReceipt{}, err
+	}
+	newEvents = append(newEvents, agentRecords...)
 	if err := s.appendStoryTransactionLocked(storyID, meta, newEvents...); err != nil {
 		return ModelContextBatchReceipt{}, err
 	}

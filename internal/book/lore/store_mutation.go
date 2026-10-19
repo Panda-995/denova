@@ -49,7 +49,7 @@ func (s *Store) Get(id string) (Item, error) {
 	}
 	for _, item := range collection.Items {
 		if item.ID == id {
-			return item, nil
+			return resolveItem(item, collection.Assets), nil
 		}
 	}
 	return Item{}, fmt.Errorf("资料不存在: %s: %w", id, os.ErrNotExist)
@@ -63,7 +63,19 @@ func (s *Store) Revision() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	data, err := json.Marshal(items)
+	categories, err := s.Categories()
+	if err != nil {
+		return "", err
+	}
+	guideCollection, err := s.loadOrCreate()
+	if err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(struct {
+		Items      []Item
+		Categories []Category
+		Guide      IndexGuide
+	}{items, categories, guideCollection.IndexGuide})
 	if err != nil {
 		return "", err
 	}
@@ -81,7 +93,7 @@ func (s *Store) list(includeDisabled bool) ([]Item, error) {
 		if !includeDisabled && !item.Enabled {
 			continue
 		}
-		items = append(items, item)
+		items = append(items, resolveItem(item, collection.Assets))
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].Enabled != items[j].Enabled {
@@ -110,7 +122,7 @@ func (s *Store) Create(input ItemInput) (Item, error) {
 	item := normalizeLoreItem(Item{
 		ID:               input.ID,
 		Enabled:          loreInputEnabled(input.Enabled, true),
-		Type:             input.Type,
+		Type:             firstNonEmptyLoreValue(input.Type, DefaultCategoryID(collection.Categories)),
 		TypeSource:       firstNonEmptyLoreValue(input.TypeSource, TypeSourceManual),
 		Name:             input.Name,
 		Importance:       input.Importance,
@@ -118,6 +130,7 @@ func (s *Store) Create(input ItemInput) (Item, error) {
 		BriefDescription: input.BriefDescription,
 		Keywords:         input.Keywords,
 		LoadMode:         input.LoadMode,
+		IndexMemberships: input.IndexMemberships,
 		Content:          input.Content,
 		CreatedAt:        now,
 		UpdatedAt:        now,
@@ -125,7 +138,10 @@ func (s *Store) Create(input ItemInput) (Item, error) {
 		Provenance:       input.Provenance,
 	})
 	if item.ID == "" {
-		item.ID = newUniqueLoreID(collection.Items, item.Name, item.Type)
+		item.ID, err = NewItemID(collection.Items, item.Name)
+		if err != nil {
+			return Item{}, err
+		}
 	}
 	if item.Name == "" {
 		return Item{}, errors.New("资料名称不能为空")
@@ -143,7 +159,7 @@ func (s *Store) Create(input ItemInput) (Item, error) {
 	if err := s.save(collection); err != nil {
 		return Item{}, err
 	}
-	return item, nil
+	return resolveItem(item, collection.Assets), nil
 }
 
 func (s *Store) Update(id string, input ItemInput) (Item, error) {
@@ -167,13 +183,13 @@ func (s *Store) Update(id string, input ItemInput) (Item, error) {
 		}
 		previous := collection.Items[i]
 		typeSource := previous.TypeSource
-		if NormalizeType(input.Type) != previous.Type {
+		if NormalizeType(firstNonEmptyLoreValue(input.Type, previous.Type)) != previous.Type {
 			typeSource = TypeSourceManual
 		}
 		updated := normalizeLoreItem(Item{
 			ID:               id,
 			Enabled:          loreInputEnabled(input.Enabled, collection.Items[i].Enabled),
-			Type:             input.Type,
+			Type:             firstNonEmptyLoreValue(input.Type, previous.Type),
 			TypeSource:       typeSource,
 			Name:             input.Name,
 			Importance:       input.Importance,
@@ -181,12 +197,17 @@ func (s *Store) Update(id string, input ItemInput) (Item, error) {
 			BriefDescription: input.BriefDescription,
 			Keywords:         input.Keywords,
 			LoadMode:         input.LoadMode,
+			IndexMemberships: previous.IndexMemberships,
 			Content:          input.Content,
 			CreatedAt:        collection.Items[i].CreatedAt,
 			UpdatedAt:        time.Now().UTC().Format(time.RFC3339Nano),
-			Image:            firstLoreImage(input.Image, collection.Items[i].Image),
+			Image:            previous.Image,
+			Materials:        previous.Materials,
 			Provenance:       collection.Items[i].Provenance,
 		})
+		if input.IndexMemberships != nil {
+			updated.IndexMemberships = input.IndexMemberships
+		}
 		if updated.Name == "" {
 			return Item{}, errors.New("资料名称不能为空")
 		}
@@ -200,7 +221,7 @@ func (s *Store) Update(id string, input ItemInput) (Item, error) {
 		if err := s.save(collection); err != nil {
 			return Item{}, err
 		}
-		return updated, nil
+		return resolveItem(updated, collection.Assets), nil
 	}
 	return Item{}, fmt.Errorf("资料不存在: %s", id)
 }
@@ -254,7 +275,7 @@ func (s *Store) ApplyOperations(message string, ops []Operation) (ApplyResult, e
 			item := normalizeLoreItem(Item{
 				ID:               op.Item.ID,
 				Enabled:          loreInputEnabled(op.Item.Enabled, true),
-				Type:             op.Item.Type,
+				Type:             firstNonEmptyLoreValue(op.Item.Type, DefaultCategoryID(collection.Categories)),
 				TypeSource:       firstNonEmptyLoreValue(op.Item.TypeSource, TypeSourceManual),
 				Name:             op.Item.Name,
 				Importance:       op.Item.Importance,
@@ -262,6 +283,7 @@ func (s *Store) ApplyOperations(message string, ops []Operation) (ApplyResult, e
 				BriefDescription: op.Item.BriefDescription,
 				Keywords:         op.Item.Keywords,
 				LoadMode:         op.Item.LoadMode,
+				IndexMemberships: op.Item.IndexMemberships,
 				Content:          op.Item.Content,
 				CreatedAt:        now,
 				UpdatedAt:        time.Now().UTC().Format(time.RFC3339Nano),
@@ -278,13 +300,16 @@ func (s *Store) ApplyOperations(message string, ops []Operation) (ApplyResult, e
 				return ApplyResult{}, fmt.Errorf("资料名称已存在: %s", item.Name)
 			}
 			if item.ID == "" {
-				item.ID = newUniqueLoreID(next, item.Name, item.Type)
+				item.ID, err = NewItemID(next, item.Name)
+				if err != nil {
+					return ApplyResult{}, err
+				}
 			}
 			if loreItemIndex(next, item.ID) >= 0 {
 				return ApplyResult{}, fmt.Errorf("资料 ID 已存在: %s", item.ID)
 			}
 			next = append(next, item)
-			result.Created = append(result.Created, item)
+			result.Created = append(result.Created, resolveItem(item, collection.Assets))
 		case "update":
 			id := normalizeLoreID(firstNonEmptyLoreValue(op.ID, op.Item.ID))
 			if id == "" {
@@ -293,6 +318,9 @@ func (s *Store) ApplyOperations(message string, ops []Operation) (ApplyResult, e
 			idx := loreItemIndex(next, id)
 			if idx < 0 {
 				return ApplyResult{}, fmt.Errorf("资料不存在: %s", id)
+			}
+			if op.Item.BaseRevision != "" && next[idx].UpdatedAt != op.Item.BaseRevision {
+				return ApplyResult{}, ErrRevisionConflict
 			}
 			typeName := firstNonEmptyLoreValue(op.Item.Type, next[idx].Type)
 			typeSource := next[idx].TypeSource
@@ -310,12 +338,17 @@ func (s *Store) ApplyOperations(message string, ops []Operation) (ApplyResult, e
 				BriefDescription: firstNonEmptyLoreValue(op.Item.BriefDescription, next[idx].BriefDescription),
 				Keywords:         op.Item.Keywords,
 				LoadMode:         firstNonEmptyLoreValue(op.Item.LoadMode, next[idx].LoadMode),
+				IndexMemberships: next[idx].IndexMemberships,
 				Content:          firstNonEmptyLoreValue(op.Item.Content, next[idx].Content),
 				CreatedAt:        next[idx].CreatedAt,
 				UpdatedAt:        time.Now().UTC().Format(time.RFC3339Nano),
-				Image:            firstLoreImage(op.Item.Image, next[idx].Image),
+				Image:            next[idx].Image,
+				Materials:        next[idx].Materials,
 				Provenance:       next[idx].Provenance,
 			})
+			if op.Item.IndexMemberships != nil {
+				updated.IndexMemberships = op.Item.IndexMemberships
+			}
 			if op.Item.Tags == nil {
 				updated.Tags = append([]string(nil), next[idx].Tags...)
 			}
@@ -332,7 +365,7 @@ func (s *Store) ApplyOperations(message string, ops []Operation) (ApplyResult, e
 				return ApplyResult{}, fmt.Errorf("资料名称已存在: %s", updated.Name)
 			}
 			next[idx] = updated
-			result.Updated = append(result.Updated, updated)
+			result.Updated = append(result.Updated, resolveItem(updated, collection.Assets))
 		case "delete":
 			id := normalizeLoreID(firstNonEmptyLoreValue(op.ID, op.Item.ID))
 			if id == "" {

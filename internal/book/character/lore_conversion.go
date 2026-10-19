@@ -24,13 +24,13 @@ type tavernImportStats struct {
 	UncertainOpIndexes   []int
 }
 
-func buildTavernCardLoreOperations(card normalizedTavernCard, source, coverPath, userCharacterName string, names *lore.NameAllocator) ([]lore.Operation, tavernImportStats) {
+func buildTavernCardLoreOperations(card normalizedTavernCard, source, userCharacterName string, names *lore.NameAllocator) ([]lore.Operation, tavernImportStats) {
 	if names == nil {
 		names = lore.NewNameAllocator(nil)
 	}
 	stats := tavernImportStats{ClassificationMode: lore.ClassificationModeHeuristic, ClassificationCounts: map[string]int{}}
 	cardLoreName := names.Claim(card.Name)
-	cardContent := renderTavernCardLoreContent(card, coverPath)
+	cardContent := renderTavernCardLoreContent(card)
 	cardKeywords := tavernCardTags(card.Tags...)
 	ops := []lore.Operation{
 		{
@@ -142,15 +142,8 @@ func tavernLoreSearchBrief(itemType, name string, keywords []string) string {
 	return truncateCardRunes(subject+"；搜索关键词："+strings.Join(keywords, "、")+"。", 240)
 }
 
-func renderTavernCardLoreContent(card normalizedTavernCard, coverPath string) string {
+func renderTavernCardLoreContent(card normalizedTavernCard) string {
 	var sb strings.Builder
-	if coverPath != "" {
-		sb.WriteString("![")
-		sb.WriteString(card.Name)
-		sb.WriteString("](")
-		sb.WriteString(coverPath)
-		sb.WriteString(")\n\n")
-	}
 
 	writeMarkdownSection(&sb, "角色描述", sanitizeTavernNaturalLanguage(card.Description))
 	writeMarkdownSection(&sb, "性格", sanitizeTavernNaturalLanguage(card.Personality))

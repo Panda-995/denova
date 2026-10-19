@@ -1,0 +1,324 @@
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"sync"
+
+	agentexecution "github.com/alfredxw/denova/agent/engine/execution"
+	agentevent "github.com/alfredxw/denova/agent/lifecycle/event"
+	agentmodel "github.com/alfredxw/denova/agent/model"
+	agentstream "github.com/alfredxw/denova/agent/model/stream"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
+)
+
+// asyncIterator is an unbounded, blocking event iterator.
+type asyncIterator[T any] struct {
+	queue *asyncQueue[T]
+}
+
+// Next blocks until a value is available or the generator closes.
+func (iterator *asyncIterator[T]) Next() (T, bool) {
+	if iterator == nil || iterator.queue == nil {
+		var zero T
+		return zero, false
+	}
+	return iterator.queue.receive()
+}
+
+// asyncGenerator is the producer paired with an asyncIterator.
+type asyncGenerator[T any] struct {
+	queue    *asyncQueue[T]
+	activity func()
+}
+
+// Send enqueues without waiting for a consumer.
+func (generator *asyncGenerator[T]) Send(value T) {
+	if generator == nil || generator.queue == nil {
+		return
+	}
+	if generator.activity != nil {
+		generator.activity()
+	}
+	generator.queue.send(value)
+}
+
+func (generator *asyncGenerator[T]) withActivity(activity func()) *asyncGenerator[T] {
+	if generator == nil || activity == nil {
+		return generator
+	}
+	return &asyncGenerator[T]{queue: generator.queue, activity: activity}
+}
+
+// Close is idempotent; queued values remain readable.
+func (generator *asyncGenerator[T]) Close() {
+	if generator == nil || generator.queue == nil {
+		return
+	}
+	generator.queue.close()
+}
+
+type asyncQueue[T any] struct {
+	mu     sync.Mutex
+	ready  *sync.Cond
+	values []T
+	closed bool
+}
+
+func newAsyncQueue[T any]() *asyncQueue[T] {
+	queue := &asyncQueue[T]{}
+	queue.ready = sync.NewCond(&queue.mu)
+	return queue
+}
+
+func (queue *asyncQueue[T]) send(value T) {
+	queue.mu.Lock()
+	if !queue.closed {
+		queue.values = append(queue.values, value)
+		queue.ready.Signal()
+	}
+	queue.mu.Unlock()
+}
+
+func (queue *asyncQueue[T]) close() {
+	queue.mu.Lock()
+	queue.closed = true
+	queue.ready.Broadcast()
+	queue.mu.Unlock()
+}
+
+func (queue *asyncQueue[T]) receive() (T, bool) {
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	for len(queue.values) == 0 && !queue.closed {
+		queue.ready.Wait()
+	}
+	if len(queue.values) == 0 {
+		var zero T
+		return zero, false
+	}
+	value := queue.values[0]
+	var zero T
+	queue.values[0] = zero
+	queue.values = queue.values[1:]
+	return value, true
+}
+
+// newAsyncIteratorPair creates an unbounded producer/consumer pair.
+func newAsyncIteratorPair[T any]() (*asyncIterator[T], *asyncGenerator[T]) {
+	queue := newAsyncQueue[T]()
+	return &asyncIterator[T]{queue: queue}, &asyncGenerator[T]{queue: queue}
+}
+
+// loopMessage carries either one complete message or an exclusive stream.
+type loopMessage struct {
+	// discarded responses still account for usage, but never enter display or history.
+	discarded     bool
+	previewOnly   bool
+	IsStreaming   bool
+	Message       *agentschema.Message
+	MessageStream *agentstream.StreamReader[*agentschema.Message]
+	Role          agentschema.RoleType
+	ToolName      string
+	// ExecutionID correlates a tool result with lifecycle/display state while
+	// ProviderCallID remains the model transcript pairing identity.
+	ExecutionID    string
+	ProviderCallID string
+	// Assistant tool calls derive their execution IDs from this immutable model
+	// response identity plus their source ordinal.
+	ToolExecutionNamespace string
+	ModelResponseOrdinal   int
+	// ToolInfos is the validated registry snapshot for model events. It is
+	// transport metadata, not part of the emitted transcript Message.
+	ToolInfos       []*agentschema.ToolInfo
+	ToolDefinitions []agenttool.ToolDefinitionSnapshot
+}
+
+// GetMessage returns or drains the variant's message.
+func (variant *loopMessage) GetMessage() (*agentschema.Message, error) {
+	if variant == nil {
+		return nil, nil
+	}
+	if variant.IsStreaming {
+		return agentmodel.ConcatMessageStream(variant.MessageStream)
+	}
+	return variant.Message, nil
+}
+
+// loopOutput is the payload of one loopEvent.
+type loopOutput struct {
+	ModelAttempt     *modelAttemptBoundary
+	ModelRetry       *agentevent.ModelRetry
+	MessageOutput    *loopMessage
+	ToolExecution    *toolExecutionEvent
+	ToolBatch        *toolBatchBoundary
+	NestedEvent      *agentevent.NestedEvent
+	TaskCompletions  *taskCompletionBoundary
+	CustomizedOutput any
+}
+
+type modelAttemptBoundary struct {
+	Ordinal int
+	Receipt chan error
+}
+
+type toolBatchPhase string
+
+const (
+	toolBatchPrepared  toolBatchPhase = "prepared"
+	toolBatchCompleted toolBatchPhase = "completed"
+)
+
+// toolBatchBoundary carries the exact Agent-owned transcript at the two
+// durability seams around execution. Prepared publishes normalized calls
+// before any tool starts; completed publishes the same calls with every paired
+// result before another provider request can begin.
+type toolBatchBoundary struct {
+	phase    toolBatchPhase
+	messages []*agentschema.Message
+	receipt  chan error
+}
+
+func (boundary *toolBatchBoundary) acknowledge(err error) {
+	if boundary == nil || boundary.receipt == nil {
+		return
+	}
+	boundary.receipt <- err
+}
+
+func (boundary *toolBatchBoundary) snapshot() (toolBatchPhase, []*agentschema.Message) {
+	if boundary == nil {
+		return "", nil
+	}
+	return boundary.phase, agentschema.CloneMessages(boundary.messages)
+}
+
+// taskCompletionBoundary orders asynchronous child completion delivery behind
+// every preceding model/tool event. The low-level loop does not proceed to the
+// provider until the Definition lifecycle durably acknowledges this batch.
+type taskCompletionBoundary struct {
+	completions []agentschema.TaskCompletion
+	receipt     chan error
+}
+
+func (boundary *taskCompletionBoundary) acknowledge(err error) {
+	if boundary == nil || boundary.receipt == nil {
+		return
+	}
+	boundary.receipt <- err
+}
+
+func (boundary *taskCompletionBoundary) snapshot() ([]string, []*agentschema.Message) {
+	if boundary == nil {
+		return nil, nil
+	}
+	ids := make([]string, 0, len(boundary.completions))
+	messages := make([]*agentschema.Message, 0, len(boundary.completions))
+	for _, completion := range boundary.completions {
+		ids = append(ids, completion.ID)
+		messages = append(messages, completion.Message.Clone())
+	}
+	return ids, messages
+}
+
+// toolExecutionPhase is the exhaustive lifecycle of one concrete call.
+type toolExecutionPhase string
+
+const (
+	toolExecutionStarted  toolExecutionPhase = "started"
+	toolExecutionProgress toolExecutionPhase = "progress"
+	toolExecutionFinished toolExecutionPhase = "finished"
+)
+
+// toolExecutionEvent is a real-time, non-transcript tool notification. Finished
+// events follow completion order; tool messages remain source ordered.
+type toolExecutionEvent struct {
+	Phase          toolExecutionPhase
+	Index          int
+	ExecutionID    string
+	ProviderCallID string
+	ParentCallID   string
+	ToolName       string
+	Arguments      json.RawMessage
+	Definition     agenttool.ToolDefinitionSnapshot
+	Delta          string
+	Result         *agentschema.ToolResult
+	// startReceipt lets the Session publish ToolStarted before the concrete
+	// endpoint runs while the low-level loop keeps its asynchronous event API.
+	startReceipt chan error
+	// finishReceipt confirms durable results before the next tool can start.
+	finishReceipt chan error
+}
+
+func (event *toolExecutionEvent) acknowledgeStart(err error) {
+	if event == nil || event.startReceipt == nil {
+		return
+	}
+	event.startReceipt <- err
+}
+
+// ToolExecutionID returns the stable display/lifecycle identity for one
+// assistant tool ordinal. The provider call ID must remain transcript-only.
+func (variant *loopMessage) ToolExecutionID(toolOrdinal int) string {
+	if variant == nil || variant.ModelResponseOrdinal <= 0 || toolOrdinal < 0 || variant.ToolExecutionNamespace == "" {
+		return ""
+	}
+	return agentexecution.ExecutionIDForNamespace(variant.ToolExecutionNamespace, variant.ModelResponseOrdinal, toolOrdinal)
+}
+
+// loopAction is reserved for transport-neutral host control actions.
+type loopAction struct {
+	CustomizedAction any
+}
+
+// loopRunStep identifies an event's source in a nested host path.
+type loopRunStep struct {
+	agentName string
+}
+
+// newLoopRunStep constructs a stable path element.
+func newLoopRunStep(agentName string) loopRunStep {
+	return loopRunStep{agentName: agentName}
+}
+
+func (step loopRunStep) String() string { return step.agentName }
+
+// loopEvent is emitted by the native loop in transcript order.
+type loopEvent struct {
+	AgentName      string
+	RunPath        []loopRunStep
+	InvocationID   string
+	InvocationType string
+	Output         *loopOutput
+	Action         *loopAction
+	Err            error
+}
+
+// loopInput contains a caller-owned transcript snapshot.
+type loopInput struct {
+	Messages        []*agentschema.Message
+	EnableStreaming bool
+	// stablePrefixMessages is set only by the Definition lifecycle after it has
+	// assembled accountable Context fragments and the active checkpoint. It is
+	// intentionally not part of the public low-level modelToolLoop input surface.
+	stablePrefixMessages int
+}
+
+// loopEventFromMessage builds a model or tool message event.
+func loopEventFromMessage(message *agentschema.Message, stream *agentstream.StreamReader[*agentschema.Message], role agentschema.RoleType, toolName string) *loopEvent {
+	return &loopEvent{Output: &loopOutput{MessageOutput: &loopMessage{
+		IsStreaming:   stream != nil,
+		Message:       message,
+		MessageStream: stream,
+		Role:          role,
+		ToolName:      toolName,
+	}}}
+}
+
+// loopRunnable is the small execution seam accepted by loopRunner. modelToolLoop is its native implementation.
+type loopRunnable interface {
+	Name(context.Context) string
+	Description(context.Context) string
+	Run(context.Context, *loopInput, ...loopRunOption) *asyncIterator[*loopEvent]
+}

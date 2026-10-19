@@ -1,5 +1,5 @@
 // Package publicnet owns Denova's public-Internet destination policy.
-// Callers use the same validation and dial-time enforcement so redirects,
+// Direct clients use the same validation and dial-time enforcement so redirects,
 // DNS rebinding, and IPv4 addresses embedded in IPv6 transports cannot bypass
 // the private-network boundary.
 package publicnet
@@ -19,6 +19,7 @@ var blockedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("100.64.0.0/10"),
 	netip.MustParsePrefix("192.0.0.0/24"),
 	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
 	netip.MustParsePrefix("198.18.0.0/15"),
 	netip.MustParsePrefix("198.51.100.0/24"),
 	netip.MustParsePrefix("203.0.113.0/24"),
@@ -62,16 +63,21 @@ func IsPolicyError(err error) bool {
 // destinations. Proxy lookup is disabled because a proxy obscures the actual
 // destination from the dial-time policy check.
 func NewHTTPClient() *http.Client {
+	transport := newPublicTransport()
+	transport.TLSHandshakeTimeout = 0
+	transport.ResponseHeaderTimeout = 0
+	transport.ExpectContinueTimeout = 0
+	return &http.Client{Transport: transport}
+}
+
+func newPublicTransport() *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.DialContext = (&publicDialer{
 		resolver: net.DefaultResolver,
 		dialer:   &net.Dialer{},
 	}).DialContext
-	transport.TLSHandshakeTimeout = 0
-	transport.ResponseHeaderTimeout = 0
-	transport.ExpectContinueTimeout = 0
-	return &http.Client{Transport: transport}
+	return transport
 }
 
 // ValidateHost resolves host and rejects any address outside the public

@@ -9,7 +9,6 @@ import (
 
 	"denova/config"
 
-	agent "github.com/alfredxw/denova/agent"
 	agentsession "github.com/alfredxw/denova/agent/session"
 )
 
@@ -18,7 +17,7 @@ const sessionKeyPrefix = "denova-"
 // SessionKeyForAgentSession derives an opaque, stable provider cache-routing
 // key from one public Agent Session identity. Raw workspace and product
 // identifiers are never sent to a model provider.
-func SessionKeyForAgentSession(key agent.SessionKey) (string, error) {
+func SessionKeyForAgentSession(key agentsession.Key) (string, error) {
 	canonical, err := agentsession.CanonicalKey(key)
 	if err != nil {
 		return "", fmt.Errorf("derive provider cache key: %w", err)

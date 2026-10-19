@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	agent "github.com/alfredxw/denova/agent"
-	"github.com/alfredxw/denova/agent/providers"
-
 	"denova/config"
+
+	agentmodel "github.com/alfredxw/denova/agent/model"
+	"github.com/alfredxw/denova/agent/model/providers"
 )
 
 // ConfigForAgent resolves the provider-neutral model configuration for one
@@ -47,7 +47,7 @@ func ConfigFromResolved(resolved config.ResolvedModelSettings) (providers.ModelC
 	return modelConfig, nil
 }
 
-func NewChatModel(ctx context.Context, config providers.ModelConfig) (agent.ToolCallingChatModel, error) {
+func NewChatModel(ctx context.Context, config providers.ModelConfig) (agentmodel.ToolCallingChatModel, error) {
 	return defaultRuntime.NewChatModel(ctx, config)
 }
 

@@ -36,4 +36,17 @@ describe('writing workbench temporary SubAgent tab', () => {
     expect(tabs).toHaveLength(3)
     expect(tabs).toContainEqual(subAgentTab)
   })
+
+  it('leaves unchanged tabs stable on activation while preserving pinning and LRU eviction', () => {
+    const pinned: Tab = { kind: 'file', path: 'pinned.md', pinned: true }
+    const first: Tab = { kind: 'file', path: 'first.md' }
+    const second: Tab = { kind: 'file', path: 'second.md' }
+    const third: Tab = { kind: 'file', path: 'third.md' }
+    const tabs = [pinned, first, second, subAgentTab]
+    const activations = new Map([['file:pinned.md', 0], ['file:first.md', 1], ['file:second.md', 2]])
+    expect(enforceTabLimit(tabs, 'file:first.md', 3, activations)).toBe(tabs)
+    expect(enforceTabLimit([...tabs, third], 'file:third.md', 3, activations)).toEqual([pinned, second, subAgentTab, third])
+    expect(activations.has('file:first.md')).toBe(false)
+    expect(tabs).toEqual([pinned, first, second, subAgentTab])
+  })
 })

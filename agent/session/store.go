@@ -162,6 +162,26 @@ type ReplayStats struct {
 	BytesRead   int64
 }
 
+// CheckpointProjection is a disposable reduction of canonical records. The
+// owner supplies the codec; storage only verifies the checkpoint's file prefix
+// and feeds committed tail records. New returns a fresh projection so storage
+// never aliases runtime state. Restore must reject incompatible versions.
+type CheckpointProjection interface {
+	New() CheckpointProjection
+	Reset() error
+	Restore(json.RawMessage) error
+	Apply(Record) error
+	Checkpoint() (json.RawMessage, error)
+}
+
+// IndexedLog accelerates recovery without changing Replay's complete-history
+// contract. Recover initializes an owned projection; neither it nor its cache
+// is a source of durable facts. Readers may use CurrentCheckpoint when supplied
+// by the projection, while execution retains complete historical receipts.
+type IndexedLog interface {
+	Recover(context.Context, CheckpointProjection) error
+}
+
 // Store owns the catalog and append-only Log for every Session Key.
 // List and Delete are part of the contract because closing an execution lease
 // is not equivalent to deleting user data. Delete is idempotent; implementations
@@ -171,6 +191,27 @@ type Store interface {
 	List(context.Context, Selector) ([]Key, error)
 	Delete(context.Context, Key) error
 }
+
+// ReaderStore permits inspection without acquiring a writer lease or creating
+// a missing Session. The returned Log rejects Append and owns no execution.
+type ReaderStore interface {
+	OpenReader(context.Context, Key) (Log, error)
+}
+
+// ReadOnlyLog exposes only Replay through the Log seam used by recovery.
+type ReadOnlyLog struct {
+	Reader interface {
+		Replay(context.Context, func(Record) error) (ReplayStats, error)
+	}
+}
+
+func (log ReadOnlyLog) Replay(ctx context.Context, apply func(Record) error) (ReplayStats, error) {
+	return log.Reader.Replay(ctx, apply)
+}
+func (ReadOnlyLog) Append(context.Context, Revision, ...Record) (Revision, error) {
+	return 0, errors.New("read-only Agent Session")
+}
+func (ReadOnlyLog) Close() error { return nil }
 
 // Log is the complete transcript Adapter contract. Append commits the whole batch
 // atomically at expected or changes nothing. Replay is streaming and ordered.
@@ -182,7 +223,8 @@ type Log interface {
 
 // CanonicalMessageLog marks a host journal whose conversation messages are
 // committed by the host itself. Agent still appends capability and turn
-// records to the same log, but it must not persist a second message snapshot.
+// records to the same log. A compaction checkpoint may retain a bounded active
+// recovery window there, but must not duplicate the complete canonical history.
 //
 // The marker is intentionally optional: Agent's built-in memory and file
 // stores remain self-contained for standalone embedding.

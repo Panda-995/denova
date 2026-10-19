@@ -8,39 +8,40 @@ import (
 	"fmt"
 	"strings"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
 	agenttool "denova/internal/agents/tool"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	sdktool "github.com/alfredxw/denova/agent/tool"
 )
 
 const defaultToolResultMaxBytes = config.DefaultAgentToolResultLimitKB * 1024
 
 const (
 	ToolSourceLore    = agenttool.ToolSourceLore
-	ToolSourceHistory = agent.ToolSourceHistory
-	ToolSourceWeb     = agent.ToolSourceWeb
-	ToolSourceImage   = agent.ToolSourceImage
+	ToolSourceHistory = sdktool.ToolSourceHistory
+	ToolSourceWeb     = sdktool.ToolSourceWeb
+	ToolSourceImage   = sdktool.ToolSourceImage
 )
 
 // validateToolDescriptors makes the descriptor catalog part of Agent
 // construction, so a newly registered tool cannot silently inherit unknown
 // recovery behavior.
-func validateToolDescriptors(ctx context.Context, tools []agent.ToolDefinition) error {
-	_, err := agent.NewRegistry(ctx, tools...)
+func validateToolDescriptors(ctx context.Context, tools []sdktool.ToolDefinition) error {
+	_, err := sdktool.NewRegistry(ctx, tools...)
 	return err
 }
 
 // Validate checks that every model-visible tool has a unique stable name and
 // an explicit execution/recovery descriptor.
-func Validate(ctx context.Context, concrete []agent.ToolDefinition) error {
+func Validate(ctx context.Context, concrete []sdktool.ToolDefinition) error {
 	return validateToolDescriptors(ctx, concrete)
 }
 
 // ValidateAgainstManifest proves that every product-owned capability assembled
 // for an Agent matches the generated settings catalog. Application extensions
 // with unknown capability names remain outside this product policy seam.
-func ValidateAgainstManifest(ctx context.Context, concrete []agent.ToolDefinition, manifest []config.ResolvedAgentToolCapability) error {
+func ValidateAgainstManifest(ctx context.Context, concrete []sdktool.ToolDefinition, manifest []config.ResolvedAgentToolCapability) error {
 	if err := Validate(ctx, concrete); err != nil {
 		return err
 	}
@@ -89,7 +90,7 @@ func ValidateAgainstManifest(ctx context.Context, concrete []agent.ToolDefinitio
 // ManifestValidator returns an identified validation seam suitable for a
 // late-bound Toolset such as delegation. Its policy identity participates in
 // the owning Toolset's recovery fingerprint.
-func ManifestValidator(manifest []config.ResolvedAgentToolCapability) (agent.CapabilityIdentity, func(context.Context, []agent.ToolDefinition) error, error) {
+func ManifestValidator(manifest []config.ResolvedAgentToolCapability) (agentschema.CapabilityIdentity, func(context.Context, []sdktool.ToolDefinition) error, error) {
 	cloned := append([]config.ResolvedAgentToolCapability(nil), manifest...)
 	for index := range cloned {
 		cloned[index].ToolNames = append([]string(nil), cloned[index].ToolNames...)
@@ -97,13 +98,13 @@ func ManifestValidator(manifest []config.ResolvedAgentToolCapability) (agent.Cap
 	}
 	encoded, err := json.Marshal(manifestValidatorIdentityProjection(cloned))
 	if err != nil {
-		return agent.CapabilityIdentity{}, nil, fmt.Errorf("encode tool manifest validator identity: %w", err)
+		return agentschema.CapabilityIdentity{}, nil, fmt.Errorf("encode tool manifest validator identity: %w", err)
 	}
 	digest := sha256.Sum256(encoded)
-	identity := agent.CapabilityIdentity{
+	identity := agentschema.CapabilityIdentity{
 		Kind: "denova.tools.manifest_validator", Version: 1, ConfigHash: hex.EncodeToString(digest[:]),
 	}
-	return identity, func(ctx context.Context, definitions []agent.ToolDefinition) error {
+	return identity, func(ctx context.Context, definitions []sdktool.ToolDefinition) error {
 		return ValidateAgainstManifest(ctx, definitions, cloned)
 	}, nil
 }
@@ -121,16 +122,16 @@ type manifestValidatorIdentityEntry struct {
 }
 
 type manifestValidatorDescriptor struct {
-	Source             agent.ToolSource              `json:"source"`
-	Execution          agent.ToolExecutionClass      `json:"execution"`
-	MutationScope      agent.ToolMutationScope       `json:"mutation_scope"`
-	PostCheck          agent.ToolPostCheckPolicy     `json:"post_check"`
-	Recovery           agent.ToolRecoveryClass       `json:"recovery"`
-	ResultRecoveryKind agent.ToolResultRecoveryKind  `json:"result_recovery_kind,omitempty"`
-	ResultProjection   agent.ToolResultProjection    `json:"result_projection"`
-	ResultRetention    agent.ToolResultRetentionMode `json:"result_retention"`
-	Steering           agent.SteeringPolicy          `json:"steering"`
-	MaxResultBytes     int                           `json:"max_result_bytes"`
+	Source             sdktool.ToolSource                  `json:"source"`
+	Execution          sdktool.ToolExecutionClass          `json:"execution"`
+	MutationScope      sdktool.ToolMutationScope           `json:"mutation_scope"`
+	PostCheck          sdktool.ToolPostCheckPolicy         `json:"post_check"`
+	Recovery           sdktool.ToolRecoveryClass           `json:"recovery"`
+	ResultRecoveryKind agentschema.ToolResultRecoveryKind  `json:"result_recovery_kind,omitempty"`
+	ResultProjection   agentschema.ToolResultProjection    `json:"result_projection"`
+	ResultRetention    agentschema.ToolResultRetentionMode `json:"result_retention"`
+	Steering           sdktool.SteeringPolicy              `json:"steering"`
+	MaxResultBytes     int                                 `json:"max_result_bytes"`
 }
 
 func manifestValidatorIdentityProjection(manifest []config.ResolvedAgentToolCapability) []manifestValidatorIdentityEntry {
@@ -186,14 +187,14 @@ func containsToolName(names []string, candidate string) bool {
 	return false
 }
 
-func toolInfoName(info *agent.ToolInfo) string {
+func toolInfoName(info *agentschema.ToolInfo) string {
 	if info == nil {
 		return ""
 	}
 	return info.Name
 }
 
-func validatedConcreteToolNames(ctx context.Context, tools []agent.ToolDefinition) ([]string, error) {
+func validatedConcreteToolNames(ctx context.Context, tools []sdktool.ToolDefinition) ([]string, error) {
 	seen := make(map[string]int, len(tools))
 	names := make([]string, 0, len(tools))
 	for index, candidate := range tools {
@@ -222,77 +223,77 @@ func validatedConcreteToolNames(ctx context.Context, tools []agent.ToolDefinitio
 
 // validateToolSurface keeps tool names a one-to-one mapping to an endpoint and
 // recovery contract before Agent construction.
-func validateToolSurface(ctx context.Context, tools []agent.ToolDefinition) error {
+func validateToolSurface(ctx context.Context, tools []sdktool.ToolDefinition) error {
 	return validateToolDescriptors(ctx, tools)
 }
 
-func defineTool(tool agent.Tool, descriptor agent.ToolDescriptor) (agent.ToolDefinition, error) {
-	definition := agent.ToolDefinition{Tool: tool, Descriptor: descriptor}
+func defineTool(tool sdktool.Tool, descriptor sdktool.ToolDescriptor) (sdktool.ToolDefinition, error) {
+	definition := sdktool.ToolDefinition{Tool: tool, Descriptor: descriptor}
 	if err := definition.Validate(context.Background()); err != nil {
-		return agent.ToolDefinition{}, err
+		return sdktool.ToolDefinition{}, err
 	}
 	return definition, nil
 }
 
 // Define attaches a descriptor to a concrete tool after validating it.
-func Define(tool agent.Tool, descriptor agent.ToolDescriptor) (agent.ToolDefinition, error) {
+func Define(tool sdktool.Tool, descriptor sdktool.ToolDescriptor) (sdktool.ToolDefinition, error) {
 	return defineTool(tool, descriptor)
 }
 
-func boundedReadDescriptor(source agent.ToolSource, capability string, recoveryKinds ...agent.ToolResultRecoveryKind) agent.ToolDescriptor {
-	var resultRecovery agent.ToolResultRecoveryKind
+func boundedReadDescriptor(source sdktool.ToolSource, capability string, recoveryKinds ...agentschema.ToolResultRecoveryKind) sdktool.ToolDescriptor {
+	var resultRecovery agentschema.ToolResultRecoveryKind
 	if len(recoveryKinds) > 0 {
 		resultRecovery = recoveryKinds[0]
 	}
-	descriptor := agent.ToolDescriptor{
+	descriptor := sdktool.ToolDescriptor{
 		Source: source, Capability: capability,
-		Execution:          agent.ToolExecutionParallelRead,
-		MutationScope:      agent.ToolMutationNone,
-		PostCheck:          agent.ToolPostCheckNone,
-		Recovery:           agent.ToolRecoveryReadOnly,
+		Execution:          sdktool.ToolExecutionParallelRead,
+		MutationScope:      sdktool.ToolMutationNone,
+		PostCheck:          sdktool.ToolPostCheckNone,
+		Recovery:           sdktool.ToolRecoveryReadOnly,
 		ResultRecoveryKind: resultRecovery,
-		ResultProjection:   agent.ToolResultBoundedModelContext,
-		ResultRetention:    agent.ToolResultDeferred,
-		Steering:           agent.SteeringFinishCurrent,
+		ResultProjection:   agentschema.ToolResultBoundedModelContext,
+		ResultRetention:    agentschema.ToolResultDeferred,
+		Steering:           sdktool.SteeringFinishCurrent,
 		MaxResultBytes:     defaultToolResultMaxBytes,
 	}
 	switch source {
 	case ToolSourceWeb:
-		descriptor.Presentation = agent.UniformToolPresentation(agent.ToolPresentationWeb)
+		descriptor.Presentation = sdktool.UniformToolPresentation(sdktool.ToolPresentationWeb)
 	default:
-		descriptor.Presentation = agent.UniformToolPresentation(agent.ToolPresentationGeneric)
+		descriptor.Presentation = sdktool.UniformToolPresentation(sdktool.ToolPresentationGeneric)
 	}
 	return descriptor
 }
 
 // BoundedReadDescriptor declares a parallel, read-only tool whose result may
 // enter bounded model context.
-func BoundedReadDescriptor(source agent.ToolSource, capability string) agent.ToolDescriptor {
+func BoundedReadDescriptor(source sdktool.ToolSource, capability string) sdktool.ToolDescriptor {
 	return boundedReadDescriptor(source, capability)
 }
 
 // BoundedRecoverableReadDescriptor additionally declares the exact ordinary
 // operation that can reconstruct a pressure-cleaned result.
-func BoundedRecoverableReadDescriptor(source agent.ToolSource, capability string, recoveryKind agent.ToolResultRecoveryKind) agent.ToolDescriptor {
+func BoundedRecoverableReadDescriptor(source sdktool.ToolSource, capability string, recoveryKind agentschema.ToolResultRecoveryKind) sdktool.ToolDescriptor {
 	return boundedReadDescriptor(source, capability, recoveryKind)
 }
 
-func workspaceWriteDescriptor(source agent.ToolSource, capability string, recovery agent.ToolRecoveryClass) agent.ToolDescriptor {
-	descriptor := agent.ToolDescriptor{
+func workspaceWriteDescriptor(source sdktool.ToolSource, capability string, recovery sdktool.ToolRecoveryClass) sdktool.ToolDescriptor {
+	descriptor := sdktool.ToolDescriptor{
 		Source: source, Capability: capability,
-		Execution:        agent.ToolExecutionWorkspaceExclusive,
-		MutationScope:    agent.ToolMutationWorkspace,
-		PostCheck:        agent.ToolPostCheckWorkspaceChange,
+		Execution:        sdktool.ToolExecutionWorkspaceExclusive,
+		MutationScope:    sdktool.ToolMutationWorkspace,
+		PostCheck:        sdktool.ToolPostCheckWorkspaceChange,
 		Recovery:         recovery,
-		ResultProjection: agent.ToolResultBoundedModelContext,
-		ResultRetention:  agent.ToolResultProtected,
-		Steering:         agent.SteeringFinishCurrent,
+		ResultProjection: agentschema.ToolResultBoundedModelContext,
+		ResultRetention:  agentschema.ToolResultProtected,
+		Steering:         sdktool.SteeringFinishCurrent,
 		MaxResultBytes:   defaultToolResultMaxBytes,
 	}
 	if source == ToolSourceImage {
-		descriptor.Presentation = agent.UniformToolPresentation(agent.ToolPresentationImage)
+		descriptor.Presentation = sdktool.UniformToolPresentation(sdktool.ToolPresentationImage)
 	} else {
-		descriptor.Presentation = agent.UniformToolPresentation(agent.ToolPresentationFile)
+		descriptor.Presentation = sdktool.UniformToolPresentation(sdktool.ToolPresentationFile)
 	}
 	return descriptor
 }
@@ -301,23 +302,23 @@ func workspaceWriteDescriptor(source agent.ToolSource, capability string, recove
 // transaction separately from generic workspace file mutation. These tools may
 // persist the current story session through their domain commit boundary, but
 // they do not grant arbitrary workspace write access.
-func interactiveStoryWorkflowDescriptor() agent.ToolDescriptor {
-	return agent.ToolDescriptor{
+func interactiveStoryWorkflowDescriptor() sdktool.ToolDescriptor {
+	return sdktool.ToolDescriptor{
 		Source:           ToolSourceHistory,
-		Execution:        agent.ToolExecutionSessionExclusive,
-		MutationScope:    agent.ToolMutationSession,
-		PostCheck:        agent.ToolPostCheckSessionState,
-		Recovery:         agent.ToolRecoveryReconcilable,
-		ResultProjection: agent.ToolResultBoundedModelContext,
-		ResultRetention:  agent.ToolResultProtected,
-		Steering:         agent.SteeringFinishCurrent,
+		Execution:        sdktool.ToolExecutionSessionExclusive,
+		MutationScope:    sdktool.ToolMutationSession,
+		PostCheck:        sdktool.ToolPostCheckSessionState,
+		Recovery:         sdktool.ToolRecoveryReconcilable,
+		ResultProjection: agentschema.ToolResultBoundedModelContext,
+		ResultRetention:  agentschema.ToolResultProtected,
+		Steering:         sdktool.SteeringFinishCurrent,
 		MaxResultBytes:   defaultToolResultMaxBytes,
 	}
 }
 
 // WorkspaceWriteDescriptor declares an exclusive workspace mutation that
 // requires post-run verification.
-func WorkspaceWriteDescriptor(source agent.ToolSource, capability string, recovery agent.ToolRecoveryClass) agent.ToolDescriptor {
+func WorkspaceWriteDescriptor(source sdktool.ToolSource, capability string, recovery sdktool.ToolRecoveryClass) sdktool.ToolDescriptor {
 	return workspaceWriteDescriptor(source, capability, recovery)
 }
 

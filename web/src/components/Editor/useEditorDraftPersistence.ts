@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { useTranslation } from 'react-i18next'
 
 import type { PreservedAutosaveConflict } from '@/lib/api-client/autosave-conflicts'
@@ -87,6 +87,8 @@ export type ExternalContentConflict = {
 }
 
 interface UseEditorDraftPersistenceOptions {
+  /** Inactive retained editors keep autosaving but do not own navigation or Save commands. */
+  active?: boolean
   workspace: string
   fileName: string | null
   content: string
@@ -131,6 +133,7 @@ function normalizeAutoSaveDelayMs(value: number | undefined): number {
 
 /** Editor adapter: TipTap/external-sync concerns stay here; timing and serialization live in SaveLane. */
 export function useEditorDraftPersistence({
+  active = true,
   workspace,
   fileName,
   content,
@@ -692,9 +695,10 @@ export function useEditorDraftPersistence({
   }, [flush, getSnapshot, hasWork, saveEditorContent])
 
   useLayoutEffect(() => {
+    if (!active) return
     onFlushHandlerChange?.(flushCurrentDraft)
     return () => onFlushHandlerChange?.(null)
-  }, [flushCurrentDraft, onFlushHandlerChange])
+  }, [active, flushCurrentDraft, onFlushHandlerChange])
 
   // Last-resort boundary for owners that disappear without awaiting the
   // registered navigation flush. It still uses the same serialized lane.
@@ -714,8 +718,9 @@ export function useEditorDraftPersistence({
   useEffect(() => {
     if (saveSignal === lastSaveSignalRef.current) return
     lastSaveSignalRef.current = saveSignal
+    if (!active) return
     void handleSave()
-  }, [handleSave, saveSignal])
+  }, [active, handleSave, saveSignal])
 
   // External content is applied with emitUpdate:false, so only user edits arm
   // the after-delay save timer.

@@ -1,7 +1,7 @@
 import type { ChatTransport, UIMessage } from 'ai'
 import { DefaultChatTransport } from 'ai'
-import { fetchAPI, responseAPIError } from './api-client/client'
-import type { ToolPresentation, UserMessageReference } from './api-client/types'
+import { fetchAPI, responseAPIError, parseUIMessageStream } from './api-client/client'
+import type { AgentPageContext, ToolPresentation, UserMessageReference } from './api-client/types'
 import type { ChatAttachmentDescriptor, ChatAttachmentUpload } from './chat-attachments'
 
 export type AgentDisplayRole = 'user' | 'assistant' | 'thinking' | 'tool_call' | 'tool_result' | 'ask' | 'rule_roll' | 'context_compaction' | 'token_usage' | 'execution_summary' | 'proposed_plan' | 'system' | 'error'
@@ -26,6 +26,7 @@ export interface AgentMessageMetadata {
   streaming_target_content?: string
   turn_id?: string
   navigation_turn_id?: string
+  execution_details_deferred?: boolean
   turn_versions?: { turn_id: string; ts: string; current?: boolean }[]
   turn_version_index?: number
   user_references?: UserMessageReference[]
@@ -44,6 +45,7 @@ export type AgentDataParts = {
   'agent-execution-summary': AgentDataPayload
   'agent-interactive-image': AgentDataPayload
   'agent-proposed-plan': AgentDataPayload
+  'agent-todo': AgentDataPayload
   'agent-rule-roll': AgentDataPayload
   'agent-system': AgentDataPayload
   'agent-token-usage': AgentDataPayload
@@ -62,7 +64,13 @@ export interface AgentChatTransportOptions {
   scope?: Record<string, string>
 }
 
+/** Local request lifecycle callbacks; these are never sent to the server. */
+export interface AgentChatRequestMetadata {
+  onSubmissionAccepted?: () => void
+}
+
 interface AgentChatRequestBody {
+  page_context?: AgentPageContext
   command_id?: string
   resume_interruption_id?: string
   references?: string[]
@@ -127,17 +135,34 @@ export class AgentChatTransport implements ChatTransport<AgentUIMessage> {
     })
   }
 
-  sendMessages(options: Parameters<ChatTransport<AgentUIMessage>['sendMessages']>[0]) {
+  async sendMessages(options: Parameters<ChatTransport<AgentUIMessage>['sendMessages']>[0]) {
     // A new POST creates a new backend task. It must be rebound from `/active`
     // before any reconnect can target a stream.
     this.activeStreamTaskID = ''
     this.activeStreamAfter = 0
     this.activeStreamScope = {}
-    return this.transport.sendMessages(options)
+    const stream = await this.transport.sendMessages(options)
+    // A successful HTTP response proves durable acceptance before the model finishes its turn.
+    const metadata = options.metadata as AgentChatRequestMetadata | undefined
+    metadata?.onSubmissionAccepted?.()
+    return stream
   }
 
-  reconnectToStream(options: Parameters<ChatTransport<AgentUIMessage>['reconnectToStream']>[0]) {
-    return this.transport.reconnectToStream(options)
+  async reconnectToStream(options: Parameters<ChatTransport<AgentUIMessage>['reconnectToStream']>[0], signal?: AbortSignal) {
+    const controller = new AbortController()
+    // Bound only the HTTP attachment. A model may keep the stream open for
+    // any duration; stopping/switching the conversation still aborts its reader.
+    const timer = setTimeout(() => controller.abort(new DOMException('Stream attachment timed out', 'TimeoutError')), 15_000)
+    try {
+      const response = await fetchAPI(this.activeStreamURL(), {
+        method: 'GET', headers: options.headers,
+        signal: AbortSignal.any([controller.signal, ...(signal ? [signal] : [])]),
+      })
+      if (response.status === 204) return null
+      if (!response.ok) throw await responseAPIError(response)
+      if (!response.body) throw new Error('Agent display stream response has no body')
+      return parseUIMessageStream(response.body)
+    } finally { clearTimeout(timer) }
   }
 
   /** Select the exact backend task and optional server-issued display cursor. */
@@ -197,6 +222,7 @@ export function buildAgentChatRequestBody(body: AgentChatRequestBody): AgentChat
     style_scenes: body.style_scenes || [],
     selections: body.selections || [],
     ide_context: body.ide_context,
+    page_context: body.page_context,
     plan_mode: body.plan_mode || false,
     writing_skill: body.writing_skill || undefined,
     image_preset_id: body.image_preset_id || undefined,
@@ -245,55 +271,33 @@ function normalizeReviewFeedbackRefs(
   return [...merged.values()]
 }
 
-export function normalizeAgentUIMessages(messages: AgentUIMessage[]): AgentUIMessage[] {
-  return normalizeRepeatedAgentUIParts(normalizeRepeatedAgentUIMessageIDs(messages))
+/** Reconcile history and replay without retracting a known text prefix. A
+ * conflicting stable identity keeps the existing part; display owners can
+ * collect that identity here and request authoritative recovery after render. */
+export function normalizeAgentUIMessages(
+  messages: AgentUIMessage[],
+  onTextConflict: (identity: string) => void = identity => console.warn('[agent-ui.ts] Conflicting Agent display segment', { identity }),
+): AgentUIMessage[] {
+  const discarded = messages.flatMap(message => message.parts.flatMap(part => {
+    if (part.type !== 'data-agent-activity' || part.data.event !== 'model_retry') return []
+    return Array.isArray(part.data.discard_ids) ? part.data.discard_ids.filter((id): id is string => typeof id === 'string') : []
+  }))
+  // Explicit retry retractions take precedence over replay reconciliation.
+  return normalizeRepeatedAgentUIParts(discardAgentPreviews(normalizeRepeatedAgentUIMessageIDs(messages), discarded), onTextConflict)
 }
 
-/**
- * Reuses a normalized stable prefix while one cumulative streaming message is
- * growing. Structural changes still take the complete dedupe path, so history
- * replay and tool/data part replacement keep their canonical behavior.
- */
-export class AgentUIMessageNormalizer {
-  private source: AgentUIMessage[] = []
-  private normalized: AgentUIMessage[] = []
-
-  normalize(messages: AgentUIMessage[]): AgentUIMessage[] {
-    const lastIndex = messages.length - 1
-    const previousLast = this.source[lastIndex]
-    const nextLast = messages[lastIndex]
-    let stableGrowingTail =
-      messages.length > 0 &&
-      messages.length === this.source.length &&
-      this.normalized.length === messages.length &&
-      nextLast.role === previousLast?.role &&
-      nextLast.parts.length === previousLast?.parts.length
-    for (let index = 0; stableGrowingTail && index < messages.length; index += 1) {
-      const message = messages[index]
-      stableGrowingTail =
-        Boolean(message.id) &&
-        message.id === this.source[index]?.id &&
-        message.id === this.normalized[index]?.id &&
-        this.normalized[index]?.parts.length === this.source[index]?.parts.length &&
-        (index === lastIndex || message === this.source[index])
-    }
-
-    let normalized: AgentUIMessage[]
-    if (stableGrowingTail) {
-      const tail = normalizeAgentUIMessages([nextLast])[0]
-      if (tail) {
-        normalized = [...this.normalized]
-        normalized[lastIndex] = tail
-      } else {
-        normalized = normalizeAgentUIMessages(messages)
-      }
-    } else {
-      normalized = normalizeAgentUIMessages(messages)
-    }
-    this.source = [...messages]
-    this.normalized = normalized
-    return normalized
-  }
+/** Retract exact display parts from one failed response, keeping earlier tools. */
+export function discardAgentPreviews(messages: AgentUIMessage[], ids: string[]): AgentUIMessage[] {
+  if (!ids.length) return messages
+  const discarded = new Set(ids)
+  return messages.flatMap(message => {
+    if (discarded.has(message.id) || discarded.has(message.metadata?.display_segment_id || '')) return []
+    const parts = message.parts.filter(part => {
+      const value = part as unknown as { toolCallId?: string; providerMetadata?: { agent?: { display_segment_id?: string } } }
+      return !discarded.has(value.toolCallId || '') && !discarded.has(value.providerMetadata?.agent?.display_segment_id || '')
+    })
+    return parts.length ? [parts.length === message.parts.length ? message : { ...message, parts }] : []
+  })
 }
 
 function normalizeRepeatedAgentUIMessageIDs(messages: AgentUIMessage[]) {
@@ -337,7 +341,7 @@ const messagePartDedupeIdentitiesCache = new WeakMap<
   }
 >()
 
-function normalizeRepeatedAgentUIParts(messages: AgentUIMessage[]) {
+function normalizeRepeatedAgentUIParts(messages: AgentUIMessage[], onTextConflict: (identity: string) => void) {
   const normalized = [...messages]
   const locationByKey = new Map<string, AgentUIPartLocation>()
   const contentFallbackByKey = new Map<string, AgentUIContentFallbackLocation | null>()
@@ -358,6 +362,17 @@ function normalizeRepeatedAgentUIParts(messages: AgentUIMessage[]) {
           existing = fallback.location
         }
       }
+      let mergedPart = existing && mergeDuplicateAgentUIPart(normalized[existing.messageIndex].parts[existing.partIndex], part)
+      if (existing && !mergedPart) {
+        if (identity.stableContentKey && locationByKey.has(identity.primaryKey)) {
+          onTextConflict(identity.primaryKey)
+          mergedPart = normalized[existing.messageIndex].parts[existing.partIndex]
+        } else {
+          // A legacy content fingerprint is only a candidate match. Distinct
+          // reasoning can share the same opening without being the same part.
+          existing = undefined
+        }
+      }
       if (!existing) {
         const location = { messageIndex, partIndex }
         locationByKey.set(identity.primaryKey, location)
@@ -368,11 +383,10 @@ function normalizeRepeatedAgentUIParts(messages: AgentUIMessage[]) {
       rememberContentFallback(contentFallbackByKey, identity, existing)
       const existingMessage = normalized[existing.messageIndex]
       const existingPart = existingMessage.parts[existing.partIndex]
-      const mergedPart = mergeDuplicateAgentUIPart(existingPart, part)
       const mergedMetadata = mergeAgentMessageMetadata(existingMessage.metadata, message.metadata)
       if (mergedPart !== existingPart || mergedMetadata !== existingMessage.metadata) {
         const parts = mergedPart === existingPart ? existingMessage.parts : [...existingMessage.parts]
-        if (parts !== existingMessage.parts) parts[existing.partIndex] = mergedPart
+        if (parts !== existingMessage.parts) parts[existing.partIndex] = mergedPart!
         normalized[existing.messageIndex] = {
           ...existingMessage,
           parts,
@@ -540,9 +554,17 @@ function mergeDuplicateAgentUIPart(existing: AgentUIMessage['parts'][number], in
     const existingStatus = readString(objectData(existingRaw.data).status)
     return dataPartStatusRank(incomingStatus) >= dataPartStatusRank(existingStatus) ? incoming : existing
   }
-  if ((type === 'text' || type === 'reasoning') && !readString(incomingRaw.id)) {
-    const existingID = readString(existingRaw.id)
-    if (existingID) return { ...incomingRaw, id: existingID } as AgentUIMessage['parts'][number]
+  if (type === 'text' || type === 'reasoning') {
+    const previousText = readString(existingRaw.text)
+    const nextText = readString(incomingRaw.text)
+    if (!previousText.startsWith(nextText) && !nextText.startsWith(previousText)) return undefined
+    const text = previousText.length > nextText.length ? previousText : nextText
+    const id = readString(incomingRaw.id) || readString(existingRaw.id)
+    // State follows the current connection even when its replay is behind the
+    // durable body. In particular, a stored partial segment is marked done.
+    if (text !== nextText || id !== readString(incomingRaw.id)) {
+      return { ...incomingRaw, text, ...(id ? { id } : {}) } as AgentUIMessage['parts'][number]
+    }
   }
   return incoming
 }

@@ -2,7 +2,7 @@ import { expect, test } from '../support/fixtures'
 import { getCurrentWorkspace } from '../support/api'
 import { openAgentChatWorkbench } from '../support/agent-chat'
 
-test('creates a Book from the bookshelf and keeps it selected after reload', async ({ page, request }) => {
+test('creates a Book from the bookshelf and keeps it selected after reload', { tag: '@smoke' }, async ({ page, request }) => {
   const title = 'Bookshelf E2E Book'
 
   await page.goto('/')
@@ -21,7 +21,7 @@ test('creates a Book from the bookshelf and keeps it selected after reload', asy
   await expect(page.getByText('当前', { exact: true }).first()).toBeVisible()
 })
 
-test('creates a Book from the Agent workbench and opens its project', async ({ page }) => {
+test('creates a Book from the Agent workbench and opens its project', { tag: '@smoke' }, async ({ page }) => {
   const title = 'Workbench E2E Book'
   await page.goto('/')
   await openAgentChatWorkbench(page)

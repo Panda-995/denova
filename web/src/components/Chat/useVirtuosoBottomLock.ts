@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, PointerEvent, UIEvent, WheelEvent } from 'react'
 import type { VirtuosoHandle } from 'react-virtuoso'
+import { useReducedMotionConfig } from 'motion/react'
 import { createDeferredBottomScrollScheduler, DEFAULT_BOTTOM_THRESHOLD, isElementNearBottom, UPWARD_SCROLL_KEYS } from '@/lib/bottom-scroll-controller'
 import { useStreamingTailLayout } from './useStreamingTailLayout'
 
@@ -20,6 +21,8 @@ interface VirtuosoBottomLockOptions {
   resetPosition?: 'start' | 'end'
   itemCount: number
   autoFollowEnabled: boolean
+  /** Preserve the reply; reveal only the footer's data-nova-chat-after-content-reveal anchor. */
+  revealAfterContent?: boolean
   /** Persistent AgentChat tabs stay mounted under `display: none`; hidden geometry is not measurable. */
   visible?: boolean
   /** Height covered by the composer and its breathing room inside the message viewport. */
@@ -28,13 +31,21 @@ interface VirtuosoBottomLockOptions {
   resolveScroller?: () => HTMLElement | null
 }
 
-export function useVirtuosoBottomLock({ resetKey, resetPosition = 'end', itemCount, autoFollowEnabled, visible = true, bottomInsetPx, awayFromBottomThreshold = VIRTUOSO_AWAY_FROM_BOTTOM_THRESHOLD, resolveScroller }: VirtuosoBottomLockOptions) {
+export function useVirtuosoBottomLock({ resetKey, resetPosition = 'end', itemCount, autoFollowEnabled, revealAfterContent = false, visible = true, bottomInsetPx, awayFromBottomThreshold = VIRTUOSO_AWAY_FROM_BOTTOM_THRESHOLD, resolveScroller }: VirtuosoBottomLockOptions) {
+  const reducedMotion = useReducedMotionConfig()
   const virtuosoRef = useRef<VirtuosoHandle | null>(null)
   const scrollerElementRef = useRef<HTMLElement | null>(null)
   const viewportScrollTopRef = useRef<number | null>(null)
   const lockedRef = useRef(true)
+  // Restoring history or explicitly returning to its end must follow late row
+  // measurements. Reveal-only footer behavior applies after a streamed reply,
+  // when preserving the reader's position takes precedence over the list end.
+  const followIdleBottomRef = useRef(!autoFollowEnabled && resetPosition === 'end')
+  const afterContentRevealPendingRef = useRef(false)
   const afterContentInteractionRef = useRef(false)
-  const afterContentScrollTopRef = useRef<number | null>(null)
+  // Footer interactions follow the bottom only when they start there; otherwise
+  // preserve the reading position until an explicit scroll gesture takes over.
+  const afterContentAnchorRef = useRef<{ kind: 'bottom' } | { kind: 'position'; scrollTop: number } | null>(null)
   const pointerGestureYRef = useRef<number | null>(null)
   const autoFollowEnabledRef = useRef(autoFollowEnabled)
   const previousAutoFollowEnabledRef = useRef(autoFollowEnabled)
@@ -159,43 +170,56 @@ export function useVirtuosoBottomLock({ resetKey, resetPosition = 'end', itemCou
     ) return
     const element = currentScrollerElement()
     if (!element || element.clientHeight <= 0) return
+    if (revealAfterContent && !followIdleBottomRef.current) {
+      if (!afterContentRevealPendingRef.current) return
+      const reveal = element.querySelector('[data-nova-chat-after-content-reveal]')
+      // Virtuoso can mount its footer after the parent's layout effect. Consume
+      // the reveal once its measured height arrives, without following the panel.
+      if (!reveal) return
+      afterContentRevealPendingRef.current = false
+      const delta = reveal.getBoundingClientRect().bottom - (element.getBoundingClientRect().bottom - (bottomInsetPx || 0))
+      if (delta > 0) element.scrollTo({ top: element.scrollTop + delta, behavior: reducedMotion ? 'auto' : 'smooth' })
+      return
+    }
     element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight)
     viewportScrollTopRef.current = element.scrollTop
     setIsAwayFromBottom(false)
-  }, [currentScrollerElement])
+  }, [bottomInsetPx, currentScrollerElement, revealAfterContent, reducedMotion])
 
   const unlockFromBottom = useCallback(() => {
     lockedRef.current = false
+    // A late at-bottom callback can precede the browser's wheel/touch scroll.
+    // User navigation still ends restoration following until an explicit jump.
+    followIdleBottomRef.current = false
+    afterContentRevealPendingRef.current = false
     cancelScheduledScroll()
   }, [cancelScheduledScroll])
 
   const resetAfterContentInteraction = useCallback(() => {
     afterContentInteractionRef.current = false
-    afterContentScrollTopRef.current = null
+    afterContentAnchorRef.current = null
   }, [])
 
   const beginAfterContentInteraction = useCallback(() => {
     const element = currentScrollerElement()
-    afterContentScrollTopRef.current = element?.scrollTop ?? viewportScrollTopRef.current
+    afterContentAnchorRef.current = element && isNearBottom(element)
+      ? { kind: 'bottom' }
+      : { kind: 'position', scrollTop: element?.scrollTop ?? viewportScrollTopRef.current ?? 0 }
     afterContentInteractionRef.current = true
     unlockFromBottom()
-  }, [currentScrollerElement, unlockFromBottom])
+  }, [currentScrollerElement, isNearBottom, unlockFromBottom])
 
   const releaseBottomLock = useCallback(() => {
-    if (!afterContentInteractionRef.current) {
-      const element = currentScrollerElement()
-      afterContentScrollTopRef.current = element?.scrollTop ?? viewportScrollTopRef.current
-    }
-    afterContentInteractionRef.current = true
-    unlockFromBottom()
-  }, [currentScrollerElement, unlockFromBottom])
+    if (!afterContentInteractionRef.current) beginAfterContentInteraction()
+  }, [beginAfterContentInteraction])
 
   const restoreAfterContentScrollPosition = useCallback(() => {
-    const targetScrollTop = afterContentScrollTopRef.current
-    if (!afterContentInteractionRef.current || targetScrollTop === null) return
+    const anchor = afterContentAnchorRef.current
+    if (!afterContentInteractionRef.current || !anchor || !visibleRef.current) return
     const element = currentScrollerElement()
     if (!element) return
-    element.scrollTop = Math.max(0, Math.min(targetScrollTop, element.scrollHeight - element.clientHeight))
+    const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight)
+    element.scrollTop = anchor.kind === 'bottom' ? maxScrollTop : Math.min(anchor.scrollTop, maxScrollTop)
     viewportScrollTopRef.current = element.scrollTop
     updateAwayFromBottom(element)
   }, [currentScrollerElement, updateAwayFromBottom])
@@ -203,6 +227,7 @@ export function useVirtuosoBottomLock({ resetKey, resetPosition = 'end', itemCou
   const scrollToBottom = useCallback(() => {
     resetAfterContentInteraction()
     lockedRef.current = true
+    followIdleBottomRef.current = !autoFollowEnabledRef.current
     schedulerRef.current.schedule(scrollToBottomNow, () => lockedRef.current)
   }, [resetAfterContentInteraction, scrollToBottomNow])
 
@@ -251,7 +276,7 @@ export function useVirtuosoBottomLock({ resetKey, resetPosition = 'end', itemCou
     updateAwayFromBottom(scroller)
   }, [cancelScheduledScroll, currentScrollerElement, resetAfterContentInteraction, updateAwayFromBottom])
 
-  const scrollToIndex = useCallback((index: number, options?: { align?: 'start' | 'center' | 'end'; behavior?: 'auto' | 'smooth' }) => {
+  const scrollToIndex = useCallback((index: number, options?: { align?: 'start' | 'center' | 'end'; behavior?: 'auto' | 'smooth'; offset?: number }) => {
     if (itemCount <= 0) return
     resetAfterContentInteraction()
     lockedRef.current = false
@@ -262,6 +287,7 @@ export function useVirtuosoBottomLock({ resetKey, resetPosition = 'end', itemCou
       index: Math.max(0, Math.min(itemCount - 1, index)),
       align: options?.align || 'start',
       behavior: options?.behavior || 'smooth',
+      offset: options?.offset,
     })
     updateAwayFromBottom()
   }, [cancelScheduledScroll, itemCount, resetAfterContentInteraction, updateAwayFromBottom])
@@ -299,14 +325,11 @@ export function useVirtuosoBottomLock({ resetKey, resetPosition = 'end', itemCou
   }, [resetAfterContentInteraction, unlockFromBottom])
 
   const onPointerDown = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    if (isAfterContentEventTarget(event.target)) {
-      pointerGestureYRef.current = null
-      return
-    }
-    resetAfterContentInteraction()
     pointerGestureYRef.current = event.pointerType === 'touch' || event.pointerType === 'pen'
       ? event.clientY
       : null
+    if (isAfterContentEventTarget(event.target)) return
+    resetAfterContentInteraction()
     // Wheel/keyboard handlers carry directional intent. A pointer event whose
     // target is the scroller itself covers scrollbar dragging without treating
     // layout-driven scroll events as user input.
@@ -319,8 +342,9 @@ export function useVirtuosoBottomLock({ resetKey, resetPosition = 'end', itemCou
     pointerGestureYRef.current = event.clientY
     // Moving a touch pointer down scrolls the content upward. Use the gesture
     // direction instead of scrollTop deltas, which also change during layout.
+    if (Math.abs(event.clientY - previousY) > 1) resetAfterContentInteraction()
     if (event.clientY > previousY + 1) unlockFromBottom()
-  }, [unlockFromBottom])
+  }, [resetAfterContentInteraction, unlockFromBottom])
 
   const onPointerEnd = useCallback(() => {
     pointerGestureYRef.current = null
@@ -391,9 +415,9 @@ export function useVirtuosoBottomLock({ resetKey, resetPosition = 'end', itemCou
       return
     }
     if (!autoFollowEnabled) {
-      // The state panel mounts in the same commit that ends streaming. Cancel
-      // an automatic follow captured against the old footer before it can move
-      // the newly completed viewport on the next animation frame.
+      // A confirmed result can end prose following before the transport closes.
+      // Cancel work captured against the old footer and preserve the reader's
+      // position; followers only need the result's marked heading revealed.
       if (wasEnabled) {
         cancelScheduledScroll()
         const element = currentScrollerElement()
@@ -405,11 +429,14 @@ export function useVirtuosoBottomLock({ resetKey, resetPosition = 'end', itemCou
           )
           element.scrollTop = preservedScrollTop
           viewportScrollTopRef.current = preservedScrollTop
+          afterContentRevealPendingRef.current = revealAfterContent && lockedRef.current
+          if (revealAfterContent) syncIdleBottomLayout()
           updateAwayFromBottom(element)
         }
       }
       return
     }
+    followIdleBottomRef.current = false
     if (wasEnabled) return
     resetAfterContentInteraction()
     const element = currentScrollerElement()
@@ -418,10 +445,11 @@ export function useVirtuosoBottomLock({ resetKey, resetPosition = 'end', itemCou
     // explicit upward interaction may unlock it. An already-unlocked viewport
     // may still relock when it was effectively at the end before streaming.
     if (!lockedRef.current) lockedRef.current = !element || isNearBottom(element)
-  }, [autoFollowEnabled, cancelScheduledScroll, currentScrollerElement, isNearBottom, itemCount, resetAfterContentInteraction, scrollToBottomNow, updateAwayFromBottom, visible])
+  }, [autoFollowEnabled, cancelScheduledScroll, currentScrollerElement, revealAfterContent, isNearBottom, itemCount, resetAfterContentInteraction, scrollToBottomNow, syncIdleBottomLayout, updateAwayFromBottom, visible])
 
   useLayoutEffect(() => {
     resetAfterContentInteraction()
+    afterContentRevealPendingRef.current = false
     lockedRef.current = resetPositionRef.current === 'end'
     if (visibleRef.current) {
       visibilitySettlingRef.current = false
@@ -433,8 +461,13 @@ export function useVirtuosoBottomLock({ resetKey, resetPosition = 'end', itemCou
   }, [cancelScheduledScroll, resetAfterContentInteraction, resetKey])
 
   useEffect(() => {
+    // A restored stream or a large batch can put the actual tail outside the
+    // mounted range. Materialize it before measuring its bottom; overscan rows
+    // are not the execution tail and must never become the scroll target.
+    const scroller = currentScrollerElement()
+    if (canAutoFollowStreamingTail() && scroller && !scroller.querySelector('[data-nova-chat-tail-row]')) scrollToBottomNow()
     updateAwayFromBottom()
-  }, [itemCount, updateAwayFromBottom])
+  }, [canAutoFollowStreamingTail, currentScrollerElement, itemCount, scrollToBottomNow, updateAwayFromBottom])
 
   useEffect(() => cancelScheduledScroll, [cancelScheduledScroll])
 

@@ -106,7 +106,7 @@ func TestLoreStoreDisabledItemsStayEditableButLeaveModelContext(t *testing.T) {
 	if _, err := store.Create(ItemInput{ID: "visible", Type: "character", Name: "可见角色", Importance: "major", LoadMode: LoadModeResident, Content: "可见正文"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Create(ItemInput{ID: "hidden", Enabled: &disabled, Type: "rule", Name: "禁用规则", Importance: "important", LoadMode: LoadModeAuto, Content: "禁用正文"}); err != nil {
+	if _, err := store.Create(ItemInput{ID: "hidden", Enabled: &disabled, Type: "world", Name: "禁用规则", Importance: "important", LoadMode: LoadModeAuto, Content: "禁用正文"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -170,7 +170,7 @@ func TestResidentContextIsStableAndSortedByLoreID(t *testing.T) {
 func TestResidentContextDoesNotLogRepeatedSizeWarnings(t *testing.T) {
 	store := NewStore(t.TempDir())
 	if _, err := store.Create(ItemInput{
-		ID: "large-resident", Type: "rule", Name: "大型常驻资料",
+		ID: "large-resident", Type: "world", Name: "大型常驻资料",
 		LoadMode: LoadModeResident, Content: strings.Repeat("常驻规则", 5000),
 	}); err != nil {
 		t.Fatal(err)
@@ -198,7 +198,7 @@ func TestLoreStoreProgressiveContextSplitsResidentAndIndex(t *testing.T) {
 	if _, err := store.Create(ItemInput{ID: "base", Type: "location", Name: "黄泉酒馆", Importance: "important", LoadMode: LoadModeAuto, Keywords: []string{"据点"}, BriefDescription: "黄泉酒馆索引简介", Content: "据点完整正文"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Create(ItemInput{ID: "secret", Type: "rule", Name: "隐藏规则", Importance: "minor", LoadMode: LoadModeManual, BriefDescription: "隐藏规则索引简介", Content: "隐藏完整正文"}); err != nil {
+	if _, err := store.Create(ItemInput{ID: "secret", Type: "world", Name: "隐藏规则", Importance: "minor", LoadMode: LoadModeManual, BriefDescription: "隐藏规则索引简介", Content: "隐藏完整正文"}); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 12; i++ {
@@ -211,10 +211,10 @@ func TestLoreStoreProgressiveContextSplitsResidentAndIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(context, "## Resident Lore") || !strings.Contains(context, "主角完整正文") {
+	if !strings.Contains(context, "## Resident") || !strings.Contains(context, "主角完整正文") {
 		t.Fatalf("resident context missing full content: %s", context)
 	}
-	if !strings.Contains(context, "## On-demand Lore Name Catalog") || !strings.Contains(context, "黄泉酒馆") || !strings.Contains(context, "隐藏规则") || !strings.Contains(context, "候选角色11") {
+	if !strings.Contains(context, "## Location · On demand") || !strings.Contains(context, "黄泉酒馆") || !strings.Contains(context, "隐藏规则") || !strings.Contains(context, "候选角色11") {
 		t.Fatalf("name catalog context missing non-resident items: %s", context)
 	}
 	if strings.Contains(context, "id: base") || strings.Contains(context, "黄泉酒馆索引简介") {
@@ -231,7 +231,7 @@ func TestLoreStoreCompactIndexOmitsHeavyFieldsAndDisabledItems(t *testing.T) {
 	if _, err := store.Create(ItemInput{ID: "base", Type: "location", Name: "黄泉酒馆", Importance: "important", LoadMode: LoadModeAuto, Tags: []string{"据点"}, Keywords: []string{"黄泉"}, BriefDescription: "地点 黄泉酒馆。索引简介。", Content: "据点完整正文"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Create(ItemInput{ID: "hidden", Enabled: &disabled, Type: "rule", Name: "禁用规则", Importance: "important", LoadMode: LoadModeAuto, BriefDescription: "禁用规则简介", Content: "禁用正文"}); err != nil {
+	if _, err := store.Create(ItemInput{ID: "hidden", Enabled: &disabled, Type: "world", Name: "禁用规则", Importance: "important", LoadMode: LoadModeAuto, BriefDescription: "禁用规则简介", Content: "禁用正文"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -315,7 +315,7 @@ func TestLoreStoreCompactIndexPaginatesWithDefaultAndExplicitLimits(t *testing.T
 	store := NewStore(t.TempDir())
 	for i := 0; i < 12; i++ {
 		id := fmt.Sprintf("item_%02d", i)
-		if _, err := store.Create(ItemInput{ID: id, Type: "other", Name: "资料" + id, LoadMode: LoadModeAuto, Content: "正文"}); err != nil {
+		if _, err := store.Create(ItemInput{ID: id, Type: "world", Name: "资料" + id, LoadMode: LoadModeAuto, Content: "正文"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -350,7 +350,7 @@ func TestLoreStoreCompactIndexPaginatesWithDefaultAndExplicitLimits(t *testing.T
 func TestLoreStoreNameRosterIsBoundedAndOmitsResidentBodies(t *testing.T) {
 	store := NewStore(t.TempDir())
 	for _, input := range []ItemInput{
-		{ID: "resident", Type: "rule", Name: "常驻规则", Importance: "major", LoadMode: LoadModeResident, Content: "不应重复进入名称目录"},
+		{ID: "resident", Type: "world", Name: "常驻规则", Importance: "major", LoadMode: LoadModeResident, Content: "不应重复进入名称目录"},
 		{ID: "hero", Type: "character", Name: "林川", Importance: "major", LoadMode: LoadModeAuto, BriefDescription: "不应注入简介", Content: "不应注入正文"},
 		{ID: "base", Type: "location", Name: "黄泉酒馆", Importance: "important", LoadMode: LoadModeAuto, Content: "不应注入正文"},
 	} {
@@ -397,7 +397,7 @@ func TestLoreStoreNameRosterUsesThe64KiBDiscoveryBudget(t *testing.T) {
 			Content:    "不应出现的正文",
 		}
 	}
-	data, err := json.Marshal(Collection{Version: loreItemsVersion, Items: items})
+	data, err := json.Marshal(Collection{Version: loreItemsVersion, Categories: DefaultCategories(), Items: items})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -445,7 +445,7 @@ func TestLoreStoreCompactIndexBudgetFallsBackToNameRoster(t *testing.T) {
 	longBrief := strings.Repeat("很长简介", 90)
 	for i := 0; i < 8; i++ {
 		id := fmt.Sprintf("item_%02d", i)
-		if _, err := store.Create(ItemInput{ID: id, Type: "other", Name: "资料" + id, Importance: "important", LoadMode: LoadModeAuto, BriefDescription: longBrief, Content: "正文"}); err != nil {
+		if _, err := store.Create(ItemInput{ID: id, Type: "world", Name: "资料" + id, Importance: "important", LoadMode: LoadModeAuto, BriefDescription: longBrief, Content: "正文"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -663,7 +663,7 @@ func TestLoreStoreImageSurvivesTextUpdateAndCanBeCleared(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	withImage, err := store.SetImage(item.ID, &Image{
+	withImage, err := store.AppendImage(item.ID, &Image{
 		Schema:    "lore_item_image.v1",
 		ImagePath: "assets/lore/images/hero/run/image.png",
 		MetaPath:  "assets/lore/images/hero/run/meta.json",
@@ -671,6 +671,10 @@ func TestLoreStoreImageSurvivesTextUpdateAndCanBeCleared(t *testing.T) {
 		Provider:  "openai",
 		Model:     "gpt-image-1",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withImage, err = store.MutateMaterial(item.ID, MaterialMutation{Op: "cover", AssetID: withImage.ResolvedMaterials[0].ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -684,7 +688,7 @@ func TestLoreStoreImageSurvivesTextUpdateAndCanBeCleared(t *testing.T) {
 	if updated.Image == nil || updated.Image.ImagePath != withImage.Image.ImagePath {
 		t.Fatalf("text update should preserve current image: %#v", updated)
 	}
-	cleared, err := store.SetImage(item.ID, nil)
+	cleared, err := store.MutateMaterial(item.ID, MaterialMutation{Op: "cover"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -777,11 +781,11 @@ func TestUniqueLoreIDFromBaseAppendsSuffixOnCollision(t *testing.T) {
 }
 
 func TestNewUniqueLoreIDUsesNameWithoutRandomSuffix(t *testing.T) {
-	if got := newUniqueLoreID(nil, "黄泉酒馆", "location"); got != "黄泉酒馆" {
-		t.Fatalf("generated lore ID should use the normalized name directly, got %s", got)
+	if got, err := NewItemID(nil, "黄泉酒馆"); err != nil || got != "黄泉酒馆" {
+		t.Fatalf("generated lore ID should use the normalized name directly, got %s: %v", got, err)
 	}
 	items := []Item{{ID: "huang_quan"}}
-	if got := newUniqueLoreID(items, "Huang Quan", "location"); got != "huang_quan-2" {
-		t.Fatalf("ID collision should use numeric suffix, got %s", got)
+	if got, err := NewItemID(items, "Huang Quan"); err != nil || got != "huang_quan-2" {
+		t.Fatalf("ID collision should use numeric suffix, got %s: %v", got, err)
 	}
 }

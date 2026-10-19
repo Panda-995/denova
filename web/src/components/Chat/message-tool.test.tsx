@@ -286,7 +286,7 @@ describe('ToolExecutionBlock', () => {
     expect(screen.queryByText('Story-wide roll modifier.')).not.toBeInTheDocument()
   })
 
-  it('keeps every submitted turn module in one scrollable detail view', () => {
+  it('keeps every submitted turn module in the expanded detail view', () => {
     const stateChanges = Array.from({ length: 14 }, (_, index) => ({
       op: index % 2 === 0 ? 'replace' : 'delta',
       actor_id: `actor-${index + 1}`,
@@ -324,7 +324,6 @@ describe('ToolExecutionBlock', () => {
     expect(container.querySelector('[data-nova-tool-summary]')).toHaveTextContent('回合已提交 · 14 项状态变化 · 5 个行动选项 · 规划已更新')
     fireEvent.click(container.querySelector('[data-nova-tool-header]') as HTMLElement)
 
-    expect(container.querySelector('[data-nova-tool-detail-scroll]')).toHaveClass('max-h-[min(30dvh,18rem)]')
     expect(screen.getByText(/actor-14\.field-14/)).toBeInTheDocument()
     expect(screen.getByText('原路撤退')).toBeInTheDocument()
     expect(screen.getByText('## 下一幕')).toBeInTheDocument()

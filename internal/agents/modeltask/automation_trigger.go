@@ -2,15 +2,15 @@ package modeltask
 
 import (
 	"context"
-	"denova/internal/agents/run"
 	"fmt"
 	"log/slog"
-
-	agent "github.com/alfredxw/denova/agent"
 
 	"denova/config"
 	"denova/internal/agents/modelio"
 	"denova/internal/agents/prompts"
+	agentrun "denova/internal/agents/run"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 // GenerateAutomationTriggerEvaluation uses the owning Project Agent model to
@@ -45,9 +45,9 @@ func GenerateAutomationTriggerEvaluation(ctx context.Context, cfg *config.Config
 		runErr = err
 		return "", err
 	}
-	messages := []*agent.Message{
-		agent.SystemMessage(composition.Instruction()),
-		agent.UserMessage(instruction),
+	messages := []*agentschema.Message{
+		agentschema.SystemMessage(composition.Instruction()),
+		agentschema.UserMessage(instruction),
 	}
 	if err := modelio.ValidateConfiguredInput(cfg, agentKind, messages, nil); err != nil {
 		runErr = err

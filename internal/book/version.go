@@ -39,6 +39,7 @@ type VersionRestoreResult = versions.VersionRestoreResult
 type VersionRestoreChange = versions.VersionRestoreChange
 type VersionDiffComparison = versions.VersionDiffComparison
 type VersionDiff = versions.VersionDiff
+type VersionDiffOptions = versions.VersionDiffOptions
 type VersionAutoSettings = versions.VersionAutoSettings
 type VersionAutoResult = versions.VersionAutoResult
 type VersionService = versions.Service

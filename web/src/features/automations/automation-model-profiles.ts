@@ -1,4 +1,4 @@
-import { modelProfileID, modelProfileLabel, modelProfilesWithDefault } from '@/features/settings/model-profiles'
+import { modelProfileID, modelProfileLabel, modelProfilesWithDefault, selectableModelProfiles } from '@/features/settings/model-profiles'
 import type { AgentChatProjectType } from '@/features/agent-chat/api'
 import type { ModelProfileSettings, Settings } from '@/features/settings/types'
 
@@ -7,7 +7,7 @@ type Translate = (key: string, options?: Record<string, unknown>) => string
 export function buildAutomationModelProfileOptions(settings: Settings | null, selectedID: string | undefined, t: Translate): Array<{ id: string; label: string }> {
   const labels = modelProfileLabels(settings, t)
   const selected = selectedID?.trim()
-  if (selected && !labels.has(selected)) {
+  if (selected && !labels.has(selected) && !modelProfilesWithDefault(settings ?? undefined).some(profile => modelProfileID(profile) === selected)) {
     labels.set(selected, t('automations.model.unknownProfile', { id: selected }))
   }
   return Array.from(labels.entries()).map(([id, label]) => ({
@@ -31,7 +31,7 @@ function modelProfileLabels(settings: Settings | null, t: Translate) {
     if (!id) return
     profiles.set(id, modelProfileLabel(profile))
   }
-  modelProfilesWithDefault(settings ?? undefined).forEach(add)
-  if (!profiles.has('default')) profiles.set('default', t('automations.model.defaultModel'))
+  selectableModelProfiles(settings ?? undefined).forEach(add)
+  if (modelProfilesWithDefault(settings ?? undefined).length === 0) profiles.set('default', t('automations.model.defaultModel'))
   return profiles
 }

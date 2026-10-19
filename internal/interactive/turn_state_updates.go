@@ -19,6 +19,8 @@ type TurnStateUpdateCompileOptions struct {
 	RuleResolution           *RuleResolution
 	RuleStateConsumptionMode string
 	actorLifecycleIntents    map[string]actorLifecycleIntent
+	// Diagnostic probes validate single operations, not a complete atomic batch.
+	deferResourceBounds bool
 }
 
 // CompiledTurnStateUpdates contains canonical audit input and deterministic
@@ -281,6 +283,15 @@ func CompileTurnStateUpdates(system StoryDirectorActorStateSystem, currentState 
 		compiled.ActorOps = append(compiled.ActorOps, actorOps...)
 	}
 
+	if !options.deferResourceBounds {
+		if options.RuleResolution != nil && actorStateHasResources(system) {
+			resolution := *options.RuleResolution
+			applyRuleStateConsumptionV2(workingState, system, options.SourceTurnID, &resolution, options.RuleStateConsumptionMode)
+		}
+		if err := validateActorResources(system, workingState); err != nil {
+			return CompiledTurnStateUpdates{}, stateUpdateError(max(0, len(updates)-1), "resource_bounds_invalid", "", "initialized numeric resource values within their final capacity", err.Error(), err)
+		}
+	}
 	compiled.Ops = normalizeStateOpsUnbounded(compiled.Ops)
 	compiled.ActorOps = normalizeActorStateOps(compiled.ActorOps)
 	return compiled, nil

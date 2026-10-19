@@ -20,8 +20,10 @@ import {
 import { interactiveTurnToolDetailAdapters } from './interactive-turn'
 
 export const domainToolDetailAdapters: Record<string, ToolDetailAdapter> = {
-  list_lore_items: outputAdapter(renderListLoreInput, renderLoreOutput),
-  read_lore_items: outputAdapter(renderReadLoreInput, renderLoreOutput),
+  query_lore_items: outputAdapter(renderQueryLoreInput, renderLoreOutput),
+  // Historical calls remain readable without registering retired tools.
+  list_lore_items: outputAdapter(renderQueryLoreInput, renderLoreOutput),
+  read_lore_items: outputAdapter(renderQueryLoreInput, renderLoreOutput),
   write_lore_items: inputAdapter(renderWriteLoreInput, renderWriteLoreOutput),
   search_story_history: outputAdapter(renderHistoryInput, renderHistoryOutput),
   ...interactiveTurnToolDetailAdapters,
@@ -35,37 +37,37 @@ function inputAdapter(renderInput: ToolDetailRenderer, renderOutput: ToolDetailR
   return { layout: 'input', renderInput, renderOutput }
 }
 
-function renderListLoreInput({ input, t }: ToolDetailRenderProps) {
+function renderQueryLoreInput({ input, t }: ToolDetailRenderProps) {
+  const ids = stringArray(input.ids)
+  const names = stringArray(input.names)
   const keywords = stringArray(input.keywords)
   const filters = [
-    keywords.length ? keywords.join(' · ') : t('chat.tool.detail.allLore'),
+    keywords.join(' · '),
+    stringArray(input.group_names).join(' · '),
     stringArray(input.types).length ? `types=${stringArray(input.types).join(',')}` : '',
     stringArray(input.load_modes).length ? `load_modes=${stringArray(input.load_modes).join(',')}` : '',
   ].filter(Boolean)
+  if (!filters.length && !ids.length && !names.length) filters.push(t('chat.tool.detail.allLore'))
   return (
     <DetailStack className="space-y-1.5">
-      <DetailPre className="text-[var(--nova-text)]">{filters.join(' · ')}</DetailPre>
+      {ids.map(id => <div key={id}><LoreLink id={id}>{id}</LoreLink></div>)}
+      {names.map(name => <div key={name}><LoreLink name={name}>{name}</LoreLink></div>)}
+      {filters.length ? <DetailPre className="text-[var(--nova-text)]">{filters.join(' · ')}</DetailPre> : null}
       <MetaLine items={[fieldMeta('match', input.match), fieldMeta('detail', input.detail), numericMeta('limit', input.limit), numericMeta('offset', input.offset)]} />
     </DetailStack>
   )
 }
 
-function renderReadLoreInput({ input }: ToolDetailRenderProps) {
-  const ids = stringArray(input.ids)
-  const names = stringArray(input.names)
-  return (
-    <DetailStack className="space-y-1">
-      {ids.map(id => <div key={id}><LoreLink id={id}>{id}</LoreLink></div>)}
-      {names.map(name => <div key={name}><LoreLink name={name}>{name}</LoreLink></div>)}
-    </DetailStack>
-  )
-}
-
 function renderLoreOutput({ result, t }: ToolDetailRenderProps) {
+  const missing = [...parseJSONLine(result, 'missing_ids'), ...parseJSONLine(result, 'missing_names')]
+  const guideStart = result.indexOf('\n# Group:')
+  const firstEntry = result.search(/^## .+\nID:/m)
+  const guides = guideStart < 0 ? '' : result.slice(guideStart, firstEntry < 0 ? undefined : firstEntry).trim()
   const entries = parseLoreEntries(result)
   if (!entries.length) return result.trim() ? <DetailPre>{result}</DetailPre> : <EmptyValue t={t} />
   return (
     <DetailStack>
+      {guides ? <DetailPre>{guides}</DetailPre> : null}
       {entries.map((entry, index) => (
         <DetailBlock key={`${entry.id || entry.name}-${index}`}>
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
@@ -75,6 +77,7 @@ function renderLoreOutput({ result, t }: ToolDetailRenderProps) {
           {entry.body ? <DetailPre>{entry.body}</DetailPre> : null}
         </DetailBlock>
       ))}
+      {missing.length ? <DetailBlock title={t('chat.tool.detail.missingLore')}><DetailPre>{missing.join(' · ')}</DetailPre></DetailBlock> : null}
       <MetaLine items={lorePaginationMeta(result)} />
     </DetailStack>
   )

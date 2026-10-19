@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 func TestRefreshCanonicalReplaysOnlyAppendedJournalTail(t *testing.T) {
@@ -22,7 +22,7 @@ func TestRefreshCanonicalReplaysOnlyAppendedJournalTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.Append(agent.UserMessage("first")); err != nil {
+	if err := writer.Append(agentschema.UserMessage("first")); err != nil {
 		t.Fatal(err)
 	}
 	reader, err := readerStore.GetOrCreate("incremental-refresh")
@@ -31,10 +31,10 @@ func TestRefreshCanonicalReplaysOnlyAppendedJournalTail(t *testing.T) {
 	}
 	initialSize := reader.journalSize
 
-	if err := writer.Append(agent.AssistantMessage("second", nil)); err != nil {
+	if err := writer.Append(agentschema.AssistantMessage("second", nil)); err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.Append(agent.UserMessage("third")); err != nil {
+	if err := writer.Append(agentschema.UserMessage("third")); err != nil {
 		t.Fatal(err)
 	}
 	if err := reader.RefreshCanonical(context.Background()); err != nil {

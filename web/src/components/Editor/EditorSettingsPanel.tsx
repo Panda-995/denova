@@ -1,8 +1,10 @@
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useId, useMemo, useRef } from 'react'
 import type { PointerEvent } from 'react'
 import { Check, Quote, Type } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { AutosaveStatusIndicator, type AutosaveStatus } from '@/components/forms/autosave-status'
+import { Field, FieldContent, FieldDescription, FieldLabel, FieldTitle } from '@/components/ui/field'
+import { Switch } from '@/components/ui/switch'
 import { FontPicker } from '@/features/settings/FontPicker'
 import { TextSizeControl } from '@/features/settings/TextSizeControl'
 import { DEFAULT_READING_FONT_SIZE, READING_FONT_SIZE_STEPS } from '@/features/settings/font-size-steps'
@@ -11,6 +13,7 @@ export type EditorTheme = 'ide' | 'paper' | 'sepia'
 
 export interface EditorSettings {
   lineHeight: number
+  firstLineIndent: boolean
   theme: EditorTheme
   dialogueHighlightColor: string
 }
@@ -56,6 +59,7 @@ const DEFAULT_PICKER_COLOR = '#ffd166'
 
 const DEFAULT_SETTINGS: EditorSettings = {
   lineHeight: 1.9,
+  firstLineIndent: true,
   theme: 'ide',
   dialogueHighlightColor: DEFAULT_DIALOGUE_HIGHLIGHT_COLOR,
 }
@@ -72,6 +76,7 @@ export function EditorSettingsPanel({
   readingTypography?: ReadingTypographySettings
 }) {
   const { t } = useTranslation()
+  const firstLineIndentDescriptionId = useId()
   const patch = (partial: Partial<EditorSettings>) => onChange({ ...settings, ...partial })
 
   return (
@@ -142,6 +147,23 @@ export function EditorSettingsPanel({
           />
         </label>
 
+        <FieldLabel className="nova-editor-control cursor-pointer rounded-lg border border-[var(--nova-border)] bg-[var(--nova-surface-2)]">
+          <Field orientation="horizontal">
+            <FieldContent className="min-w-0">
+              <FieldTitle className="text-xs text-[var(--nova-text-muted)]">{t('editor.firstLineIndent')}</FieldTitle>
+              <FieldDescription id={firstLineIndentDescriptionId} className="text-[11px] text-[var(--nova-text-faint)]">
+                {t('editor.firstLineIndentDescription')}
+              </FieldDescription>
+            </FieldContent>
+            <Switch
+              checked={settings.firstLineIndent}
+              onCheckedChange={(firstLineIndent) => patch({ firstLineIndent })}
+              aria-label={t('editor.firstLineIndent')}
+              aria-describedby={firstLineIndentDescriptionId}
+            />
+          </Field>
+        </FieldLabel>
+
         <div className="nova-editor-control block rounded-lg border border-[var(--nova-border)] bg-[var(--nova-surface-2)] p-2.5">
           <div className="mb-1.5 flex items-center justify-between gap-3 text-xs">
             <span className="flex items-center gap-2 font-medium text-[var(--nova-text-muted)]">
@@ -203,6 +225,7 @@ export function loadEditorSettings(): EditorSettings {
     const parsed = JSON.parse(raw) as Partial<EditorSettings>
     return {
       lineHeight: parsed.lineHeight ?? DEFAULT_SETTINGS.lineHeight,
+      firstLineIndent: parsed.firstLineIndent ?? DEFAULT_SETTINGS.firstLineIndent,
       theme: parsed.theme && parsed.theme in THEME_STYLES ? parsed.theme : DEFAULT_SETTINGS.theme,
       dialogueHighlightColor: normalizeColorValue(parsed.dialogueHighlightColor) ?? DEFAULT_SETTINGS.dialogueHighlightColor,
     }

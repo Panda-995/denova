@@ -14,10 +14,14 @@ import (
 	agenttool "denova/internal/agents/tool"
 	agenttoolruntime "denova/internal/agents/toolruntime"
 
-	agent "github.com/alfredxw/denova/agent"
+	"github.com/alfredxw/denova/agent"
+	agentevent "github.com/alfredxw/denova/agent/lifecycle/event"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentsession "github.com/alfredxw/denova/agent/session"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
 )
 
-func (backend *publicBackend) start(ctx context.Context, request StartRequest) (*Operation, error) {
+func (backend *publicBackend) start(ctx context.Context, request StartRequest) (_ *Operation, err error) {
 	cycle := request.Cycle
 	workspace := cycle.Options.Workspace
 	if cycle.BookService != nil {
@@ -49,16 +53,23 @@ func (backend *publicBackend) start(ctx context.Context, request StartRequest) (
 		projector:      agentchat.NewPublicEventProjector(cycle.Conversation, cycle.Request, cycle.Options, request.Emit),
 		projectorBound: cycle.Conversation != nil,
 	}
-	backend.rememberRegistration(key, commandID, registration)
 	input, err := agentlifecycle.TurnInput(agentlifecycle.TurnStart, cycle.Request, cycle.Options)
 	if err != nil {
 		return nil, err
 	}
+	backend.inputMu.Lock()
+	defer backend.inputMu.Unlock()
+	registered := backend.registerInput(key, commandID, registration)
+	defer func() {
+		if err != nil {
+			backend.forgetRegistration(key, commandID, registration)
+		}
+	}()
 	publicRun, err := sessionHandle.Run(ctx, input)
 	if err != nil {
 		return nil, err
 	}
-	handle := backend.trackRun(sessionHandle, publicRun, registration, "")
+	handle := backend.trackRun(sessionHandle, publicRun, registered, "")
 	return &Operation{
 		publicBackend: backend, publicHandle: handle, publicReceipt: mapPublicReceipt(publicRun),
 	}, nil
@@ -73,12 +84,18 @@ func loadCanonicalMessages(
 	if !ok {
 		return nil
 	}
-	messages, err := source.CanonicalMessages(ctx)
-	if err != nil {
-		return err
+	var err error
+	if history, ok := source.(agentcanonical.CanonicalHistorySource); ok {
+		err = session.LoadCanonicalHistory(ctx, history)
+	} else {
+		var messages []*agentschema.Message
+		messages, err = source.CanonicalMessages(ctx)
+		if err == nil {
+			err = session.LoadCanonicalMessages(ctx, messages)
+		}
 	}
-	if err := session.LoadCanonicalMessages(ctx, messages); err != nil {
-		if errors.Is(err, agent.ErrInvalidCanonicalMessages) {
+	if err != nil {
+		if errors.Is(err, agentcanonical.ErrInvalidCanonicalMessages) {
 			key := session.Key()
 			slog.ErrorContext(ctx, "[agent] rejected invalid canonical history for Session",
 				"session_namespace", key.Namespace, "session_id", key.ID, "error", err)
@@ -88,7 +105,7 @@ func loadCanonicalMessages(
 	return nil
 }
 
-func (backend *publicBackend) submit(ctx context.Context, spec CommandRequest) (agentrun.CommandReceipt, error) {
+func (backend *publicBackend) submit(ctx context.Context, spec CommandRequest) (_ agentrun.CommandReceipt, err error) {
 	spec.Options = spec.Options.Normalize(spec.Options.Workspace)
 	key, err := agentrun.AgentSessionKeyForOptions(spec.Options)
 	if err != nil {
@@ -103,33 +120,33 @@ func (backend *publicBackend) submit(ctx context.Context, spec CommandRequest) (
 	}
 	spec.Request.CommandID = commandID
 	spec.Request = agentchat.CaptureChatRequestCallerInput(spec.Request)
-	backend.mu.RLock()
-	target := backend.runs[string(spec.OperationID)]
-	if target == nil {
-		target = backend.runs[string(spec.AfterOperationID)]
+	sessionHandle, err := backend.agent.Session(ctx, key)
+	if err != nil {
+		return agentrun.CommandReceipt{}, err
 	}
-	backend.mu.RUnlock()
-	if target == nil {
-		sessionHandle, openErr := backend.agent.Session(ctx, key)
-		if openErr != nil {
-			return agentrun.CommandReceipt{}, openErr
-		}
-		runID := string(spec.OperationID)
-		if runID == "" {
-			runID = string(spec.AfterOperationID)
-		}
-		attached, found, attachErr := sessionHandle.AttachRun(ctx, runID)
-		if attachErr != nil {
-			return agentrun.CommandReceipt{}, attachErr
-		}
-		if !found {
-			return agentrun.CommandReceipt{}, agent.ErrNoActiveRun
-		}
-		target = backend.trackRun(sessionHandle, attached, nil, "")
+	runID := string(spec.OperationID)
+	if runID == "" {
+		runID = string(spec.AfterOperationID)
 	}
+	attached, found, err := sessionHandle.AttachRun(ctx, runID)
+	if err != nil {
+		return agentrun.CommandReceipt{}, err
+	}
+	if !found {
+		return agentrun.CommandReceipt{}, agentschema.ErrNoActiveRun
+	}
+	target := &publicRunHandle{session: sessionHandle, run: attached}
 	switch spec.Kind {
+	case CommandSuspend:
+		suspension, err := backend.agent.SuspendTree(ctx, key, agent.SuspendRequest{
+			RunID: target.run.ID(), Reason: spec.Reason, IdempotencyKey: commandID,
+		})
+		if err != nil {
+			return agentrun.CommandReceipt{}, err
+		}
+		return mapPublicCommandReceipt(suspension.Receipt), nil
 	case CommandAbort:
-		receipt, err := target.run.Abort(ctx, agent.AbortRequest{
+		receipt, err := backend.agent.AbortTree(ctx, key, agentevent.AbortRequest{
 			Reason: spec.Reason, IdempotencyKey: commandID,
 		})
 		if err != nil {
@@ -137,27 +154,37 @@ func (backend *publicBackend) submit(ctx context.Context, spec CommandRequest) (
 		}
 		return mapPublicCommandReceipt(receipt), nil
 	case CommandSteerQueued, CommandCancelQueued:
-		queued, found, queuedErr := target.run.Queued(ctx, string(spec.TargetCommandID))
+		queued, found, queuedErr := target.session.Queued(ctx, string(spec.TargetCommandID))
 		if queuedErr != nil {
+			if errors.Is(queuedErr, agent.ErrInputConsumed) || errors.Is(queuedErr, agent.ErrInputCancelled) {
+				return agentrun.CommandReceipt{}, fmt.Errorf("%w: %w", agentrun.ErrQueueConflict, queuedErr)
+			}
 			return agentrun.CommandReceipt{}, queuedErr
 		}
 		if !found {
 			return agentrun.CommandReceipt{}, agentrun.ErrQueueConflict
 		}
-		control := agent.QueueControlRequest{IdempotencyKey: commandID, Reason: spec.Reason}
-		var receipt agent.CommandReceipt
+		control := agentevent.QueueControlRequest{IdempotencyKey: commandID, Reason: spec.Reason}
+		var receipt agentevent.CommandReceipt
 		if spec.Kind == CommandSteerQueued {
 			receipt, queuedErr = queued.Interrupt(ctx, control)
 		} else {
+			backend.inputMu.Lock()
+			registration := backend.registration(key, string(spec.TargetCommandID))
 			receipt, queuedErr = queued.Cancel(ctx, control)
+			if queuedErr == nil {
+				backend.forgetRegistration(key, string(spec.TargetCommandID), registration)
+			}
+			backend.inputMu.Unlock()
 		}
 		if queuedErr != nil {
+			if errors.Is(queuedErr, agent.ErrInputConsumed) || errors.Is(queuedErr, agent.ErrInputCancelled) {
+				return agentrun.CommandReceipt{}, fmt.Errorf("%w: %w", agentrun.ErrQueueConflict, queuedErr)
+			}
 			return agentrun.CommandReceipt{}, queuedErr
 		}
 		return mapPublicCommandReceipt(receipt), nil
 	}
-	registration := &publicCycleRegistration{request: spec.Request, options: spec.Options, emit: spec.Emit, commandKind: spec.Kind}
-	backend.rememberRegistration(key, commandID, registration)
 	turnKind, err := publicTurnKind(spec.Kind)
 	if err != nil {
 		return agentrun.CommandReceipt{}, err
@@ -166,6 +193,24 @@ func (backend *publicBackend) submit(ctx context.Context, spec CommandRequest) (
 	if err != nil {
 		return agentrun.CommandReceipt{}, err
 	}
+	registration := &publicCycleRegistration{request: spec.Request, options: spec.Options, emit: spec.Emit, commandKind: spec.Kind}
+	backend.inputMu.Lock()
+	defer backend.inputMu.Unlock()
+	registered := registration
+	// A repeated supplemental input only acknowledges its durable receipt.
+	// Its original route is already pending, owned by a cycle, or retired.
+	_, known, err := target.session.Queued(ctx, commandID)
+	if err != nil {
+		return agentrun.CommandReceipt{}, err
+	}
+	if !known {
+		registered = backend.registerInput(key, commandID, registration)
+	}
+	defer func() {
+		if err != nil {
+			backend.forgetRegistration(key, commandID, registration)
+		}
+	}()
 	switch spec.Kind {
 	case CommandSteer:
 		receipt, err := target.run.Steer(ctx, input)
@@ -174,18 +219,22 @@ func (backend *publicBackend) submit(ctx context.Context, spec CommandRequest) (
 		}
 		return mapPublicCommandReceipt(receipt), nil
 	case CommandFollowUp:
-		queued, err := target.run.Queue(ctx, input)
+		queued, err := target.session.Queue(ctx, input)
 		if err != nil {
 			return agentrun.CommandReceipt{}, err
 		}
 		return mapPublicCommandReceipt(queued.Receipt()), nil
 	case CommandNextTurn:
-		next, err := target.run.FollowUp(ctx, input)
+		receipt, err := target.session.FollowUp(ctx, input)
 		if err != nil {
 			return agentrun.CommandReceipt{}, err
 		}
-		backend.trackRun(target.session, next, registration, target.run.ID())
-		return mapPublicReceipt(next), nil
+		next, found, err := target.session.AttachRun(ctx, receipt.RunID)
+		if err != nil || !found {
+			return agentrun.CommandReceipt{}, errors.Join(err, agentschema.ErrNoActiveRun)
+		}
+		backend.trackRun(target.session, next, registered, target.run.ID())
+		return mapPublicCommandReceipt(receipt), nil
 	default:
 		return agentrun.CommandReceipt{}, fmt.Errorf("unsupported Denova public Agent command %q", spec.Kind)
 	}
@@ -197,6 +246,12 @@ func (backend *publicBackend) trackRun(
 	registration *publicCycleRegistration,
 	parentRunID string,
 ) *publicRunHandle {
+	backend.mu.RLock()
+	existing := backend.runs[publicRun.ID()]
+	backend.mu.RUnlock()
+	if existing != nil && existing.run == publicRun {
+		return existing
+	}
 	trace := publicTraceForRun(registration, publicRun.ID())
 	handle := &publicRunHandle{
 		session: sessionHandle, run: publicRun, registration: registration, trace: trace, done: make(chan struct{}),
@@ -209,6 +264,7 @@ func (backend *publicBackend) trackRun(
 	backend.mu.Unlock()
 	go func() {
 		defer close(handle.done)
+		defer backend.releaseRun(handle)
 		defer func() {
 			if err := trace.close(); err != nil {
 				slog.Warn("[agent-public-runtime] close run trace failed", "run_id", publicRun.ID(), "error", err)
@@ -221,7 +277,7 @@ func (backend *publicBackend) trackRun(
 		}()
 		currentCycle := 0
 		for event := range publicRun.Events() {
-			started, cycleStarted := event.Payload.(agent.RunStarted)
+			started, cycleStarted := event.Payload.(agentevent.RunStarted)
 			if cycleStarted {
 				currentCycle = started.Cycle
 				cycleRegistration := backend.bindStartedCycleRegistration(
@@ -246,8 +302,8 @@ func (backend *publicBackend) trackRun(
 
 func (backend *publicBackend) bindStartedCycleRegistration(
 	runID string,
-	key agent.SessionKey,
-	started agent.RunStarted,
+	key agentsession.Key,
+	started agentevent.RunStarted,
 	fallback *publicCycleRegistration,
 ) *publicCycleRegistration {
 	registration := backend.registration(key, started.CommandID)
@@ -266,7 +322,7 @@ func (backend *publicBackend) bindStartedCycleRegistration(
 	return registration
 }
 
-func (registration *publicCycleRegistration) projectOrDeferRunStarted(runID string, started agent.RunStarted) {
+func (registration *publicCycleRegistration) projectOrDeferRunStarted(runID string, started agentevent.RunStarted) {
 	registration.mu.Lock()
 	projector := registration.projector
 	if projector == nil {
@@ -322,8 +378,8 @@ func (backend *publicBackend) wait(
 	for current != nil {
 		result, err := current.run.Wait(ctx)
 		if ctx != nil && ctx.Err() != nil {
-			_, abortErr := current.run.Abort(context.Background(), agent.AbortRequest{Reason: "Denova display task was cancelled"})
-			if abortErr != nil && !errors.Is(abortErr, agent.ErrRunSettled) && !errors.Is(abortErr, agent.ErrAgentClosed) {
+			_, abortErr := backend.agent.AbortTree(context.Background(), current.session.Key(), agentevent.AbortRequest{Reason: "Denova display task was cancelled"})
+			if abortErr != nil && !errors.Is(abortErr, agentschema.ErrRunSettled) && !errors.Is(abortErr, agentschema.ErrAgentClosed) {
 				return agentrun.NewOutcome(agentrun.OutcomeFailed, abortErr, abortErr.Error(), "", "")
 			}
 			result, err = current.run.Wait(context.Background())
@@ -333,7 +389,7 @@ func (backend *publicBackend) wait(
 		case <-ctx.Done():
 			return agentrun.NewOutcome(agentrun.OutcomeAborted, ctx.Err(), ctx.Err().Error(), "", "")
 		}
-		registrations := backend.runCycleRegistrations(current.run.ID(), current.registration)
+		registrations := current.completedRegistrations
 		content, thinking := latestProjectedOutput(registrations)
 		outcome := publicResultOutcome(result, err, content, thinking)
 		if outcome.Status != agentrun.OutcomeCompleted {
@@ -354,9 +410,10 @@ func (backend *publicBackend) wait(
 				}
 			}
 		}
-		backend.mu.RLock()
+		backend.mu.Lock()
 		next := backend.successors[current.run.ID()]
-		backend.mu.RUnlock()
+		delete(backend.successors, current.run.ID())
+		backend.mu.Unlock()
 		if next == nil {
 			flushPublicCycleProjectors(registrations, result.Status, result.Reason, true)
 			return outcome
@@ -424,7 +481,7 @@ func flushPublicCycleProjectors(registrations []publicCycleRegistrationAt, statu
 	}
 }
 
-func (registration *publicCycleRegistration) recordMutation(request agent.EffectRequest, mutation agenttool.Mutation) {
+func (registration *publicCycleRegistration) recordMutation(request agentcanonical.EffectRequest, mutation agenttool.Mutation) {
 	if registration == nil {
 		return
 	}
@@ -490,4 +547,26 @@ func invokeMutationVerificationCallback(
 		}
 	}()
 	callback(ctx, mutations, verification)
+}
+
+// Once event projection stops, only caller-owned handles retain its display
+// result. Runtime registries own live execution, never the historical archive.
+func (backend *publicBackend) releaseRun(handle *publicRunHandle) {
+	registrations := backend.runCycleRegistrations(handle.run.ID(), handle.registration)
+	handle.completedRegistrations = registrations
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if backend.runs[handle.run.ID()] != handle {
+		return
+	}
+	delete(backend.runs, handle.run.ID())
+	delete(backend.cycles, handle.run.ID())
+	for key, registration := range backend.registrations {
+		for _, item := range registrations {
+			if registration == item.registration {
+				delete(backend.registrations, key)
+				break
+			}
+		}
+	}
 }

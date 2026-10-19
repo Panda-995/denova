@@ -2,21 +2,19 @@ package asset
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode"
 
 	"denova/config"
+	"denova/internal/assetstore"
 	"denova/internal/book"
 	imagegen "denova/internal/image/generation"
 )
 
 const (
 	IllustrationResultSchema = "chapter_illustration.v1"
-	illustrationSourceTool   = "generate_image"
 )
 
 type IllustrationGenerateRequest struct {
@@ -35,7 +33,7 @@ type IllustrationResult struct {
 	Schema       string `json:"schema"`
 	ChapterPath  string `json:"chapter_path"`
 	ImagePath    string `json:"image_path"`
-	MetaPath     string `json:"meta_path"`
+	MetaPath     string `json:"meta_path,omitempty"`
 	Markdown     string `json:"markdown"`
 	AltText      string `json:"alt_text"`
 	ProfileID    string `json:"profile_id"`
@@ -49,27 +47,6 @@ type IllustrationResult struct {
 	RevisedPrompt string `json:"revised_prompt,omitempty"`
 	MIMEType      string `json:"mime_type,omitempty"`
 	SizeBytes     int    `json:"size_bytes,omitempty"`
-}
-
-type illustrationMeta struct {
-	Schema        string `json:"schema"`
-	Source        string `json:"source"`
-	ChapterPath   string `json:"chapter_path"`
-	Prompt        string `json:"prompt"`
-	RevisedPrompt string `json:"revised_prompt,omitempty"`
-	ImagePath     string `json:"image_path"`
-	MetaPath      string `json:"meta_path"`
-	Markdown      string `json:"markdown"`
-	AltText       string `json:"alt_text"`
-	ProfileID     string `json:"profile_id"`
-	Provider      string `json:"provider"`
-	Model         string `json:"model"`
-	Size          string `json:"size,omitempty"`
-	Quality       string `json:"quality,omitempty"`
-	OutputFormat  string `json:"output_format,omitempty"`
-	MIMEType      string `json:"mime_type,omitempty"`
-	SizeBytes     int    `json:"size_bytes,omitempty"`
-	CreatedAt     string `json:"created_at"`
 }
 
 func (s *Service) GenerateIllustration(ctx context.Context, cfg *config.Config, bookService *book.Service, request IllustrationGenerateRequest) (IllustrationResult, error) {
@@ -123,28 +100,17 @@ func (s *Service) GenerateIllustration(ctx context.Context, cfg *config.Config, 
 	}
 
 	createdAt := s.now().UTC()
-	dir := filepath.ToSlash(filepath.Join(
-		"assets",
-		"illustrations",
-		chapterSlug(chapterPath),
-		fmt.Sprintf("%s-%s", createdAt.Format("20060102-150405"), s.suffix()),
-	))
-	imagePath := filepath.ToSlash(filepath.Join(dir, "image."+ext))
-	metaPath := filepath.ToSlash(filepath.Join(dir, "meta.json"))
+	imagePath := assetstore.NewPath(assetstore.Writing, ext)
 	altText := strings.TrimSpace(request.AltText)
 	if altText == "" {
 		altText = defaultIllustrationAltText(chapterPath)
 	}
 	markdown := fmt.Sprintf("![%s](%s)", escapeMarkdownAlt(altText), imagePath)
 
-	if err := bookService.WriteBinaryFile(imagePath, image.Data); err != nil {
-		return IllustrationResult{}, fmt.Errorf("保存章节插画失败: %w", err)
-	}
 	result := IllustrationResult{
 		Schema:        IllustrationResultSchema,
 		ChapterPath:   chapterPath,
 		ImagePath:     imagePath,
-		MetaPath:      metaPath,
 		Markdown:      markdown,
 		AltText:       altText,
 		ProfileID:     generated.ProfileID,
@@ -158,62 +124,11 @@ func (s *Service) GenerateIllustration(ctx context.Context, cfg *config.Config, 
 		MIMEType:      image.MIMEType,
 		SizeBytes:     len(image.Data),
 	}
-	meta := illustrationMeta{
-		Schema:        IllustrationResultSchema,
-		Source:        illustrationSourceTool,
-		ChapterPath:   result.ChapterPath,
-		Prompt:        prompt,
-		RevisedPrompt: result.RevisedPrompt,
-		ImagePath:     result.ImagePath,
-		MetaPath:      result.MetaPath,
-		Markdown:      result.Markdown,
-		AltText:       result.AltText,
-		ProfileID:     result.ProfileID,
-		Provider:      result.Provider,
-		Model:         result.Model,
-		Size:          result.Size,
-		Quality:       result.Quality,
-		OutputFormat:  result.OutputFormat,
-		MIMEType:      result.MIMEType,
-		SizeBytes:     result.SizeBytes,
-		CreatedAt:     result.CreatedAt,
-	}
-	data, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return IllustrationResult{}, err
-	}
-	if err := bookService.WriteFile(metaPath, string(data)+"\n"); err != nil {
-		return IllustrationResult{}, fmt.Errorf("保存章节插画元数据失败: %w", err)
+
+	if err := assetstore.Save(ctx, bookService.Workspace(), assetstore.File{Path: imagePath, Data: image.Data}); err != nil {
+		return IllustrationResult{}, fmt.Errorf("save chapter illustration: %w", err)
 	}
 	return result, nil
-}
-
-func chapterSlug(path string) string {
-	base := filepath.Base(filepath.FromSlash(path))
-	ext := filepath.Ext(base)
-	name := strings.TrimSpace(strings.TrimSuffix(base, ext))
-	var b strings.Builder
-	lastDash := false
-	for _, r := range name {
-		switch {
-		case unicode.IsLetter(r) || unicode.IsDigit(r):
-			b.WriteRune(unicode.ToLower(r))
-			lastDash = false
-		case r == '-' || r == '_':
-			b.WriteRune(r)
-			lastDash = false
-		default:
-			if !lastDash {
-				b.WriteByte('-')
-				lastDash = true
-			}
-		}
-	}
-	slug := strings.Trim(b.String(), "-_")
-	if slug == "" {
-		return "chapter"
-	}
-	return slug
 }
 
 func defaultIllustrationAltText(chapterPath string) string {

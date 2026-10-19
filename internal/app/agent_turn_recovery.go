@@ -2,19 +2,19 @@ package app
 
 import (
 	"context"
-	agentchat "denova/internal/agents/chat"
-	agentconversation "denova/internal/agents/conversation"
-	agentexecution "denova/internal/agents/execution"
 	"fmt"
 	"strings"
 
 	"denova/config"
+	agentchat "denova/internal/agents/chat"
+	agentconversation "denova/internal/agents/conversation"
+	agentexecution "denova/internal/agents/execution"
 	"denova/internal/agents/prompts"
 	agentrun "denova/internal/agents/run"
 	appagentruntime "denova/internal/app/agentruntime"
 	apptask "denova/internal/app/task"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
 )
 
 func (a *App) prepareWritingProfileCycle(
@@ -80,7 +80,7 @@ func (a *App) prepareInteractiveProfileCycle(
 	if err != nil {
 		return agentexecution.Cycle{}, err
 	}
-	if cycle.runtimeCfg.ProjectID != binding.ProjectID || cycle.storyID != binding.StoryID || cycle.branchID != binding.BranchID {
+	if cycle.externalAssembly != nil || cycle.runtimeCfg.ProjectID != binding.ProjectID || cycle.storyID != binding.StoryID || cycle.branchID != binding.BranchID {
 		return agentexecution.Cycle{}, fmt.Errorf(
 			"%w: prepared game runtime does not match durable binding",
 			agentexecution.ErrCyclePreparationUnavailable,
@@ -146,7 +146,7 @@ func (s *ChatAppService) prepareWritingCycle(
 type queuedExecutionProfile struct {
 	id        agentexecution.ProfileID
 	prepare   func(context.Context, agentexecution.CycleRestoreRequest) (agentexecution.Cycle, error)
-	canonical func(context.Context, agentexecution.CanonicalInputRequest) (agent.CanonicalAdapter, error)
+	canonical func(context.Context, agentexecution.CanonicalInputRequest) (agentcanonical.CanonicalAdapter, error)
 }
 
 func (profile queuedExecutionProfile) ID() agentexecution.ProfileID {
@@ -166,7 +166,7 @@ func (profile queuedExecutionProfile) PrepareCycle(
 func (profile queuedExecutionProfile) CanonicalInput(
 	ctx context.Context,
 	request agentexecution.CanonicalInputRequest,
-) (agent.CanonicalAdapter, error) {
+) (agentcanonical.CanonicalAdapter, error) {
 	if profile.canonical == nil {
 		return nil, fmt.Errorf("%w: profile %q has no canonical input boundary", agentexecution.ErrProfileInvalid, profile.ID())
 	}
@@ -177,7 +177,7 @@ func (app *App) executionProfiles() []agentexecution.Profile {
 	profile := func(
 		id agentexecution.ProfileID,
 		prepare func(context.Context, agentexecution.CycleRestoreRequest) (agentexecution.Cycle, error),
-		canonical func(context.Context, agentexecution.CanonicalInputRequest) (agent.CanonicalAdapter, error),
+		canonical func(context.Context, agentexecution.CanonicalInputRequest) (agentcanonical.CanonicalAdapter, error),
 	) queuedExecutionProfile {
 		return queuedExecutionProfile{id: id, prepare: prepare, canonical: canonical}
 	}

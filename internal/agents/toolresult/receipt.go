@@ -7,10 +7,11 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	agent "github.com/alfredxw/denova/agent"
-
 	"denova/config"
 	workspacechange "denova/internal/workspace/change"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agenttool "github.com/alfredxw/denova/agent/tool"
 )
 
 const (
@@ -38,33 +39,33 @@ const (
 // Receipt is the stable, bounded continuity evidence encoded in protected
 // tool-result checkpoints.
 type Receipt struct {
-	Schema          string                    `json:"schema"`
-	ToolName        string                    `json:"tool_name"`
-	Status          agent.ToolResultStatus    `json:"status"`
-	SyntheticReason agent.ToolSyntheticReason `json:"synthetic_reason,omitempty"`
-	Source          agent.ToolSource          `json:"source"`
-	MutationScope   agent.ToolMutationScope   `json:"mutation_scope"`
-	Recovery        agent.ToolRecoveryClass   `json:"recovery"`
-	Target          string                    `json:"target,omitempty"`
-	IdempotencyKey  string                    `json:"idempotency_key,omitempty"`
-	OriginalBytes   int                       `json:"original_bytes,omitempty"`
-	ModelTruncated  bool                      `json:"model_truncated,omitempty"`
-	Details         json.RawMessage           `json:"details,omitempty"`
-	Diagnostic      *retainedTextProjection   `json:"diagnostic,omitempty"`
-	SourceIDs       []string                  `json:"source_ids,omitempty"`
-	Names           []string                  `json:"names,omitempty"`
-	Artifacts       []ArtifactReceipt         `json:"artifacts,omitempty"`
-	Note            string                    `json:"note"`
+	Schema          string                          `json:"schema"`
+	ToolName        string                          `json:"tool_name"`
+	Status          agentschema.ToolResultStatus    `json:"status"`
+	SyntheticReason agentschema.ToolSyntheticReason `json:"synthetic_reason,omitempty"`
+	Source          agenttool.ToolSource            `json:"source"`
+	MutationScope   agenttool.ToolMutationScope     `json:"mutation_scope"`
+	Recovery        agenttool.ToolRecoveryClass     `json:"recovery"`
+	Target          string                          `json:"target,omitempty"`
+	IdempotencyKey  string                          `json:"idempotency_key,omitempty"`
+	OriginalBytes   int                             `json:"original_bytes,omitempty"`
+	ModelTruncated  bool                            `json:"model_truncated,omitempty"`
+	Details         json.RawMessage                 `json:"details,omitempty"`
+	Diagnostic      *retainedTextProjection         `json:"diagnostic,omitempty"`
+	SourceIDs       []string                        `json:"source_ids,omitempty"`
+	Names           []string                        `json:"names,omitempty"`
+	Artifacts       []ArtifactReceipt               `json:"artifacts,omitempty"`
+	Note            string                          `json:"note"`
 }
 
 // ArtifactReceipt is the bounded artifact contract carried by receipts.
 // Purpose distinguishes recoverable primary output from auxiliary attachments.
 type ArtifactReceipt struct {
-	Purpose         agent.ToolArtifactPurpose `json:"purpose,omitempty"`
-	ReadablePath    string                    `json:"readable_path"`
-	ContentType     string                    `json:"content_type,omitempty"`
-	EstimatedBytes  int64                     `json:"estimated_bytes,omitempty"`
-	EstimatedTokens int                       `json:"estimated_tokens,omitempty"`
+	Purpose         agentschema.ToolArtifactPurpose `json:"purpose,omitempty"`
+	ReadablePath    string                          `json:"readable_path"`
+	ContentType     string                          `json:"content_type,omitempty"`
+	EstimatedBytes  int64                           `json:"estimated_bytes,omitempty"`
+	EstimatedTokens int                             `json:"estimated_tokens,omitempty"`
 }
 
 type retainedTextProjection struct {
@@ -83,17 +84,17 @@ type retainedArgumentsFallback struct {
 // consumed by checkpoint compaction. This projection is produced for every
 // protected, mutating, unresolved, or artifact-backed result on the live
 // execution path.
-func ProjectReceipt(manifest Manifest, arguments string, result agent.ToolResult) agent.ToolResult {
-	protected := result.ResultRetention == agent.ToolResultProtected ||
-		result.Status != agent.ToolResultSuccess || result.SyntheticReason != "" ||
-		manifest.MutationScope != agent.ToolMutationNone ||
+func ProjectReceipt(manifest Manifest, arguments string, result agentschema.ToolResult) agentschema.ToolResult {
+	protected := result.ResultRetention == agentschema.ToolResultProtected ||
+		result.Status != agentschema.ToolResultSuccess || result.SyntheticReason != "" ||
+		manifest.MutationScope != agenttool.ToolMutationNone ||
 		result.Metadata.ArtifactPersistence != nil || len(result.Artifacts) > 0
 	if !protected {
 		result.ProtectedReceipt = nil
 		return result
 	}
 	fieldLimit := firstPositive(manifest.MaxResultBytes)
-	receipt := &agent.ToolResultProtectedReceipt{
+	receipt := &agentschema.ToolResultProtectedReceipt{
 		SanitizedArguments: projectRetainedToolArguments(arguments, min(ProtectedArgumentsMaxBytes, fieldLimit)),
 		Outcome:            projectProtectedToolReceiptOutcome(manifest, result, min(ProtectedOutcomeMaxBytes, fieldLimit)),
 	}
@@ -105,9 +106,9 @@ func ProjectReceipt(manifest Manifest, arguments string, result agent.ToolResult
 	return result
 }
 
-func projectProtectedToolReceiptOutcome(manifest Manifest, result agent.ToolResult, limit int) string {
+func projectProtectedToolReceiptOutcome(manifest Manifest, result agentschema.ToolResult, limit int) string {
 	receipt := buildRetainedToolReceipt(manifest, result)
-	if result.Status != agent.ToolResultSuccess {
+	if result.Status != agentschema.ToolResultSuccess {
 		diagnostic := projectRetainedText(result.ModelContent)
 		// A protected checkpoint receipt records identity and size, never a copy
 		// of the raw error/result body that compaction is meant to remove.
@@ -118,7 +119,7 @@ func projectProtectedToolReceiptOutcome(manifest Manifest, result agent.ToolResu
 	return marshalRetainedProjection(receipt, limit, manifest.Name, result.Status, result.ModelContent)
 }
 
-func buildRetainedToolReceipt(manifest Manifest, result agent.ToolResult) Receipt {
+func buildRetainedToolReceipt(manifest Manifest, result agentschema.ToolResult) Receipt {
 	artifacts := ArtifactReceipts(result.Artifacts)
 	receipt := Receipt{
 		Schema: ReceiptSchema, ToolName: manifest.Name,
@@ -133,7 +134,7 @@ func buildRetainedToolReceipt(manifest Manifest, result agent.ToolResult) Receip
 		modelSafeDetails := workspacechange.ToolReceiptForModel(manifest.Name, string(result.Details))
 		receipt.Details = compactRetainedJSON(json.RawMessage(modelSafeDetails))
 	}
-	if isLoreManifest(manifest) && result.Status == agent.ToolResultSuccess {
+	if isLoreManifest(manifest) && result.Status == agentschema.ToolResultSuccess {
 		receipt.SourceIDs, receipt.Names = retainedLoreEvidence(result.ModelContent)
 	}
 	return receipt
@@ -147,7 +148,7 @@ func retainedToolResultNote(manifest Manifest, hasArtifact bool) string {
 		return "The result body was available in the source turn and is omitted across turns; repeat the retained call if exact evidence is needed."
 	}
 	switch manifest.Source {
-	case agent.ToolSourceRead, agent.ToolSourceHistory, agent.ToolSourceWeb:
+	case agenttool.ToolSourceRead, agenttool.ToolSourceHistory, agenttool.ToolSourceWeb:
 		return "The result body was available in the source turn and is omitted across turns; repeat the retained call if exact evidence is needed."
 	default:
 		return "The result body was available in the source turn; this stable receipt preserves the outcome and recovery metadata."
@@ -158,7 +159,7 @@ func isLoreManifest(manifest Manifest) bool {
 	return manifest.Capability == config.AgentToolLoreRead || manifest.Capability == config.AgentToolLoreWrite
 }
 
-func marshalRetainedProjection(receipt Receipt, limit int, toolName string, status agent.ToolResultStatus, original string) string {
+func marshalRetainedProjection(receipt Receipt, limit int, toolName string, status agentschema.ToolResultStatus, original string) string {
 	encoded, err := json.Marshal(receipt)
 	if err == nil && len(encoded) <= limit {
 		return string(encoded)
@@ -235,7 +236,7 @@ func compactRetainedValue(value any, depth int) any {
 	}
 	switch typed := value.(type) {
 	case string:
-		if agent.ContainsSensitiveToolContextMaterial(typed) {
+		if agentschema.ContainsSensitiveToolContextMaterial(typed) {
 			return RedactedValue
 		}
 		if len(typed) <= ContextStringMaxBytes {
@@ -261,7 +262,7 @@ func compactRetainedValue(value any, depth int) any {
 		limit := min(len(keys), retainedContextCollectionValues)
 		result := make(map[string]any, limit+1)
 		for _, key := range keys[:limit] {
-			if agent.IsSensitiveToolContextKey(key) {
+			if agentschema.IsSensitiveToolContextKey(key) {
 				result[key] = RedactedValue
 				continue
 			}
@@ -296,7 +297,7 @@ func projectRetainedTarget(target string) string {
 	if target == "" {
 		return ""
 	}
-	if agent.ContainsSensitiveToolContextMaterial(target) {
+	if agentschema.ContainsSensitiveToolContextMaterial(target) {
 		return RedactedValue
 	}
 	preview, omitted := truncateRetainedUTF8(target, ContextStringMaxBytes)
@@ -321,7 +322,7 @@ func truncateRetainedUTF8(value string, limit int) (string, bool) {
 	return strings.TrimSpace(value[:end]), true
 }
 
-func ArtifactReceipts(artifacts []agent.ToolArtifactRef) []ArtifactReceipt {
+func ArtifactReceipts(artifacts []agentschema.ToolArtifactRef) []ArtifactReceipt {
 	result := make([]ArtifactReceipt, 0, len(artifacts))
 	for _, artifact := range artifacts {
 		artifact = CanonicalArtifact(artifact)
@@ -341,11 +342,11 @@ func ArtifactReceipts(artifacts []agent.ToolArtifactRef) []ArtifactReceipt {
 // checkpoint, so credential-shaped paths fail closed instead of being echoed.
 func retainedArtifactPathAllowed(readablePath string) bool {
 	readablePath = strings.TrimSpace(strings.ToValidUTF8(readablePath, "\uFFFD"))
-	return readablePath != "" && !agent.ContainsSensitiveToolContextMaterial(readablePath)
+	return readablePath != "" && !agentschema.ContainsSensitiveToolContextMaterial(readablePath)
 }
 
-func retainedRecoverableArtifactAvailable(artifacts []agent.ToolArtifactRef) bool {
-	safeArtifacts := make([]agent.ToolArtifactRef, 0, len(artifacts))
+func retainedRecoverableArtifactAvailable(artifacts []agentschema.ToolArtifactRef) bool {
+	safeArtifacts := make([]agentschema.ToolArtifactRef, 0, len(artifacts))
 	for _, artifact := range artifacts {
 		artifact = CanonicalArtifact(artifact)
 		if retainedArtifactPathAllowed(artifact.ReadablePath) {

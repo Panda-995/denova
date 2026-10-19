@@ -11,7 +11,9 @@ import (
 	"denova/internal/agents/session"
 	novaskills "denova/internal/agents/skills"
 
-	agent "github.com/alfredxw/denova/agent"
+	"github.com/alfredxw/denova/agent"
+	agentmodel "github.com/alfredxw/denova/agent/model"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 type explicitSkillParityConversation struct {
@@ -29,7 +31,7 @@ func (conversation explicitSkillParityConversation) AssembleModelContext(
 	input agentcontext.ModelContextInput,
 ) (agentcontext.ModelContextResult, error) {
 	assembled, err := agentcontext.NewAssembler(input.Budget).Assemble(ctx, agentcontext.AssembleRequest{
-		Messages: []*agent.Message{agent.UserMessage(input.UserMessage)}, Fragments: input.Fragments,
+		Messages: []*agentschema.Message{agentschema.UserMessage(input.UserMessage)}, Fragments: input.Fragments,
 	})
 	return agentcontext.ModelContextResult{Messages: assembled.Messages, Context: assembled}, err
 }
@@ -77,11 +79,14 @@ func TestIDEContextAnalysisIncludesTheSameExplicitSkillBodiesAsRuntime(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	analysis := BuildInspectedContextAnalysis(&config.Config{}, config.AgentKindIDE, "ide", composition, agent.Inspection{
-		ModelRequest: agent.ModelRequestInspection{Messages: append(
-			[]*agent.Message{agent.SystemMessage(composition.Instruction())}, prepared.ModelContext.Messages...,
+	analysis, err := BuildInspectedContextAnalysis(&config.Config{}, config.AgentKindIDE, "ide", composition, agent.Inspection{
+		ModelRequest: agentmodel.ModelRequestInspection{Messages: append(
+			[]*agentschema.Message{agentschema.SystemMessage(composition.Instruction())}, prepared.ModelContext.Messages...,
 		)},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	runtimeFinal := lastUserMessageContent(prepared.ModelContext.Messages)
 	analysisFinal := analysis.ContextMessages[len(analysis.ContextMessages)-1].Content
 	for _, want := range []string{"# Skill: alpha", "ALPHA_ANALYSIS_BODY", "# Skill: beta", "BETA_ANALYSIS_BODY"} {

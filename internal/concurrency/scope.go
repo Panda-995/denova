@@ -136,6 +136,14 @@ func (s *Scope) Name() string {
 	return s.name
 }
 
+// ActiveLeases counts operations on this scope, excluding its children. The
+// caller must also fence admission when using this observation for a transition.
+func (s *Scope) ActiveLeases() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.leases
+}
+
 // Release ends an admitted operation. It is idempotent.
 func (l *Lease) Release() {
 	if l == nil || l.scope == nil {

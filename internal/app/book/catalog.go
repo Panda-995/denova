@@ -25,6 +25,10 @@ func (service *Service) Books() []Record {
 	if service == nil || service.registry == nil {
 		return []Record{}
 	}
+	if err := service.registry.DiscoverBooks(); err != nil {
+		slog.Error("Discover Books failed", "error", err)
+		return []Record{}
+	}
 	projects, err := service.registry.Books()
 	if err != nil {
 		slog.Error(fmt.Sprintf("[app/book] list Books failed err=%v", err))

@@ -192,19 +192,18 @@ func (registry *Registry) migrateLegacyProjectStoreRoot() error {
 	return nil
 }
 
-// migrateProjectStoresOnce completes the coupled directory and receipt
-// migrations before the Registry exposes a runtime Project layout.
-func (registry *Registry) migrateProjectStoresOnce(projects []Record) error {
-	if registry.storeMigrationComplete {
-		return nil
-	}
+// migrateLegacyProjectStores finishes the coupled metadata migration only
+// when loading an older Registry schema. Current-schema reads stay lazy.
+func (registry *Registry) migrateLegacyProjectStores(projects []Record) error {
 	if err := registry.migrateProjectIDStoreDirectories(projects); err != nil {
 		return err
 	}
-	if err := registry.migrateReleasedStoreReceipts(projects); err != nil {
-		return err
+	for _, record := range projects {
+		receipt := filepath.Join(registry.denovaDir, storeDirectoryName, record.StoreDirName, "migration.json")
+		if _, err := ensureCurrentStoreMigrationReceipt(receipt, record.ID); err != nil {
+			return err
+		}
 	}
-	registry.storeMigrationComplete = true
 	return nil
 }
 

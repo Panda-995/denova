@@ -4,14 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
-
-	agent "github.com/alfredxw/denova/agent"
 
 	agentcontext "denova/internal/agents/context"
 	agentrun "denova/internal/agents/run"
 	"denova/internal/agents/session"
 	"denova/internal/agents/toolresult"
+	"denova/internal/i18n"
+
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
 )
 
 var ErrMissingAgentCycleIdentity = errors.New("session canonical write requires durable agent cycle identity")
@@ -46,7 +49,7 @@ func (c *SessionConversation) AssembleModelContext(ctx context.Context, _ string
 	if durableInput {
 		snapshot, inputIndex, materialized, err = c.session.SnapshotContextForDomainCommit(
 			intent.Identity,
-			agent.User,
+			agentschema.User,
 			intent.Hash,
 		)
 		if err != nil {
@@ -72,6 +75,16 @@ func (c *SessionConversation) AssembleModelContext(ctx context.Context, _ string
 	if err != nil {
 		return agentcontext.ModelContextResult{}, err
 	}
+	for _, fragment := range assembled.Fragments {
+		if fragment.Source == "workspace.runtime.stable" && fragment.Truncated {
+			locale := ""
+			if c.cfg != nil {
+				locale = c.cfg.Language
+			}
+			slog.ErrorContext(ctx, "[lore] stable workspace context exceeds injection budget", "bytes", len(c.stableContext), "limit", fragment.Limit)
+			return agentcontext.ModelContextResult{}, fmt.Errorf("%s", i18n.New(locale).T("lore.index.contextTooLarge", "limit", fragment.Limit))
+		}
+	}
 	return agentcontext.ModelContextResult{
 		Messages: assembled.Messages, Context: assembled,
 		CommitState: sessionModelContextCommitState{
@@ -86,8 +99,8 @@ type sessionModelContextCommitState struct {
 	cursor            session.ContextCursor
 	input             session.DomainCommitIntent
 	durable           bool
-	canonicalMessages []*agent.Message
-	effectiveMessages []*agent.Message
+	canonicalMessages []*agentschema.Message
+	effectiveMessages []*agentschema.Message
 }
 
 func (c *SessionConversation) CommitModelInput(ctx context.Context, _ string, assembled agentcontext.ModelContextResult) error {
@@ -130,8 +143,9 @@ func (c *SessionConversation) CommitModelInput(ctx context.Context, _ string, as
 func (c *SessionConversation) MaterializeAgentCanonicalInput(
 	ctx context.Context,
 	message string,
-	attachments []agent.Attachment,
+	attachments []agentschema.Attachment,
 	references []agentcontext.UserReference,
+	checkpoint agentcanonical.CanonicalCheckpoint,
 ) (session.DomainCommitReceipt, error) {
 	if c == nil || c.session == nil {
 		return session.DomainCommitReceipt{}, fmt.Errorf("会话不存在")
@@ -143,6 +157,7 @@ func (c *SessionConversation) MaterializeAgentCanonicalInput(
 	if err != nil {
 		return session.DomainCommitReceipt{}, err
 	}
+	intent.Checkpoint = checkpoint
 	receipt, err := c.session.CommitDomainMessageContext(ctx, intent)
 	if err != nil {
 		return session.DomainCommitReceipt{}, err
@@ -177,7 +192,7 @@ func (c *SessionConversation) ApplyAgentPreparedContext(assembled agentcontext.M
 // Product Session journal and advances the cycle CAS cursor.
 func (c *SessionConversation) CommitAgentCanonicalContext(
 	ctx context.Context,
-	request agent.ContextCommitRequest,
+	request agentcanonical.ContextCommitRequest,
 ) (session.ContextBatchReceipt, error) {
 	if c == nil || c.session == nil {
 		return session.ContextBatchReceipt{}, fmt.Errorf("session conversation is unavailable")
@@ -187,7 +202,7 @@ func (c *SessionConversation) CommitAgentCanonicalContext(
 		request.Identity.RunID != string(identity.OperationID) || request.Identity.Cycle != identity.Cycle {
 		return session.ContextBatchReceipt{}, ErrMissingAgentCycleIdentity
 	}
-	messages := make([]*agent.Message, len(request.Messages))
+	messages := make([]*agentschema.Message, len(request.Messages))
 	for index := range request.Messages {
 		messages[index] = request.Messages[index].Clone()
 	}
@@ -199,7 +214,7 @@ func (c *SessionConversation) CommitAgentCanonicalContext(
 		session.DomainCommitIdentity{
 			CommandID: request.Identity.CommandID, OperationID: request.Identity.RunID, Cycle: request.Identity.Cycle,
 		},
-		request.Sequence, messages,
+		request.Sequence, messages, request.Checkpoint,
 	)
 	if err != nil {
 		return session.ContextBatchReceipt{}, err
@@ -212,7 +227,7 @@ func (c *SessionConversation) CommitAgentCanonicalContext(
 
 func (c *SessionConversation) acceptedInputDomainCommitIntent(
 	message string,
-	attachments []agent.Attachment,
+	attachments []agentschema.Attachment,
 	references []agentcontext.UserReference,
 ) (session.DomainCommitIntent, error) {
 	identity := c.agentCycleIdentitySnapshot()
@@ -228,7 +243,7 @@ func (c *SessionConversation) acceptedInputDomainCommitIntent(
 	}
 	return session.NewDomainCommitIntent(session.DomainCommitIdentity{
 		CommandID: string(identity.CommandID), OperationID: string(identity.OperationID), Cycle: identity.Cycle,
-	}, agent.UserMessageWithAttachments(message, attachments), session.MessageMetadata{
+	}, agentschema.UserMessageWithAttachments(message, attachments), session.MessageMetadata{
 		AgentKind: c.agentKind, UserReferences: userReferences, DisplayContent: c.inputDisplayContent,
 		ContextOnly: c.inputVisibility == agentrun.InputModelOnly,
 	})
@@ -239,25 +254,25 @@ func (c *SessionConversation) modelMessagesWithAcceptedInput(
 	inputIndex int,
 	materialized bool,
 	agentMessage string,
-	attachments []agent.Attachment,
-) []*agent.Message {
+	attachments []agentschema.Attachment,
+) []*agentschema.Message {
 	if materialized {
-		snapshot.EffectiveMessages = append([]*agent.Message(nil), snapshot.EffectiveMessages...)
+		snapshot.EffectiveMessages = append([]*agentschema.Message(nil), snapshot.EffectiveMessages...)
 		acceptedInput := snapshot.EffectiveMessages[inputIndex].Clone()
 		acceptedInput.Content = agentMessage
 		snapshot.EffectiveMessages[inputIndex] = acceptedInput
 		return c.modelHistory(snapshot)
 	}
 	history := c.modelHistory(snapshot)
-	return append(history, agent.UserMessageWithAttachments(agentMessage, attachments))
+	return append(history, agentschema.UserMessageWithAttachments(agentMessage, attachments))
 }
 
-func (c *SessionConversation) modelHistory(snapshot session.ContextSnapshot) []*agent.Message {
-	history := append([]*agent.Message(nil), snapshot.EffectiveMessages...)
+func (c *SessionConversation) modelHistory(snapshot session.ContextSnapshot) []*agentschema.Message {
+	history := append([]*agentschema.Message(nil), snapshot.EffectiveMessages...)
 	return toolresult.ApplyContextPolicy(history, c.ToolResultContextPolicy())
 }
 
-func (c *SessionConversation) leadingRuntimeMessages() []*agent.Message {
+func (c *SessionConversation) leadingRuntimeMessages() []*agentschema.Message {
 	if c == nil || strings.TrimSpace(c.stableContext) == "" {
 		return nil
 	}
@@ -265,7 +280,7 @@ func (c *SessionConversation) leadingRuntimeMessages() []*agent.Message {
 	if strings.TrimSpace(content) == "" {
 		return nil
 	}
-	return []*agent.Message{agent.UserMessage(content)}
+	return []*agentschema.Message{agentschema.UserMessage(content)}
 }
 
 func (c *SessionConversation) runtimeContextFragments() []agentcontext.Fragment {
@@ -282,7 +297,7 @@ func (c *SessionConversation) runtimeContextFragments() []agentcontext.Fragment 
 			ID: "workspace_runtime_stable", Source: "workspace.runtime.stable", Title: title,
 			Purpose: "provide cache-stable workspace sources for the current agent session",
 			Content: c.stableContext, Placement: agentcontext.PlacementLeadingMessage, Included: true,
-			Stability: agent.ContextStablePrefix,
+			Stability: agentschema.ContextStablePrefix,
 			Note:      "source=workspace source projection; lifecycle=replaceable stable prefix; file bodies=on demand",
 		})
 	}

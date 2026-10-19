@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -16,13 +15,14 @@ import (
 	"denova/internal/book"
 	"denova/internal/interactive"
 
-	agent "github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
 )
 
 func (a *App) sessionCanonicalInput(
 	ctx context.Context,
 	request agentexecution.CanonicalInputRequest,
-) (agent.CanonicalAdapter, error) {
+) (agentcanonical.CanonicalAdapter, error) {
 	resolved := request.Request
 	if len(resolved.ReviewFeedback) > 0 {
 		workspace := strings.TrimSpace(request.Binding.Workspace)
@@ -39,28 +39,29 @@ func (a *App) sessionCanonicalInput(
 		}
 	}
 	request.Request = resolved
-	return agent.CanonicalAdapterFuncs{
+	return agentcanonical.CanonicalAdapterFuncs{
 		CapabilityIdentity: request.Identity,
-		MaterializeInputFn: func(ctx context.Context, input agent.InputCommitRequest) (agent.CommitReceipt, error) {
+		MaterializeInputFn: func(ctx context.Context, input agentcanonical.InputCommitRequest) (agentcanonical.CommitReceipt, error) {
 			intent, err := sessionCanonicalInputIntent(request)
 			if err != nil {
-				return agent.CommitReceipt{}, err
+				return agentcanonical.CommitReceipt{}, err
 			}
+			intent.Checkpoint = input.Checkpoint
 			receipt, err := a.commitSessionAcceptedInput(ctx, request.Binding, intent)
 			if err != nil {
-				return agent.CommitReceipt{}, err
+				return agentcanonical.CommitReceipt{}, err
 			}
 			if request.Options.InputCommitEffect != nil {
 				if err := request.Options.InputCommitEffect.Apply(ctx, canonicalInputEffectRequest(input.Identity, input.Hash)); err != nil {
-					return agent.CommitReceipt{}, fmt.Errorf("run Denova input-commit callback: %w", err)
+					return agentcanonical.CommitReceipt{}, fmt.Errorf("run Denova input-commit callback: %w", err)
 				}
 			}
-			return agent.CommitReceipt{Revision: strconv.FormatUint(receipt.ContextRevision, 10)}, nil
+			return agentcanonical.CommitReceipt{Revision: strconv.FormatUint(receipt.ContextRevision, 10)}, nil
 		},
 	}, nil
 }
 
-func canonicalInputEffectRequest(identity agent.CommitIdentity, hash string) agentrun.InputCommitEffectRequest {
+func canonicalInputEffectRequest(identity agentcanonical.CommitIdentity, hash string) agentrun.InputCommitEffectRequest {
 	return agentrun.InputCommitEffectRequest{
 		CommandID: identity.CommandID, OperationID: identity.RunID, Cycle: identity.Cycle, Hash: hash,
 	}
@@ -74,7 +75,7 @@ func sessionCanonicalInputIntent(
 	}
 	intent, err := session.NewDomainCommitIntent(session.DomainCommitIdentity{
 		CommandID: string(request.CommandID), OperationID: string(request.RunID), Cycle: request.Cycle,
-	}, agent.UserMessageWithAttachments(request.Input.Text, request.Input.Attachments), session.MessageMetadata{
+	}, agentschema.UserMessageWithAttachments(request.Input.Text, request.Input.Attachments), session.MessageMetadata{
 		AgentKind:      request.Options.AgentKind,
 		UserReferences: cloneCanonicalUserReferences(agentchat.UserMessageReferencesForRequest(request.Request)),
 		DisplayContent: request.Request.DisplayMessage,
@@ -121,35 +122,36 @@ func (a *App) commitSessionAcceptedInput(
 func (a *App) gameCanonicalInput(
 	_ context.Context,
 	request agentexecution.CanonicalInputRequest,
-) (agent.CanonicalAdapter, error) {
+) (agentcanonical.CanonicalAdapter, error) {
 	_, layout, err := a.resolveProject(request.Binding.ProjectID, true)
 	if err != nil {
 		return nil, err
 	}
-	return agent.CanonicalAdapterFuncs{
+	return agentcanonical.CanonicalAdapterFuncs{
 		CapabilityIdentity: request.Identity,
-		MaterializeInputFn: func(_ context.Context, input agent.InputCommitRequest) (agent.CommitReceipt, error) {
+		MaterializeInputFn: func(_ context.Context, input agentcanonical.InputCommitRequest) (agentcanonical.CommitReceipt, error) {
 			intent, err := interactive.NewPlayerInputIntent(interactive.DomainCommitIdentity{
 				CommandID: string(request.CommandID), OperationID: string(request.RunID), Cycle: request.Cycle,
 			}, request.Binding.BranchID, request.Input.Text)
 			if err != nil {
-				return agent.CommitReceipt{}, err
+				return agentcanonical.CommitReceipt{}, err
 			}
 			intent, err = intent.WithAttachments(request.Input.Attachments)
 			if err != nil {
-				return agent.CommitReceipt{}, err
+				return agentcanonical.CommitReceipt{}, err
 			}
 			if request.Request.InputVisibility == agentrun.InputModelOnly {
 				intent, err = intent.WithContextOnly()
 				if err != nil {
-					return agent.CommitReceipt{}, err
+					return agentcanonical.CommitReceipt{}, err
 				}
 			}
+			intent.Checkpoint = input.Checkpoint
 			receipt, err := interactive.NewStore(layout.ContentRoot).CommitPlayerInput(request.Binding.StoryID, intent)
 			if err != nil {
-				return agent.CommitReceipt{}, err
+				return agentcanonical.CommitReceipt{}, err
 			}
-			return agent.CommitReceipt{Revision: receipt.Revision}, nil
+			return agentcanonical.CommitReceipt{Revision: receipt.Revision}, nil
 		},
 	}, nil
 }
@@ -157,12 +159,6 @@ func (a *App) gameCanonicalInput(
 func (a *App) sessionDirectoryForBinding(binding agentrun.RuntimeBinding) (string, error) {
 	if strings.TrimSpace(binding.SessionID) == "" {
 		return "", errors.New("Session canonical input binding has no session id")
-	}
-	if binding.AgentKind == agentrun.AgentKindAutomation && strings.TrimSpace(binding.ProjectID) == "" {
-		if a == nil || a.cfg == nil || strings.TrimSpace(a.cfg.DataDir()) == "" {
-			return "", ErrAgentDataDirRequired
-		}
-		return filepath.Join(a.cfg.DataDir(), "automations", "sessions"), nil
 	}
 	if a != nil && a.projectRegistry != nil {
 		if projectID := strings.TrimSpace(binding.ProjectID); projectID != "" {

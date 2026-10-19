@@ -9,7 +9,10 @@ import (
 	agentchat "denova/internal/agents/chat"
 	agentrun "denova/internal/agents/run"
 
-	agent "github.com/alfredxw/denova/agent"
+	"github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
+	agentsession "github.com/alfredxw/denova/agent/session"
+	agentcanonical "github.com/alfredxw/denova/agent/session/canonical"
 )
 
 // ProfileID is the stable product execution profile persisted in a durable
@@ -48,8 +51,8 @@ type QueuedCycleProfile interface {
 // the exact user input, but must not build a model, toolset, context, or UI
 // route at this admission boundary.
 type CanonicalInputRequest struct {
-	Session   agent.SessionKey
-	Identity  agent.CapabilityIdentity
+	Session   agentsession.Key
+	Identity  agentschema.CapabilityIdentity
 	Binding   agentrun.RuntimeBinding
 	Kind      CommandKind
 	CommandID agentrun.CommandID
@@ -64,7 +67,7 @@ type CanonicalInputRequest struct {
 // close the user-input outbox before queued cycle preparation can block.
 type CanonicalInputProfile interface {
 	Profile
-	CanonicalInput(context.Context, CanonicalInputRequest) (agent.CanonicalAdapter, error)
+	CanonicalInput(context.Context, CanonicalInputRequest) (agentcanonical.CanonicalAdapter, error)
 }
 
 type profileRegistry struct {

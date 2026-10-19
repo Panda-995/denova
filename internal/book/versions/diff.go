@@ -2,6 +2,7 @@ package versions
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,14 +12,15 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
-func (s *Service) Diff(id, path string, comparison VersionDiffComparison) (VersionDiff, error) {
+func (s *Service) Diff(id string, options VersionDiffOptions) (VersionDiff, error) {
+	path, comparison := options.Path, options.Comparison
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	version, err := s.findVersion(id)
 	if err != nil {
 		return VersionDiff{}, err
 	}
-	diff := VersionDiff{Version: version, Comparison: comparison}
+	diff := VersionDiff{Version: version, Comparison: comparison, FilesComplete: true}
 	var originalReader func(string) ([]byte, error)
 	var modifiedReader func(string) ([]byte, error)
 
@@ -33,7 +35,10 @@ func (s *Service) Diff(id, path string, comparison VersionDiffComparison) (Versi
 			return VersionDiff{}, indexErr
 		}
 		diff.Changes = diffFileStates(baseline, snapshot.byPath)
-		originalReader = func(path string) ([]byte, error) { return s.readCommitFile(version.ID, path) }
+		originalReader, err = s.indexedFileReader(baseline)
+		if err != nil {
+			return VersionDiff{}, err
+		}
 		modifiedReader = func(path string) ([]byte, error) {
 			return os.ReadFile(filepath.Join(s.workspace, filepath.FromSlash(path)))
 		}
@@ -55,21 +60,27 @@ func (s *Service) Diff(id, path string, comparison VersionDiffComparison) (Versi
 		}
 		diff.BaseVersion = baseVersion
 		diff.Changes = diffFileStates(baseline, selected)
-		originalReader = func(path string) ([]byte, error) {
-			if baseID == "" {
-				return nil, object.ErrFileNotFound
-			}
-			return s.readCommitFile(baseID, path)
+		originalReader, err = s.indexedFileReader(baseline)
+		if err != nil {
+			return VersionDiff{}, err
 		}
-		modifiedReader = func(path string) ([]byte, error) { return s.readCommitFile(version.ID, path) }
+		modifiedReader, err = s.indexedFileReader(selected)
+		if err != nil {
+			return VersionDiff{}, err
+		}
 	default:
 		return VersionDiff{}, errors.New("unsupported version diff comparison")
 	}
 
 	path = strings.TrimSpace(path)
 	if path == "" {
-		diff.Files = make([]VersionFileDiff, 0, len(diff.Changes))
-		for _, change := range diff.Changes {
+		changes := diff.Changes
+		if options.Initial && len(changes) > 50 {
+			changes = changes[:1]
+			diff.FilesComplete = false
+		}
+		diff.Files = make([]VersionFileDiff, 0, len(changes))
+		for _, change := range changes {
 			file, fileErr := readVersionFileDiff(s.workspace, change.Path, change.Status, originalReader, modifiedReader)
 			if fileErr != nil {
 				return VersionDiff{}, fileErr
@@ -90,6 +101,32 @@ func (s *Service) Diff(id, path string, comparison VersionDiffComparison) (Versi
 	diff.MissingInOriginal = file.MissingInOriginal
 	diff.MissingInModified = file.MissingInModified
 	return diff, nil
+}
+
+// The comparison already resolved every path to an immutable blob. Reuse that
+// index and one repository handle instead of reopening and walking the commit
+// tree for each file (quadratic in large, flat chapter directories).
+func (s *Service) indexedFileReader(index map[string]versionFileData) (func(string) ([]byte, error), error) {
+	repo, err := s.openVersionRepo()
+	if err != nil {
+		return nil, err
+	}
+	return func(path string) ([]byte, error) {
+		file, found := index[path]
+		if !found {
+			return nil, object.ErrFileNotFound
+		}
+		blob, err := repo.BlobObject(plumbing.NewHash(file.Hash))
+		if err != nil {
+			return nil, err
+		}
+		reader, err := blob.Reader()
+		if err != nil {
+			return nil, err
+		}
+		defer reader.Close()
+		return io.ReadAll(reader)
+	}, nil
 }
 
 func readVersionFileDiff(workspace, path, status string, originalReader, modifiedReader func(string) ([]byte, error)) (VersionFileDiff, error) {

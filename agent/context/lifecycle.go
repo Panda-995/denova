@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/alfredxw/denova/agent"
+	agentschema "github.com/alfredxw/denova/agent/schema"
 )
 
 const DefaultLifecycleHardLimit = 64 << 10
@@ -20,10 +20,10 @@ const DefaultLifecycleHardLimit = 64 << 10
 // rendered request should append one ContextFinalUserMessage fragment. Leading
 // fragments are exported with their exact rendered message so model input does
 // not change between assembly and lifecycle execution.
-func ExportLifecycleFragments(result Result) ([]agent.ContextFragment, error) {
+func ExportLifecycleFragments(result Result) ([]agentschema.ContextFragment, error) {
 	leading := renderedLeadingMessages(result.Messages)
 	leadingIndex := 0
-	fragments := make([]agent.ContextFragment, 0, len(result.Fragments))
+	fragments := make([]agentschema.ContextFragment, 0, len(result.Fragments))
 	for index, fragment := range result.Fragments {
 		if !fragment.Included || strings.TrimSpace(fragment.Content) == "" {
 			continue
@@ -33,29 +33,29 @@ func ExportLifecycleFragments(result Result) ([]agent.ContextFragment, error) {
 			resource = fmt.Sprintf("%s:%d", strings.TrimSpace(fragment.Source), index+1)
 		}
 		content := fragment.Content
-		placement := agent.ContextAuditOnly
-		stability := agent.ContextAudit
-		rendering := agent.ContextRenderAttributed
-		role := agent.RoleType("")
+		placement := agentschema.ContextAuditOnly
+		stability := agentschema.ContextAudit
+		rendering := agentschema.ContextRenderAttributed
+		role := agentschema.RoleType("")
 		if fragment.Placement == PlacementLeadingMessage {
 			if leadingIndex >= len(leading) {
 				return nil, errors.New("context assembly is missing a rendered leading message")
 			}
 			content = leading[leadingIndex].Content
 			leadingIndex++
-			placement = agent.ContextLeadingMessage
-			stability = agent.ContextStablePrefix
-			rendering = agent.ContextRenderVerbatim
-			role = agent.User
+			placement = agentschema.ContextLeadingMessage
+			stability = agentschema.ContextStablePrefix
+			rendering = agentschema.ContextRenderVerbatim
+			role = agentschema.User
 		}
-		if fragment.Stability == agent.ContextSessionState {
-			placement = agent.ContextStateMessage
-			stability = agent.ContextSessionState
-			rendering = agent.ContextRenderVerbatim
+		if fragment.Stability == agentschema.ContextSessionState {
+			placement = agentschema.ContextStateMessage
+			stability = agentschema.ContextSessionState
+			rendering = agentschema.ContextRenderVerbatim
 			role = ""
 		}
 		hardLimit := max(DefaultLifecycleHardLimit, fragment.Limit, len(content))
-		fragments = append(fragments, agent.ContextFragment{
+		fragments = append(fragments, agentschema.ContextFragment{
 			Source: strings.TrimSpace(fragment.Source), Purpose: strings.TrimSpace(fragment.Purpose),
 			Resource: resource, Revision: fragment.Hash, StateID: fragment.StateID, Stability: stability, Placement: placement,
 			Rendering: rendering, Role: role, Content: content, HardLimit: hardLimit,
@@ -67,8 +67,8 @@ func ExportLifecycleFragments(result Result) ([]agent.ContextFragment, error) {
 	return fragments, nil
 }
 
-func renderedLeadingMessages(messages []*agent.Message) []*agent.Message {
-	result := make([]*agent.Message, 0)
+func renderedLeadingMessages(messages []*agentschema.Message) []*agentschema.Message {
+	result := make([]*agentschema.Message, 0)
 	for _, message := range messages {
 		if message == nil || message.Extra == nil ||
 			message.Extra[MessageExtraPlacement] != string(PlacementLeadingMessage) {

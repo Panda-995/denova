@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	agenttools "github.com/alfredxw/denova/agent/tools"
-
 	"denova/config"
+
+	agenttools "github.com/alfredxw/denova/agent/tool/builtin"
 )
 
 func evaluateFilesystemRead(request Request) (Decision, bool) {

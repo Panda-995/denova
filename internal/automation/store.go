@@ -126,6 +126,9 @@ func NewProjectStore(userNovaDir, projectID, workspace, stateRoot string) *Store
 }
 
 func (s *Store) storeForWorkspace(workspace string) *Store {
+	if workspace == s.workspace && s.workspaceStateRoot != "" && len(s.projectLocations) == 0 {
+		return s
+	}
 	canonical := canonicalStoreRoot(workspace)
 	if location, ok := s.projectLocations[canonical]; ok {
 		return NewProjectStore(s.userDir, location.ProjectID, location.Workspace, location.StateRoot)
@@ -188,7 +191,10 @@ func (s *Store) ListForTarget(target ExecutionTarget) ([]Task, error) {
 		kind = TargetKindUser
 	}
 	projectID := strings.TrimSpace(target.ProjectID)
-	workspace := canonicalStoreRoot(target.Workspace)
+	workspace := ""
+	if projectID == "" {
+		workspace = canonicalStoreRoot(target.Workspace)
+	}
 	filtered := make([]Task, 0, len(tasks))
 	for _, task := range tasks {
 		if task.Target.Kind != kind {
@@ -200,8 +206,13 @@ func (s *Store) ListForTarget(target ExecutionTarget) ([]Task, error) {
 				if taskProjectID != projectID {
 					continue
 				}
-			} else if canonicalStoreRoot(task.Target.Workspace) != workspace {
-				continue
+			} else {
+				if workspace == "" {
+					workspace = canonicalStoreRoot(target.Workspace)
+				}
+				if task.Target.Workspace != workspace {
+					continue
+				}
 			}
 		}
 		filtered = append(filtered, task)
@@ -380,14 +391,28 @@ func (s *Store) Delete(id string) error {
 				if listErr != nil {
 					return false, listErr
 				}
+
+				// Resolve write-ahead and history revisions before fencing
+				// deletion; a stale hot copy must not resurrect a delivery.
+				candidates := make(map[string]durableRunFile, len(entries))
 				for _, entry := range entries {
-					if durableRunMatchesTask(entry, tasks[index]) && RunHasRuntimeObligation(entry.Run) {
-						return false, fmt.Errorf("%w: task_id=%s run_id=%s", ErrTaskHasActiveRun, tasks[index].CatalogID, entry.Run.ID)
+					if durableRunMatchesTask(entry, tasks[index]) {
+						candidates[entry.Run.ID] = entry
 					}
 				}
 				for _, run := range tasks[index].RecentRuns {
-					if RunHasRuntimeObligation(run) {
-						return false, fmt.Errorf("%w: task_id=%s run_id=%s", ErrTaskHasActiveRun, tasks[index].CatalogID, run.ID)
+					if _, found := candidates[run.ID]; !found {
+						candidates[run.ID] = durableRunFile{Run: run}
+					}
+				}
+				for runID, candidate := range candidates {
+					history, found, err := location.store.readDurableRun(location.scope, runID)
+					if err != nil {
+						return false, err
+					}
+					current, _ := authoritativeDurableRun(candidate, true, history, found)
+					if RunHasRuntimeObligation(current.Run) {
+						return false, fmt.Errorf("%w: task_id=%s run_id=%s", ErrTaskHasActiveRun, tasks[index].CatalogID, runID)
 					}
 				}
 				now := time.Now().UTC()
@@ -565,10 +590,12 @@ func (s *Store) normalizeTaskTarget(task Task) (Task, error) {
 			// The Project Store owns exactly one registered Project. Its current path
 			// is authoritative even when a persisted task predates a relink.
 			normalized.Target.Workspace = s.workspace
-		} else if strings.TrimSpace(normalized.Target.Workspace) == "" {
-			normalized.Target.Workspace = s.workspace
+		} else {
+			if strings.TrimSpace(normalized.Target.Workspace) == "" {
+				normalized.Target.Workspace = s.workspace
+			}
+			normalized.Target.Workspace = canonicalStoreRoot(normalized.Target.Workspace)
 		}
-		normalized.Target.Workspace = canonicalStoreRoot(normalized.Target.Workspace)
 		if normalized.Target.Workspace == "" {
 			return Task{}, fmt.Errorf("workspace target is required")
 		}

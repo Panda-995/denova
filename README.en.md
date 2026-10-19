@@ -11,15 +11,15 @@
 </p>
 
 <p align="center">
-  <a href="https://discord.gg/QuHu2aPya"><img src="https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white" alt="Join the Denova Discord" /></a>
+  <a href="https://discord.gg/BM6dRmyvvZ"><img src="https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white" alt="Join the Denova Discord" /></a>
   <a href="https://github.com/alfredxw/denova/releases"><img alt="Release" src="https://img.shields.io/github/v/release/alfredxw/denova?style=flat-square"></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/github/license/alfredxw/denova?style=flat-square"></a>
-  <img alt="Go" src="https://img.shields.io/badge/Go-1.26.6%2B-00ADD8?style=flat-square&logo=go&logoColor=white">
+  <img alt="Go" src="https://img.shields.io/badge/Go-1.26.9%2B-00ADD8?style=flat-square&logo=go&logoColor=white">
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-22.13%2B-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white">
 </p>
 
 <p align="center">
-  Current version: <strong>v0.4.4</strong> (2026-09-08) · Beta · <a href="https://github.com/alfredxw/denova/releases">Download the latest release</a>
+  Current version: <strong>v0.6.1</strong> (2026-10-19) · Beta · <a href="https://github.com/alfredxw/denova/releases">Download the latest release</a>
 </p>
 
 ![Denova Writing](./img/ide.png)
@@ -35,9 +35,9 @@
 
 ![Denova Lore Library](./img/setting.png)
 
-### Presets
+### Creative Setups
 
-![Denova Presets](./img/story-teller.png)
+![Denova Creative Setups](./img/story-teller.png)
 
 ### Change review
 
@@ -62,19 +62,22 @@ Start a new book from an idea, import an existing novel to continue writing, or 
 ## Core Features
 
 - **Novel writing**: Markdown document and source editing, multiple tabs, find and replace, outlines and chapter plans, progress tracking, inline comments, change review, and novel import.
-- **Creative Agents**: work with the current selection, project files, and lore; extend workflows with Skills; and support multiple conversations plus opt-in SubAgent collaboration.
-- **Interactive games**: advance stories through player input, with branches, storyline switching, action suggestions, character and world state, rule checks, and adjustable story planning.
-- **Lore and presets**: manage characters, locations, factions, world rules, and narrative styles in one place so durable creative assets can serve both Writing and Game.
-- **Image creation**: generate chapter illustrations, interactive images, and book covers, then preview and manage the results in the app.
+- **Creative Agents**: choose Native, Codex, or Claude Code to work with selections, project files, images, and lore, with multiple conversations, SubAgent collaboration, and task pause/resume.
+- **Interactive games**: advance stories through player input, with branches, storyline switching, action suggestions, character and world state, rule checks, story planning, and read-aloud. Stage scenes with Lore backgrounds and character sprites, with presentation saved along story branches.
+- **Lore**: organize settings with custom categories, document-style indexes, @ references, and backlinks; provide grouped context to Writing and Game Agents, and manage multiple images, audio, and covers for each entry.
+- **Creative Setups and Skills**: reuse narrative styles, image styles, rules, and other creative configurations; extend Agent workflows with Skills and share creative resources across Writing and Game.
+- **Resource Center**: discover, preview, and selectively import Creative Setups, Skills, Lore, plugins, and games; combine resources for export, track sources, review updates, and restore backups.
+- **Plugins and game extensions**: install and manage plugins and custom games. Plugins can provide Agent tools, direct commands, and independent panels; games can define their own interface, gameplay, and save format. The workbench supports creation, builds, isolated previews, and export.
+- **Image creation**: generate book covers, chapter illustrations, game backgrounds, and character artwork, then preview results, associate them with Lore, and manage them in the app.
 - **Versions and recovery**: save local versions, inspect changes, restore historical files, and review or undo Agent edits to the workspace.
 - **Automation**: run scheduled review, continuation, and custom creative tasks.
-- **Cross-platform experience**: Chinese and English UI, light and dark themes, Windows / macOS / Linux support, remote access, and installation to a phone's home screen.
+- **Cross-platform experience**: Chinese and English UI, light and dark themes, Windows / macOS / Linux support, remote access, installation to a phone's home screen, and in-app updates from online releases or uploaded packages.
 
 ## Writing and Game
 
 Writing and Game are peer top-level destinations in the workbench. Writing focuses on ideas, settings, outlines, chapters, and progress. Game focuses on player actions, story branches, character state, and storyline progression.
 
-Lore, presets, Skills, and version management are shared between the two workflows. Chapter progress and game state remain separate so temporary state from one destination does not affect the other.
+Lore, Creative Setups, Skills, and version management are shared between the two workflows. Chapter progress and game state remain separate so temporary state from one destination does not affect the other.
 
 ## Quick Start
 
@@ -90,8 +93,6 @@ Run `denova` after installation. Windows users and anyone who prefers manual ins
 
 For stable use, choose a Release. The `master` branch may contain unreleased changes.
 
-Before upgrading from v0.3.3, read the [v0.4.0 release and data migration notes](./CHANGELOG.md): recreate legacy global Automations within Projects and reselect affected model and context options.
-
 ### First Run
 
 1. Follow the startup guide to add a language-model API key and model name.
@@ -100,7 +101,7 @@ Before upgrading from v0.3.3, read the [v0.4.0 release and data migration notes]
 
 ### Run from Source
 
-You need Go 1.26.6+, Node.js 22.13+, pnpm, ripgrep, and Bash. On Windows, run these commands from Git Bash or WSL.
+You need Go 1.26.9+, Node.js 22.13+, pnpm, ripgrep, and Bash. On Windows, run these commands from Git Bash or WSL.
 
 ```bash
 git clone https://github.com/alfredxw/denova.git
@@ -111,12 +112,14 @@ corepack enable
 
 Default addresses:
 
-- Frontend: `http://localhost:5173`
-- Backend: `http://localhost:8080`
+- Frontend: `http://localhost:7788`
+- Backend: `http://localhost:7789`
 
 ## Models and Configuration
 
 The recommended setup is through Settings: add a provider connection, select or enter a model, and test the connection. One connection can be reused by multiple models. Language models support built-in providers and custom API-compatible endpoints. Image models support OpenAI, xAI/Grok, Volcengine Seedream, Google Gemini Image, ComfyUI Workflow, and custom endpoints.
+
+For Google Gemini text models, select “Gemini native API” in the connection's protocol options to use native tool calls, image inputs and reasoning continuation. Existing OpenAI-compatible connections keep their protocol.
 
 ## Remote Access and Phone Usage
 
@@ -125,6 +128,10 @@ Enable LAN access under **Settings → Access**, set a username and password, an
 When running from source, QR codes and connection links use the backend port to serve the `web/dist` build. Run `pnpm --dir web build` and restart the backend before first use or after frontend changes. The local Vite entry point remains available for development with hot reload.
 
 For public or domain-based deployments, put Denova behind an HTTPS reverse proxy such as Caddy or Nginx so login credentials are not transmitted in cleartext.
+
+## Usage statistics
+
+Release builds explain usage statistics on first use. Collection is enabled by default and starts only after the notice is acknowledged. Turn it off anytime under **Settings → General**. Only fixed activity, feature reach, retention, version, platform, execution outcome and duration in milliseconds are sent to Umami Cloud, without creative text, prompts, AI replies, images, project names, file paths or keys. A random local ID links return visits; the cloud receives the connection IP. Source and development builds do not send statistics. See the [metric and field definitions](./docs/analytics.md).
 
 ## Development
 
@@ -140,10 +147,10 @@ Read [CONTRIBUTING.md](./CONTRIBUTING.md) before contributing. Common commands:
 
 Denova is evolving quickly. Bug reports, workflow ideas, usage notes, and creative discussions are welcome.
 
-[Discord community](https://discord.gg/QuHu2aPya)
+[Discord community](https://discord.gg/BM6dRmyvvZ)
 
 <p align="center">
-  <img src="./img/wechat.png" alt="WeChat community" width="240">
+  <img src="./img/wechat.jpeg" alt="WeChat community" width="240">
 </p>
 
 ## Support Denova
