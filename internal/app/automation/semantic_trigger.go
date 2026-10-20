@@ -210,7 +210,7 @@ func (s *Service) evaluateClaimedSemanticTrigger(
 	if evaluator != nil {
 		raw, err = evaluator(ctx, &runtimeCfg, record.Instruction)
 	} else {
-		raw, err = agentmodeltask.GenerateAutomationTriggerEvaluation(ctx, &runtimeCfg, projectAgentKind(snap), record.Instruction)
+		raw, err = agentmodeltask.EvaluateSemanticTrigger(ctx, &runtimeCfg, projectAgentKind(snap), record)
 	}
 	if err != nil {
 		return automation.TriggerEvaluationRecord{}, fmt.Errorf("semantic evaluator task_id=%s trigger_id=%s: %w", task.ID, record.TriggerID, err)

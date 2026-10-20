@@ -31,7 +31,7 @@ func (h *Handlers) HandleWorkspaceSearch(ctx context.Context, c *app.RequestCont
 		}
 		limit = parsed
 	}
-	opts := book.SearchOptions{Regex: isTruthyQueryFlag(c.Query("regex"))}
+	opts := book.SearchOptions{Regex: isTruthyQueryFlag(c.Query("regex")), TextMentions: isTruthyQueryFlag(c.Query("text_mentions"))}
 
 	results, err := h.app.SearchProjectWorkspace(ctx, scope.ProjectID, query, limit, opts)
 	if err != nil {

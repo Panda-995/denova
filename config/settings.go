@@ -21,6 +21,7 @@ import (
 // Settings 是用户设置的持久化模型。工作区文件只会从中取出 Agent 定制字段。
 // 指针类型用于区分 "未设置"（继承上层）与 "显式置零"。
 type Settings struct {
+	Decision             *DecisionSettings        `toml:"decision,omitempty" json:"decision,omitempty"`
 	Market               MarketSettings           `toml:"market,omitempty" json:"market,omitempty"`
 	Extensions           *ExtensionSettings       `toml:"extensions,omitempty" json:"extensions,omitempty"`
 	GameCreationDefaults *GameCreationDefaults    `toml:"game_creation_defaults,omitempty" json:"game_creation_defaults,omitempty"`
@@ -287,6 +288,10 @@ func Merge(parent, child Settings) Settings {
 	}
 	out.ModelEndpoints = mergeModelEndpoints(out.ModelEndpoints, child.ModelEndpoints)
 	out.ModelProfiles = mergeModelProfiles(out.ModelProfiles, child.ModelProfiles)
+	if child.Decision != nil {
+		decision := *child.Decision
+		out.Decision = &decision
+	}
 	if child.Speech != nil {
 		speech := *child.Speech
 		out.Speech = &speech

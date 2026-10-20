@@ -10,7 +10,34 @@ export interface SpeechSettings {
   voice: string
 }
 
+export interface DecisionSettings {
+  enabled: boolean
+  endpoints: DecisionEndpointSettings[] | null
+  profiles: DecisionProfileSettings[] | null
+  default_profile_id: string
+  game_presentation: boolean
+  lore_classification: boolean
+  semantic_triggers: boolean
+}
+
+export interface DecisionEndpointSettings {
+  id: string
+  name: string
+  enabled?: boolean
+  endpoint: string
+  api_key: string
+}
+
+export interface DecisionProfileSettings {
+  id: string
+  name: string
+  enabled?: boolean
+  endpoint_id: string
+  model: string
+}
+
 export interface Settings {
+  decision?: DecisionSettings
   market?: { registry_url?: string; github_token?: string }
   game_creation_defaults?: import('@/features/interactive/game-creation-defaults').GameCreationDefaults
   game_last_creation?: import('@/features/interactive/game-creation-defaults').GameCreationPreferences

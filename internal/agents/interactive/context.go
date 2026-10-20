@@ -11,10 +11,11 @@ import (
 // the agents package; concrete tools receive a narrower projection so the
 // tools package does not depend on agent orchestration internals.
 type InteractiveStoryToolContext struct {
-	Store                  *story.Store
-	StoryID                string
-	BranchID               string
-	SubmitStateSchemaBatch func(
+	PresentationSelectedByHost bool
+	Store                      *story.Store
+	StoryID                    string
+	BranchID                   string
+	SubmitStateSchemaBatch     func(
 		context.Context,
 		story.ActorStateSchemaBatch,
 	) (story.ActorStateSchemaBatchResult, error)

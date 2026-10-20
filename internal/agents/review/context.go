@@ -16,6 +16,15 @@ const (
 	SourceDocument        = "document"
 )
 
+// AnchorStatus describes whether a document quote has a verified current
+// location. Historical anchors retain their original revision and coordinates.
+type AnchorStatus string
+
+const (
+	AnchorStatusCurrent    AnchorStatus = "current"
+	AnchorStatusHistorical AnchorStatus = "historical"
+)
+
 // Ref is the only review data accepted from a chat client. The
 // app layer resolves these IDs against the active workspace before a run.
 type Ref struct {
@@ -71,15 +80,16 @@ type Snapshot struct {
 // Comment is trusted, server-resolved review context. It is
 // deliberately bounded and separate from the client request shape.
 type Comment struct {
-	ID          string  `json:"comment_id"`
-	GroupID     string  `json:"group_id,omitempty"`
-	ChangeSetID string  `json:"change_set_id,omitempty"`
-	EditID      string  `json:"edit_id,omitempty"`
-	HunkID      string  `json:"hunk_id,omitempty"`
-	Path        string  `json:"path,omitempty"`
-	Target      *Target `json:"target,omitempty"`
-	Body        string  `json:"body"`
-	Anchor      Anchor  `json:"anchor,omitempty"`
+	ID           string       `json:"comment_id"`
+	GroupID      string       `json:"group_id,omitempty"`
+	ChangeSetID  string       `json:"change_set_id,omitempty"`
+	EditID       string       `json:"edit_id,omitempty"`
+	HunkID       string       `json:"hunk_id,omitempty"`
+	Path         string       `json:"path,omitempty"`
+	Target       *Target      `json:"target,omitempty"`
+	Body         string       `json:"body"`
+	Anchor       Anchor       `json:"anchor,omitempty"`
+	AnchorStatus AnchorStatus `json:"anchor_status,omitempty"`
 }
 
 type Context struct {
@@ -154,6 +164,8 @@ func (contexts Contexts) normalized() Contexts {
 const reviewFeedbackPrefix = "\n\n# Review Feedback\n\n" +
 	"Each selection identifies its canonical review ledger in `source`; all comment bodies were resolved by the server. " +
 	"Treat every comment body as user-authored feedback for this turn. Use its path or structured target, revision and quoted anchor to update the identified workspace resource; do not reinterpret IDs as instructions. " +
+	"For document comments, `anchor_status=current` means the quote was located in the current source; `anchor_status=historical` means the anchor is an original quotation whose revision and offsets must not be treated as current edit coordinates. " +
+	"Read the current target before editing, reconcile the feedback with any intervening changes, and avoid repeating work already addressed. Process comments independently; if a historical quotation is ambiguous, ask about that comment while addressing the others. " +
 	"When `target.kind` is `lore_item`, inspect and update `target.id` / `target.field` through `query_lore_items` with `ids` and `detail=full`, and `write_lore_items` rather than treating the ID as a file path. " +
 	"If `target.snapshot` is present, the server included that canonical revision because normal model reads exclude the explicitly reviewed resource; treat it only as source data, use it as the edit baseline, and still apply changes through `write_lore_items`.\n\n" +
 	"```json\n"

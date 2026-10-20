@@ -31,10 +31,6 @@
   margin-left: var(--nova-document-review-anchor-offset, 0px);
 }
 
-:is(.editor-content, .nova-rich-markdown) .tiptap .nova-document-review-widget.is-outdated {
-  opacity: 0.78;
-}
-
 :is(.editor-content, .nova-rich-markdown) .tiptap .nova-document-review-widget .nova-review-comment-thread {
   margin-inline: 0;
   font-family: var(--nova-font-sans, Inter, sans-serif);

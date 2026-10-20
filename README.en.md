@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  Current version: <strong>v0.6.2</strong> (2026-10-19) · Beta · <a href="https://github.com/alfredxw/denova/releases">Download the latest release</a>
+  Current version: <strong>v0.6.3</strong> (2026-10-20) · Beta · <a href="https://github.com/alfredxw/denova/releases">Download the latest release</a>
 </p>
 
 ![Denova Writing](./img/ide.png)
@@ -64,8 +64,8 @@ Start a new book from an idea, import an existing novel to continue writing, or 
 - **Novel writing**: Markdown document and source editing, multiple tabs, find and replace, outlines and chapter plans, progress tracking, inline comments, change review, and novel import.
 - **Creative Agents**: choose Native, Codex, or Claude Code to work with selections, project files, images, and lore, with multiple conversations, SubAgent collaboration, and task pause/resume.
 - **Interactive games**: advance stories through player input, with branches, storyline switching, action suggestions, character and world state, rule checks, story planning, and read-aloud. Stage scenes with Lore backgrounds and character sprites, with presentation saved along story branches.
-- **Lore**: organize settings with custom categories, document-style indexes, @ references, and backlinks; provide grouped context to Writing and Game Agents, and manage multiple images, audio, and covers for each entry.
-- **Creative Setups and Skills**: reuse narrative styles, image styles, rules, and other creative configurations; extend Agent workflows with Skills and share creative resources across Writing and Game.
+- **Lore**: organize settings with custom categories, document-style indexes, @ references, and backlinks; find text mentions in project files and a selected story branch, provide grouped context to Writing and Game Agents, and manage multiple images, audio, and covers for each entry.
+- **Creative Setups and Skills**: reuse narrative styles, image styles, rules, and other creative configurations; extend Agent workflows with Skills, including a built-in novel-writing Skill for premises, outlines, scenes, and revision.
 - **Resource Center**: discover, preview, and selectively import Creative Setups, Skills, Lore, plugins, and games; combine resources for export, track sources, review updates, and restore backups.
 - **Plugins and game extensions**: install and manage plugins and custom games. Plugins can provide Agent tools, direct commands, and independent panels; games can define their own interface, gameplay, and save format. The workbench supports creation, builds, isolated previews, and export.
 - **Image creation**: generate book covers, chapter illustrations, game backgrounds, and character artwork, then preview results, associate them with Lore, and manage them in the app.
@@ -120,6 +120,8 @@ Default addresses:
 The recommended setup is through Settings: add a provider connection, select or enter a model, and test the connection. One connection can be reused by multiple models. Language models support built-in providers and custom API-compatible endpoints. Image models support OpenAI, xAI/Grok, Volcengine Seedream, Google Gemini Image, ComfyUI Workflow, and custom endpoints.
 
 For Google Gemini text models, select “Gemini native API” in the connection's protocol options to use native tool calls, image inputs and reasoning continuation. Existing OpenAI-compatible connections keep their protocol.
+
+Optional decision models can be configured in Settings for Game stage media, Lore semantic classification, and automation semantic triggers, with language-model fallback for uncertain results or service failures.
 
 ## Remote Access and Phone Usage
 

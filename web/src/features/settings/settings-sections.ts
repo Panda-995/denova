@@ -5,6 +5,9 @@ export const MODEL_ENDPOINT_FIELD_KEYS: readonly string[] = ['settings.model.end
 export const MODEL_PROFILE_FIELD_KEYS: readonly string[] = ['settings.model.profileModelLabel', 'settings.model.profileAliasLabel', 'settings.model.profileTemperatureLabel', 'settings.model.maxTokens', 'settings.model.contextWindow']
 export const IMAGE_ENDPOINT_FIELD_KEYS: readonly string[] = ['settings.imageApi.endpointAliasLabel', 'settings.imageApi.provider', 'settings.imageApi.protocol', 'common.baseUrl', 'settings.imageApi.profileKeyLabel']
 
+export const DECISION_ENDPOINT_FIELD_KEYS: readonly string[] = ['settings.model.endpointAliasLabel', 'settings.decision.endpoint', 'settings.decision.apiKey']
+export const DECISION_PROFILE_FIELD_KEYS: readonly string[] = ['settings.decision.model', 'settings.model.profileAliasLabel']
+
 type SettingsGroup = 'preferences' | 'creation' | 'models' | 'tools' | 'system'
 type SettingsSectionDefinition = {
   id: string
@@ -24,6 +27,8 @@ export const SETTINGS_SECTIONS = [
     fieldKeys: ['settings.model.defaultProfile', ...MODEL_ENDPOINT_FIELD_KEYS, ...MODEL_PROFILE_FIELD_KEYS] },
   { id: 'image', group: 'models', titleKey: 'settings.section.imageApi', icon: Image,
     fieldKeys: ['settings.imageApi.defaultProfile', ...IMAGE_ENDPOINT_FIELD_KEYS, 'settings.imageApi.profileModelLabel', 'settings.imageApi.profileAliasLabel', 'settings.imageApi.promptGuide', 'settings.imageApi.defaultSize', 'settings.imageApi.defaultAspectRatio', 'settings.imageApi.defaultResolution', 'settings.imageApi.defaultQuality', 'settings.imageApi.defaultOutputFormat'] },
+  { id: 'decision', group: 'models', titleKey: 'settings.decision.title', icon: Bot,
+    fieldKeys: ['settings.decision.enabled', 'settings.decision.defaultProfile', ...DECISION_ENDPOINT_FIELD_KEYS, ...DECISION_PROFILE_FIELD_KEYS, 'settings.decision.game_presentation', 'settings.decision.lore_classification', 'settings.decision.semantic_triggers'] },
   { id: 'speech', group: 'models', titleKey: 'speech.title', icon: Volume2,
     fieldKeys: ['speech.endpoint', 'speech.apiKey', 'speech.model', 'speech.voice'] },
   { id: 'approvals', group: 'tools', titleKey: 'settings.section.approvals', icon: ShieldCheck,

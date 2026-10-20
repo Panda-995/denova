@@ -1,3 +1,4 @@
+import { DecisionSettingsEditor, EMPTY_DECISION_SETTINGS } from './DecisionSettingsEditor'
 import { EMPTY_SPEECH_SETTINGS, SpeechSettingsEditor } from './SpeechSettingsEditor'
 import { WebAccessSettingsEditor } from './WebAccessSettingsEditor'
 import { memo, useEffect, useState, useCallback } from 'react'
@@ -286,6 +287,7 @@ export const SettingsSections = memo(function SettingsSections({ layered, draft,
         />
       </>
     ),
+    'decision': <DecisionSettingsEditor fieldRequest={fieldRequest?.id === 'decision' ? fieldRequest : undefined} value={draft.decision ?? effective.decision ?? EMPTY_DECISION_SETTINGS} onChange={value => setField('decision', value)} />,
     'speech': (
       <SettingsPageVisibility.Consumer>{visible => (
         <SpeechSettingsEditor value={draft.speech ?? effective.speech ?? EMPTY_SPEECH_SETTINGS} onChange={value => setField('speech', value)} visible={visible} />

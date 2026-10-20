@@ -35,6 +35,9 @@ var ErrInvalidSearchRegex = errors.New("invalid search regex")
 
 // SearchOptions 控制全局搜索的匹配方式。
 type SearchOptions struct {
+	// TextMentions searches authored file contents, excluding filename matches,
+	// Lore definitions and Game runtime data (including private journal indexes).
+	TextMentions bool
 	// Regex 为 true 时按 Go(RE2) 正则表达式匹配且大小写敏感；
 	// 为 false 时按大小写不敏感的字面量匹配。
 	Regex bool
@@ -73,7 +76,12 @@ func SearchWorkspace(workspace, query string, limit int, opts SearchOptions) ([]
 
 	var results []SearchResult
 	err = walkVisibleWorkspaceFiles(workspace, func(path, rel string) error {
-		results = append(results, matchPath(rel, matcher)...)
+		if opts.TextMentions && (strings.HasPrefix(rel, "interactive/") || strings.HasPrefix(rel, "setting/lore/")) {
+			return nil
+		}
+		if !opts.TextMentions {
+			results = append(results, matchPath(rel, matcher)...)
+		}
 		if len(results) >= limit {
 			return errSearchLimitReached
 		}

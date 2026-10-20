@@ -67,14 +67,15 @@ func ProjectInteractiveContext(contexts ...agentinteractive.InteractiveStoryTool
 	}
 	source := contexts[0]
 	return producttools.InteractiveContext{
-		Store:                  source.Store,
-		StoryID:                source.StoryID,
-		BranchID:               source.BranchID,
-		SubmitStateSchemaBatch: source.SubmitStateSchemaBatch,
-		RequestTurnCompletion:  agentinteractive.RequestTurnCompletion,
-		PrepareTurn:            source.PrepareTurn,
-		SelectStoryProtagonist: source.SelectProtagonist,
-		SubmitTurnResult:       source.SubmitTurnResult,
+		Store:                      source.Store,
+		PresentationSelectedByHost: source.PresentationSelectedByHost,
+		StoryID:                    source.StoryID,
+		BranchID:                   source.BranchID,
+		SubmitStateSchemaBatch:     source.SubmitStateSchemaBatch,
+		RequestTurnCompletion:      agentinteractive.RequestTurnCompletion,
+		PrepareTurn:                source.PrepareTurn,
+		SelectStoryProtagonist:     source.SelectProtagonist,
+		SubmitTurnResult:           source.SubmitTurnResult,
 	}
 }
 

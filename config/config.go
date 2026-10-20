@@ -16,6 +16,7 @@ import (
 
 // Config 保存 Denova 的全局配置。
 type Config struct {
+	Decision                  *DecisionSettings       `toml:"decision,omitempty"`
 	OpenAIAPIKey              string                  `toml:"openai_api_key"`
 	OpenAIBaseURL             string                  `toml:"openai_base_url"`
 	OpenAIModel               string                  `toml:"openai_model"`
@@ -131,6 +132,7 @@ func configFromLayered(novaDir, workspace string, layered LayeredSettings) *Conf
 		OpenAIContextWindowTokens:   settingsInt(s.OpenAIContextWindowTokens, DefaultContextWindowTokens),
 		ModelEndpoints:              s.ModelEndpoints,
 		ModelProfiles:               s.ModelProfiles,
+		Decision:                    s.Decision,
 		DefaultImageAPIProfileID:    s.DefaultImageAPIProfileID,
 		ImageAPIEndpoints:           s.ImageAPIEndpoints,
 		ImageAPIProfiles:            s.ImageAPIProfiles,
@@ -273,6 +275,7 @@ func settingsFromConfig(cfg *Config) Settings {
 		OpenAIModel:              cfg.OpenAIModel,
 		ModelEndpoints:           sanitizeModelEndpoints(cfg.ModelEndpoints),
 		ModelProfiles:            sanitizeModelProfiles(cfg.ModelProfiles),
+		Decision:                 cfg.Decision,
 		LegacyImageAPIKey:        cfg.LegacyImageAPIKey,
 		LegacyImageAPIBaseURL:    cfg.LegacyImageAPIBaseURL,
 		LegacyImageAPIModel:      cfg.LegacyImageAPIModel,
@@ -396,6 +399,7 @@ func Load() *Config {
 			OpenAIContextWindowTokens:   settingsInt(d.OpenAIContextWindowTokens, DefaultContextWindowTokens),
 			ModelEndpoints:              d.ModelEndpoints,
 			ModelProfiles:               d.ModelProfiles,
+			Decision:                    d.Decision,
 			DefaultImageAPIProfileID:    d.DefaultImageAPIProfileID,
 			ImageAPIEndpoints:           d.ImageAPIEndpoints,
 			ImageAPIProfiles:            d.ImageAPIProfiles,

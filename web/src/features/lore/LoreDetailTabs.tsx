@@ -3,8 +3,9 @@ import { useTranslation } from 'react-i18next'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { loreImageURL, type LoreItem, type LoreMaterial } from '@/lib/api'
 import { LoreMaterialsPanel } from './LoreMaterialsPanel'
+import { LoreMentions } from './LoreMentions'
 
-/** Both editors share one media surface. Media responses never replace text
+/** Both editors share detail tabs. Media responses never replace text
  * being edited while an upload or generation request is in flight. */
 export function LoreDetailTabs({
   projectId,
@@ -46,15 +47,19 @@ export function LoreDetailTabs({
             className="size-8 rounded object-cover"
           />
         )}
-        <TabsList variant="line">
-          <TabsTrigger value="setting">{t('lore.materials.settingTab')}</TabsTrigger>
-          <TabsTrigger value="materials">
+        <TabsList variant="line" className="max-w-full flex-wrap justify-start gap-x-3 gap-y-2 group-data-horizontal/tabs:h-auto">
+          <TabsTrigger value="setting" className="flex-none">{t('lore.materials.settingTab')}</TabsTrigger>
+          <TabsTrigger value="materials" className="flex-none">
             {t('lore.materials.tab', { count: item.resolved_materials?.length ?? 0 })}
           </TabsTrigger>
+          <TabsTrigger value="mentions" className="flex-none">{t('lore.mentions.tab')}</TabsTrigger>
         </TabsList>
       </div>
       <TabsContent value="setting" className="flex min-h-0 flex-1 flex-col">
         {children}
+      </TabsContent>
+      <TabsContent value="mentions" className="flex min-h-0 flex-1 flex-col">
+        <LoreMentions key={`${projectId}:${item.id}`} projectId={projectId} item={item} />
       </TabsContent>
       <TabsContent value="materials" className="min-h-0 flex-1 overflow-y-auto">
         <LoreMaterialsPanel

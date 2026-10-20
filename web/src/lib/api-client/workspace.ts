@@ -21,10 +21,11 @@ export async function getCurrentWorkspace(): Promise<{ workspace: string; projec
   return requestJSON('/api/workspace/current')
 }
 
-export async function searchWorkspace(projectId: string, query: string, limit = 100, options: { regex?: boolean } = {}): Promise<WorkspaceSearchResult[]> {
+export async function searchWorkspace(projectId: string, query: string, limit = 100, options: { regex?: boolean; textMentions?: boolean; signal?: AbortSignal } = {}): Promise<WorkspaceSearchResult[]> {
   const params = new URLSearchParams({ q: query, limit: String(limit) })
   if (options.regex) params.set('regex', '1')
-  const data = await requestJSON<{ results: WorkspaceSearchResult[] }>(`${projectAPIPath(projectId, 'workspace/search')}?${params.toString()}`)
+  if (options.textMentions) params.set('text_mentions', '1')
+  const data = await requestJSON<{ results: WorkspaceSearchResult[] }>(`${projectAPIPath(projectId, 'workspace/search')}?${params.toString()}`, { signal: options.signal })
   return Array.isArray(data.results) ? data.results : []
 }
 

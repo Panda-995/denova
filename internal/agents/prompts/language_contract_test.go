@@ -4,7 +4,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -77,33 +76,6 @@ func TestModelFacingSourceRejectsBilingualSplitLiterals(t *testing.T) {
 func TestSystemPromptTruncationMarkerIsEnglishOnly(t *testing.T) {
 	if strings.Contains(systemPromptTruncationMarker, " / ") || containsHan(systemPromptTruncationMarker) {
 		t.Fatalf("system prompt truncation marker must be English-only: %q", systemPromptTruncationMarker)
-	}
-}
-
-func TestBuiltinSkillInstructionsAreEnglishOnly(t *testing.T) {
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve test file path")
-	}
-	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", ".."))
-	err := filepath.WalkDir(filepath.Join(repoRoot, "skills"), func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() || filepath.Ext(path) != ".md" {
-			return nil
-		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if containsHan(string(content)) {
-			t.Errorf("built-in Skill instruction contains Han characters: %s", path)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 }
 

@@ -77,6 +77,11 @@ func stringify(v any) string {
 }
 
 var catalogZH = map[string]string{
+	"decision.classification.reason": "决策模型根据名称和资料内容匹配已有分类。",
+	"decision.trigger.title":         "语义条件已满足",
+	"decision.trigger.matched":       "当前证据满足已配置的语义条件。",
+	"decision.trigger.notMatched":    "当前证据表明条件尚未满足。",
+
 	"settings.webAccess.error.configuration":    "请填写所选搜索服务的 API 密钥或实例地址，并检查搜索模式。",
 	"settings.webAccess.error.invalid_request":  "搜索请求无效，请调整关键词或搜索选项。",
 	"settings.webAccess.error.query_too_long":   "DeepSeek 查询最多 128 个字符，包含时间筛选（占用 17 个字符），请缩短关键词。",
@@ -333,6 +338,11 @@ var catalogZH = map[string]string{
 }
 
 var catalogEN = map[string]string{
+	"decision.classification.reason": "Decision model matched an existing category using the name and content.",
+	"decision.trigger.title":         "Semantic condition satisfied",
+	"decision.trigger.matched":       "Current evidence satisfies the configured semantic condition.",
+	"decision.trigger.notMatched":    "Current evidence does not satisfy the condition.",
+
 	"settings.webAccess.error.configuration":    "Enter the selected search service's API key or instance URL and check its search mode.",
 	"settings.webAccess.error.invalid_request":  "Invalid search request. Adjust the query or search options.",
 	"settings.webAccess.error.query_too_long":   "DeepSeek queries allow up to 128 characters, including time filters (17 characters). Shorten the query.",

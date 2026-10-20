@@ -351,6 +351,7 @@ export const DocumentReviewAnnotations = forwardRef<DocumentReviewAnnotationsHan
               comments={group.comments}
               quote={group.outdated ? group.quote : undefined}
               anchorLabel={group.outdated ? t('editor.review.outdated') : t('editor.review.comment')}
+              anchorDescription={group.outdated ? t('editor.review.historicalDescription') : undefined}
               draft={group.draft ? {
                 body: group.draft.body,
                 submitting: group.draft.submitting,

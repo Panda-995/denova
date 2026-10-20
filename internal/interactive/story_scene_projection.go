@@ -175,6 +175,11 @@ func sceneTurnsFromJournal(ctx context.Context, handle *storyJournalHandle, bran
 			}
 			selected[record.Envelope.ID] = StoryEventRecord{Envelope: record.Envelope, Raw: raw}
 		case StoryEventTypeTurnPresentationRevised, StoryEventTypeTurnBackgroundRevised, StoryEventTypeTurnNarrativeRevised, StoryEventTypeTurnStateRevised:
+			// Match display/model history: inherited base Turns do not import
+			// another branch's side revisions.
+			if record.Envelope.BranchID != branchID {
+				return nil
+			}
 			targetID, _ := record.Raw["turn_id"].(string)
 			base, ok := selected[targetID]
 			if !ok {

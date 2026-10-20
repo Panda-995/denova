@@ -601,7 +601,10 @@ func (c *Conversation) AssembleModelContext(ctx context.Context, originalMessage
 			Content: runtimeContext, Placement: agentcontext.PlacementFinalUserPrefix, Limit: StoryRuntimeContextMaxBytes, Included: true,
 		})
 	}
-	presentationSource := buildPresentationContext(c.workspace, storyCtx.Meta.PresentationSettings, snapshotPresentation(storyCtx.Snapshot, storyCtx.Meta.PresentationSettings), activeBranchPlan, input.UserMessage)
+	presentationSource := interactiveContextSource{Source: "StageSelection", Title: "Turn Presentation", Purpose: "explain host-owned media selection", Content: "Stage media are selected automatically from the completed prose after submission. Do not select stage media.", Limit: presentationContextMaxBytes}
+	if !c.PresentationSelectedByHost() {
+		presentationSource = buildPresentationContext(c.workspace, storyCtx.Meta.PresentationSettings, snapshotPresentation(storyCtx.Snapshot, storyCtx.Meta.PresentationSettings), activeBranchPlan, input.UserMessage)
+	}
 	fragments = append(fragments, agentcontext.Fragment{
 		ID: "interactive_presentation", Source: presentationSource.Source, Title: presentationSource.Title,
 		Purpose: presentationSource.Purpose, Content: presentationSource.Content,

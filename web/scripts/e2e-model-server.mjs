@@ -484,7 +484,10 @@ const server = createServer(async (request, response) => {
     return
   }
   if (latestUserMessageIncludesMarker(body, gameOpeningMarker) && requestIncludesTool(body, 'submit_interactive_turn')) {
-    writeChatCompletion(response, chatCompletionFrames(gameOpeningNarrative, openingTurnSubmission))
+    const opening = requestIncludesMarker(body, 'E2E_LORE_MENTIONS_OPENING')
+      ? `${'远处灯火，长夜未尽。'.repeat(200)}\n林川😀在共同历史中出现。\n林川😀再次出现。`
+      : gameOpeningNarrative
+    writeChatCompletion(response, chatCompletionFrames(opening, openingTurnSubmission))
     return
   }
   if (requestIncludesMarker(body, gameAttachmentMarker) && requestIncludesTool(body, 'submit_interactive_turn')) {

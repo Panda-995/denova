@@ -133,6 +133,8 @@ export function reviewFeedbackContextBytes(feedback: ReviewFeedbackBatch): numbe
       ...(comment.target ? { target: comment.target } : {}),
       body: comment.body,
       anchor: compactAnchor(comment.anchor),
+      // Resolution is server-side; reserve space for the longer status.
+      ...(selection.source === 'document' ? { anchor_status: 'historical' } : {}),
     })),
   }))).replace(/[<>&\u2028\u2029]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`)
   return new TextEncoder().encode(payload).length + 2 * 1024

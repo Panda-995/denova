@@ -25,7 +25,7 @@ type loreClassificationPayload struct {
 
 // ClassifyLoreItems runs one model-only semantic pass over an already bounded
 // batch. Callers keep deterministic heuristic results if this call fails.
-func ClassifyLoreItems(ctx context.Context, cfg *config.Config, inputs []lore.ClassificationInput) ([]lore.ClassificationSuggestion, error) {
+func classifyLoreItemsWithLLM(ctx context.Context, cfg *config.Config, inputs []lore.ClassificationInput) ([]lore.ClassificationSuggestion, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("configuration is missing")
 	}

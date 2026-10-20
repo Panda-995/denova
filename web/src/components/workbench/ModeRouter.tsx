@@ -344,7 +344,11 @@ export function ModeRouter(props: ModeRouterProps) {
   const openToolNavigationTarget = useCallback((target: ToolNavigationTarget) => {
     if (target.kind === 'workspace_file') {
       onSetMode('ide')
-      void selectWorkspacePath(target.path)
+      if (target.search) {
+        void selectWorkspaceSearchResult({ path: target.path, line: target.search.line, column: 1, preview: '', match_text: target.search.query }, target.search.query)
+      } else {
+        void selectWorkspacePath(target.path)
+      }
       return
     }
 
@@ -376,7 +380,7 @@ export function ModeRouter(props: ModeRouterProps) {
         onSetMode('presets')
         return
     }
-  }, [onSetMode, projectId, selectWorkspacePath, workspace])
+  }, [onSetMode, projectId, selectWorkspacePath, selectWorkspaceSearchResult, workspace])
   const toolNavigation = useMemo(() => ({ workspace, open: openToolNavigationTarget }), [openToolNavigationTarget, workspace])
   const openTrajectory = useCallback((target: TrajectoryNavigationTarget) => {
     if (!developerMode) return

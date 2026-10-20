@@ -1,7 +1,7 @@
 import { createContext, useContext, type ReactNode } from 'react'
 
 export type ToolNavigationTarget =
-  | { kind: 'workspace_file'; path: string }
+  | { kind: 'workspace_file'; path: string; search?: { query: string; line: number } }
   | { kind: 'lore_item'; id?: string; name?: string }
   | { kind: 'config_resource'; resource: string; id?: string; scope?: string; section?: 'runtime' }
 

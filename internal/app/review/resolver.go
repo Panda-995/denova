@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	agentreview "denova/internal/agents/review"
 	workspacechange "denova/internal/workspace/change"
@@ -124,10 +125,11 @@ func (r documentReviewFeedbackResolver) Resolve(ctx context.Context, runtime Run
 			return readErr
 		}
 		anchor, outdated := documentreview.ProjectAnchor(resolved.Snapshot.Content, resolved.Snapshot.Revision, comment.Anchor)
+		anchorStatus := agentreview.AnchorStatusCurrent
 		if outdated {
-			return invalidReviewFeedbackError("a document comment no longer identifies unique source text", map[string]any{
-				"comment_id": comment.ID, "target": comment.Target,
-			})
+			anchorStatus = agentreview.AnchorStatusHistorical
+			slog.InfoContext(ctx, "Document review quote retained without a current location",
+				"comment_id", comment.ID, "target_kind", comment.Target.Kind, "target_id", comment.Target.ID)
 		}
 		target := &agentreview.Target{
 			Kind: resolved.Target.Kind, ID: resolved.Target.ID, Field: resolved.Target.Field, Name: resolved.Name,
@@ -141,7 +143,7 @@ func (r documentReviewFeedbackResolver) Resolve(ctx context.Context, runtime Run
 			includedSnapshots[snapshotKey] = true
 		}
 		feedback.Comments = append(feedback.Comments, agentreview.Comment{
-			ID: comment.ID, Target: target, Body: comment.Body,
+			ID: comment.ID, Target: target, Body: comment.Body, AnchorStatus: anchorStatus,
 			Anchor: agentreview.Anchor{
 				Encoding: anchor.Encoding, Kind: anchor.Kind, Revision: anchor.Revision,
 				Start: anchor.Start, End: anchor.End, Quote: anchor.Quote, Prefix: anchor.Prefix,

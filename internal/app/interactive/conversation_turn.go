@@ -115,6 +115,9 @@ func (c *Conversation) SubmitTurnResult(ctx context.Context, input interactive.T
 	if current != nil && current.TurnResult().Presentation != nil {
 		basePresentation = current.TurnResult().Presentation
 	}
+	if c.PresentationSelectedByHost() {
+		input.Presentation = nil
+	}
 	presentation, presentationReceipt := interactive.ResolvePresentationPatch(c.workspace, basePresentation, input.Presentation, storyCtx.Meta.PresentationSettings)
 	if presentationReceipt != nil && presentationReceipt.Ignored > 0 {
 		slog.WarnContext(ctx, "[interactive-presentation] ignored visual changes", "story_id", c.storyID, "branch_id", c.branchID, "applied", presentationReceipt.Applied, "ignored", presentationReceipt.Ignored, "reasons", presentationReceipt.Reasons)
@@ -134,6 +137,22 @@ func (c *Conversation) SubmitTurnResult(ctx context.Context, input interactive.T
 	}, current, input)
 	draft := c.turnDraft
 	c.mu.Unlock()
+	if receipt.Ready && c.PresentationSelectedByHost() {
+		if strings.TrimSpace(draft.Narrative) == "" {
+			return interactive.TurnSubmissionReceipt{}, fmt.Errorf("completed prose is required before stage selection")
+		}
+		selected, mediaReceipt, selectionErr := c.selectTurnPresentation(ctx, draft.Narrative, prepared.TurnResult(), currentState, basePresentation, storyCtx.Meta.PresentationSettings, storyCtx.Snapshot.BranchPlan)
+		if ctx.Err() != nil {
+			return interactive.TurnSubmissionReceipt{}, ctx.Err()
+		}
+		if selectionErr != nil {
+			slog.WarnContext(ctx, "Stage selection degraded", "story_id", c.storyID, "error", selectionErr)
+		}
+		progress := prepared.Progress()
+		progress.Result.Presentation = selected
+		prepared = progress.Prepared()
+		receipt.Presentation = mediaReceipt
+	}
 	draft.Submission = prepared.Progress()
 	result, err := turnSubmissionToolResult(receipt)
 	if err != nil {

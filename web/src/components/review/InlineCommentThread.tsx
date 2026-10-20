@@ -14,6 +14,7 @@ export interface InlineReviewComment {
 interface InlineCommentThreadProps<T extends InlineReviewComment> {
   comments?: T[]
   anchorLabel?: string
+  anchorDescription?: string
   quote?: string
   disabled?: boolean
   draft?: {
@@ -30,7 +31,7 @@ interface InlineCommentThreadProps<T extends InlineReviewComment> {
 }
 
 /** Shared inline thread used by diff review and author document review. */
-export function InlineCommentThread<T extends InlineReviewComment>({ comments = [], anchorLabel, quote, disabled = false, draft, onUpdate, onDelete, onCollapse, onEditingChange }: InlineCommentThreadProps<T>) {
+export function InlineCommentThread<T extends InlineReviewComment>({ comments = [], anchorLabel, anchorDescription, quote, disabled = false, draft, onUpdate, onDelete, onCollapse, onEditingChange }: InlineCommentThreadProps<T>) {
   const { t } = useTranslation()
   const [editingID, setEditingID] = useState('')
   const [editBody, setEditBody] = useState('')
@@ -85,6 +86,9 @@ export function InlineCommentThread<T extends InlineReviewComment>({ comments = 
         <blockquote className="mx-3 mt-2 line-clamp-3 border-l-2 border-[var(--nova-border-strong)] pl-2 text-[11px] leading-5 text-[var(--nova-text-muted)]">
           {quote}
         </blockquote>
+      )}
+      {anchorDescription && (
+        <div className="mx-3 mt-2 text-[11px] leading-5 text-[var(--nova-text-muted)]">{anchorDescription}</div>
       )}
 
       {comments.map((comment) => (

@@ -128,6 +128,30 @@ func TestReadSceneAtTurnRejectsChangedNarrativeRevision(t *testing.T) {
 	}
 }
 
+func TestReadSceneAtTurnKeepsNarrativeRevisionsInTheirBranch(t *testing.T) {
+	store := NewStore(t.TempDir())
+	t.Cleanup(func() { _ = store.Close() })
+	story, err := store.CreateStory(CreateStoryRequest{Title: "Branch narrative"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := store.AppendTurn(story.ID, AppendTurnRequest{BranchID: "main", Narrative: "Original shared opening"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	branch, err := store.CreateBranch(story.ID, CreateBranchRequest{ParentEventID: turn.ID, Title: "Inherited opening"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateTurnNarrative(story.ID, UpdateTurnNarrativeRequest{BranchID: "main", TurnID: turn.ID, Narrative: "Main-only edit"}); err != nil {
+		t.Fatal(err)
+	}
+	scene, err := store.ReadSceneAtTurn(context.Background(), story.ID, branch.ID, turn.ID, turn.ID)
+	if err != nil || scene.Turn.Narrative != "Original shared opening" {
+		t.Fatalf("another branch's narrative revision changed the source: %+v %v", scene.Turn, err)
+	}
+}
+
 func TestReadSceneAtTurnDoesNotRepairTornJournalAndHonorsCancellation(t *testing.T) {
 	workspace := t.TempDir()
 	store := NewStore(workspace)
