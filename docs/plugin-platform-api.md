@@ -2,7 +2,7 @@
 
 状态：API v1，v0.6.0 工作区实现，尚未发布。更新：2026-10-10。当前实现以 [OpenAPI 生成代码](../internal/platform/openapi.go) 和隔离运行实例的 GET /api/platform/v1/openapi.json 为准。
 
-[插件开发手册](plugin-developer-guide.md) · [游戏开发手册](game-developer-guide.md) · [系统设计](plugin-platform-design.md)。
+[插件开发手册](plugin-developer-guide.md) · [游戏开发手册](game-developer-guide.md)。
 
 ## 边界与连接
 

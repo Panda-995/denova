@@ -1,6 +1,6 @@
 ---
 name: game-craft
-description: 互动游戏创作判断手册。作者要求设计游戏卖点与核心循环、世界与角色资料库、状态系统、规则与判定、游戏规划、开局与回合、选项与节奏，或诊断互动故事/跑团问题时使用；提供判断、模板与诊断，不负责执行流程、文件写入、配置提交与状态同步。
+description: 互动游戏创作判断手册。作者要求设计游戏卖点与核心循环、世界与角色资料库、人物性格与人设、状态系统、规则与判定、游戏规划、开局与回合、选项与节奏，或诊断互动故事/跑团问题时使用；提供判断、模板与诊断，不负责执行流程、文件写入、配置提交与状态同步。
 category: game
 agent: general,ide
 ---
@@ -49,13 +49,15 @@ agent: general,ide
 
 根据作者的任务选择对应参考，只读相关文档；跨场景时再补读。这些是同一技能的参考文档，无须调用其他技能或依次完成所有场景。
 
-参考位置：`skill://game-craft/references/world-and-cast.md`、`skill://game-craft/references/state-and-rules.md`、`skill://game-craft/references/planning-and-scenes.md`、`skill://game-craft/references/opening-and-diagnosis.md`、`skill://game-craft/references/web-novel-patterns.md`。
+参考位置：`skill://game-craft/references/world-and-cast.md`、`skill://game-craft/references/character-personality.md`、`skill://game-craft/references/state-and-rules.md`、`skill://game-craft/references/planning-and-scenes.md`、`skill://game-craft/references/opening-and-diagnosis.md`、`skill://game-craft/references/web-novel-patterns.md`。
 
 | 作者的任务 | 读取 | 直接交付 |
 | --- | --- | --- |
 | 游戏构思、卖点、核心循环 | 世界与角色「先写一页纸」「核心循环」 | 游戏一页纸 |
 | 世界 / 地点 / 势力 / 世界规则 | 世界与角色「资料库条目」「势力与前线」 | 资料条目卡、势力/前线卡 |
-| 主角 / NPC / 对手 | 世界与角色「角色条目」「先写功能」 | 角色卡、议程、关系张力 |
+| 主角 / NPC / 对手的性格、人设 | 角色性格「三层结构」「萌属性」「从标签到回合」 | 性格卡、可演出细节、反应规则 |
+| 群像 / NPC 区分度 | 角色性格「群像与区分」 | 群像对照、可演出差异 |
+| 角色条目 / 议程 / 关系张力 | 世界与角色「角色条目」「先写功能」 | 角色卡、议程、关系张力 |
 | 状态系统设计 / 精简 | 状态与规则「字段设计」「更新纪律」 | 字段表、初始值、更新规则 |
 | 规则 / 判定设计 | 状态与规则「判定设计」「失败推进」 | 检定模板、结果带、代价 |
 | 游戏规划 / 长线 / 分支 | 规划与场景「规划模板」「人物议程与前线」「分支与玩家能动性」 | 规划模板、当前计划、重规划触发 |
@@ -104,6 +106,8 @@ agent: general,ide
 - 不要替玩家决定选择、台词或结果。
 - 不要把规划写成固定剧本；准备情境、压力、议程和可能。
 - 不要让 NPC 原地等待玩家；给每个重要角色一个议程。
+- 不要把 NPC 的性格写成一串形容词；每个标签都要有可演出的台词、动作或反应。
+- 不要让所有 NPC 用同一种态度和说话方式；玩家要能遮住名字认出是谁。
 - 不要隐藏必要信息却不给线索；不要用“猜不到”制造悬念。
 - 不要为了戏剧性改写已建立的 canon 或状态。
 - 不要照搬其他系统的数值/字段；先问它是否服务这个游戏的取舍。

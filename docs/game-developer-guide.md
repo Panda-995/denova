@@ -2,7 +2,7 @@
 
 更新：2026-09-15。接口以当前代码和运行实例的 OpenAPI 为准。
 
-配套：[扩展能力开发手册](extension-development.md) · [插件开发手册](plugin-developer-guide.md) · [系统设计](plugin-platform-design.md) · [HTTP API](plugin-platform-api.md)。
+配套：[扩展能力开发手册](extension-development.md) · [插件开发手册](plugin-developer-guide.md) · [HTTP API](plugin-platform-api.md)。
 
 游戏是游戏页中独立的可玩作品。第三方游戏清单须声明 apiMajor: 1 和 minHostVersion: "0.6.0"，拥有独立前端和可选 Node 22+ 后端，既可以自行管理状态，也可以复用内置「互动故事」的 Story 与生成、分支、版本机制。两种方式共用现有游戏安装、授权和运行容器。
 

@@ -22,13 +22,13 @@ Scoped Denova MCP tools handle product operations. Claude's native Task tools ow
 
 The product Session JSONL, or Story JSONL for Game, remains the canonical record. Native session IDs and private CLI files are disposable host caches, never a second recovery source. Cancellation terminates and reaps the owned process and closes its MCP endpoint. Private thinking blocks are not copied into product history.
 
-Queue, pause, resume, and steer use the shared application control layer; Claude steering uses confirmed native interrupt followed by resume. Writing and General conversations support Goal through an external, read-only evaluator; Game does not support Goal. Native subagent tools and their coordination instructions are excluded. See [runtime session boundaries](agent-runtime-session-design-audit.md) for ownership and recovery details.
+Queue, pause, resume, and steer use the shared application control layer; Claude steering uses confirmed native interrupt followed by resume. Writing and General conversations support Goal through an external, read-only evaluator; Game does not support Goal. Native subagent tools and their coordination instructions are excluded. See [AGENTS.md](../AGENTS.md) and [Agent recovery](agent-recovery.md) for ownership and recovery boundaries.
 
 Denova imposes no total attempt or turn-count limit. Connection/authentication probes have a 15-second infrastructure timeout. MCP idle/background execution is disabled; upstream CLI/provider limits, including its hard MCP tool timeout, still apply. Oversized protocol frames or tool arguments fail explicitly rather than being silently truncated.
 
 ## Verification
 
-The initial Windows acceptance used the real Claude Code 2.1.259 executable against an isolated local Anthropic-compatible fixture, without paid model requests or access to the user's credential home. It covered streamed text, image input, waiting for an answer, file tools, cancellation, Writing/General and their custom agents, and continuing the same conversation with Native. Journal tests also covered persisted answers after reopening. Later session, model-discovery, and Game verification is recorded in the [runtime acceptance notes](agent-runtime-session-design-audit.md); the initial acceptance is not a claim that every current capability was tested with the real CLI.
+The initial Windows acceptance used the real Claude Code 2.1.259 executable against an isolated local Anthropic-compatible fixture, without paid model requests or access to the user's credential home. It covered streamed text, image input, waiting for an answer, file tools, cancellation, Writing/General and their custom agents, and continuing the same conversation with Native. Journal tests also covered persisted answers after reopening.
 
 To repeat the installed CLI integration checks in PowerShell:
 

@@ -51,9 +51,7 @@ Mixed packages containing plugins, games or Project content require confirmation
 The installer freezes upstream bytes before confirmation and commits the whole
 selected package with its source record. Before-images are retained in durable
 transaction records. The market can download backups or review a restore plan;
-it refuses to overwrite edits made since the original commit. See
-[Marketplace and resource exchange](resource-pack-import-export-design.md) for the
-format, ownership rules, recovery boundary and current scope.
+it refuses to overwrite edits made since the original commit.
 
 On upgrade from v0.5.0, `.denova-source.json` is backed up and moved into the shared
 installation model. An explicitly enabled auto-update preference is retained;

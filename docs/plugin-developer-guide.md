@@ -2,7 +2,7 @@
 
 更新：2026-10-10，v0.6.0 工作区实现。接口以当前代码和运行实例的 OpenAPI 为准。
 
-配套：[扩展能力开发手册](extension-development.md) · [游戏开发手册](game-developer-guide.md) · [系统设计](plugin-platform-design.md) · [HTTP API](plugin-platform-api.md)。
+配套：[扩展能力开发手册](extension-development.md) · [游戏开发手册](game-developer-guide.md) · [HTTP API](plugin-platform-api.md)。
 
 资源中心的「插件与游戏」管理已安装的插件与游戏；工作台承接源码开发。插件可以组合 Agent 工具、用户命令、独立面板和 Project 一级页面；游戏交付有独立存档生命周期的作品。Skills 与公开 Agents 继续由各自页面管理。插件不能访问写作正文、写作选区、编辑器内部或任意宿主组件；一级页面可以提供自己页面的受限上下文。
 
