@@ -3,6 +3,7 @@ import { Archive, BadgeHelp, ClipboardList, GitCommitHorizontal, Plus, Sparkles,
 import { useTranslation } from 'react-i18next'
 import type { AgentQuickPromptSettings } from '@/features/settings/types'
 import type { InputCommandOption } from './InputCommandMenu'
+import { searchInputCommands } from './input-command-search'
 
 const COMMANDS = [
   { cmd: '/goal', descKey: 'chat.command.goal.desc', hintKey: 'chat.command.goal.hint', icon: Target },
@@ -72,11 +73,8 @@ export function useInputCommands({ scope, builtinCommands, skills, quickPrompts,
         icon: Sparkles,
         source: 'quick-prompt',
       })) : []
-    const commands = scope === 'none' ? [] : [...builtins, ...prompts, ...skillOptions]
-    const normalizedQuery = commandQuery?.toLocaleLowerCase() ?? ''
-    const filteredCommands = commandQuery === null ? [] : commands.filter((command) => command.source === 'quick-prompt'
-      ? command.cmd.toLocaleLowerCase().includes(normalizedQuery)
-      : command.cmd.toLocaleLowerCase().startsWith(`/${normalizedQuery}`))
+    const filteredCommands = scope === 'none' ? [] : [builtins, prompts, skillOptions]
+      .flatMap((group) => searchInputCommands(group, commandQuery, (command) => command.cmd))
     const indexed = filteredCommands.map((command, index) => ({ command, index }))
     return {
       filteredCommands,

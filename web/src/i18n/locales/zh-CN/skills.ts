@@ -117,6 +117,7 @@ const skills = {
   'skills.category.empty': '此分类下暂无 Skills。',
   'skills.category.general': '通用',
   'skills.category.writing': '写作',
+  'skills.category.game': '游戏',
   'skills.category.image': '图像',
   'skills.category.research': '调研',
   'skills.category.configuration': '配置',

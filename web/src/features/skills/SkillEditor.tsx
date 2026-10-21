@@ -82,22 +82,23 @@ export function SkillEditor({
 
   return (
     <>
-      <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-[var(--nova-border)] px-3 py-2 sm:px-4">
-        {editingEntryFile ? <FileCode2 className="h-4 w-4 text-[var(--nova-text-muted)]" /> : <FileText className="h-4 w-4 text-[var(--nova-text-muted)]" />}
-        <div className="min-w-0 flex-[1_1_12rem]">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="min-w-0 truncate font-mono text-sm text-[var(--nova-text)]">{editingEntryFile ? `/${document.name}` : selectedFilePath}</span>
-            <span className="rounded bg-[var(--nova-surface-2)] px-1.5 py-0.5 text-[10px] text-[var(--nova-text-muted)]">{scopeLabel(document.scope, t)}</span>
-            <span className="rounded bg-[var(--nova-surface-2)] px-1.5 py-0.5 text-[10px] text-[var(--nova-text-muted)]">{skillCategoryLabel(skillCategory(document), t)}</span>
-            {skillHasCapability(document, writingWorkflowCapability) && <span className="rounded bg-[var(--nova-active)] px-1.5 py-0.5 text-[10px] text-[var(--nova-text)]">{t('skills.capabilities.writingWorkflowBadge')}</span>}
-            {!editingEntryFile && <span className="rounded bg-[var(--nova-surface-2)] px-1.5 py-0.5 text-[10px] text-[var(--nova-text-muted)]">{t('skills.files.reference')}</span>}
-            {!document.active && <span className="rounded bg-[var(--nova-warning-bg)] px-1.5 py-0.5 text-[10px] text-[var(--nova-warning)]">{t('skills.shadowed')}</span>}
-            {document.agent && <span className="rounded bg-[var(--nova-surface-2)] px-1.5 py-0.5 text-[10px] text-[var(--nova-text-muted)]">{document.agent}</span>}
-            {!activeEditable && <Lock className="h-3.5 w-3.5 text-[var(--nova-text-faint)]" />}
+      {/* Keep the toolbar height unchanged when switching files; scroll narrow panes horizontally. */}
+      <div className="flex min-h-12 shrink-0 items-center gap-3 overflow-x-auto border-b border-[var(--nova-border)] px-3 py-2 [scrollbar-width:none] sm:px-4">
+        {editingEntryFile ? <FileCode2 className="h-4 w-4 shrink-0 text-[var(--nova-text-muted)]" /> : <FileText className="h-4 w-4 shrink-0 text-[var(--nova-text-muted)]" />}
+        <div className="min-w-min flex-1">
+          <div className="flex items-center gap-2">
+            <span className="w-0 min-w-16 flex-1 truncate font-mono text-sm text-[var(--nova-text)]">{editingEntryFile ? `/${document.name}` : selectedFilePath}</span>
+            <span className="shrink-0 whitespace-nowrap rounded bg-[var(--nova-surface-2)] px-1.5 py-0.5 text-[10px] text-[var(--nova-text-muted)]">{scopeLabel(document.scope, t)}</span>
+            <span className="shrink-0 whitespace-nowrap rounded bg-[var(--nova-surface-2)] px-1.5 py-0.5 text-[10px] text-[var(--nova-text-muted)]">{skillCategoryLabel(skillCategory(document), t)}</span>
+            {skillHasCapability(document, writingWorkflowCapability) && <span className="shrink-0 whitespace-nowrap rounded bg-[var(--nova-active)] px-1.5 py-0.5 text-[10px] text-[var(--nova-text)]">{t('skills.capabilities.writingWorkflowBadge')}</span>}
+            {!editingEntryFile && <span className="shrink-0 whitespace-nowrap rounded bg-[var(--nova-surface-2)] px-1.5 py-0.5 text-[10px] text-[var(--nova-text-muted)]">{t('skills.files.reference')}</span>}
+            {!document.active && <span className="shrink-0 whitespace-nowrap rounded bg-[var(--nova-warning-bg)] px-1.5 py-0.5 text-[10px] text-[var(--nova-warning)]">{t('skills.shadowed')}</span>}
+            {document.agent && <span className="shrink-0 whitespace-nowrap rounded bg-[var(--nova-surface-2)] px-1.5 py-0.5 text-[10px] text-[var(--nova-text-muted)]">{document.agent}</span>}
+            {!activeEditable && <Lock className="h-3.5 w-3.5 shrink-0 text-[var(--nova-text-faint)]" />}
           </div>
-          <div className="mt-0.5 truncate text-[11px] text-[var(--nova-text-faint)]">{activeDisplayPath}</div>
+          <div className="mt-0.5 w-0 min-w-full truncate text-[11px] text-[var(--nova-text-faint)]">{activeDisplayPath}</div>
         </div>
-        <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 max-sm:w-full max-sm:justify-start">
+        <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
           {document.editable && (
             <>
               <button

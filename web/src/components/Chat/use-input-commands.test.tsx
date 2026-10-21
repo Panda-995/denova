@@ -40,6 +40,65 @@ describe('useInputCommands', () => {
     ])
   })
 
+  it('ranks name matches by position, ignoring case and preserving ties', () => {
+    const { result } = renderHook(() => useInputCommands({
+      scope: 'all',
+      skills: [
+        { name: 'google-slides', description: 'Slides' },
+        { name: 'check-ideas', description: 'Ideas' },
+        { name: 'lark-slides', description: 'Slides' },
+        { name: 'other-ideas', description: 'Ideas' },
+        { name: 'Ideate', description: 'Design' },
+        { name: 'interface-design', description: 'Craft-first guidance' },
+        { name: 'index', description: 'Non-contiguous letters' },
+        { name: 'review', description: 'ide in the description only' },
+      ],
+      quickPrompts: [], goalEnabled: false,
+    }))
+    expect(result.current.filteredCommands).toEqual([])
+    act(() => result.current.setCommandQuery('IDE'))
+    expect(result.current.filteredSkillCommands.map(({ command, index }) => [command.cmd, index])).toEqual([
+      ['/Ideate', 0], ['/interface-design', 1], ['/check-ideas', 2], ['/other-ideas', 3], ['/lark-slides', 4], ['/google-slides', 5],
+    ])
+    act(() => result.current.setCommandQuery('idx'))
+    expect(result.current.filteredCommands).toEqual([])
+  })
+
+  it('matches adjacent word prefixes in prompt and Skill names without skipping letters within a word', () => {
+    const { result } = renderHook(() => useInputCommands({
+      scope: 'all', skills: [{ name: 'code-review', description: 'Review changes' }],
+      quickPrompts: [{ id: 'review', name: 'Code Review', prompt: 'Review changes', enabled: true, behavior: 'fill' }],
+      goalEnabled: false,
+    }))
+    act(() => result.current.setCommandQuery('core'))
+    expect(result.current.filteredCommands.map(({ cmd }) => cmd)).toEqual(['Code Review', '/code-review'])
+    act(() => result.current.setCommandQuery('covi'))
+    expect(result.current.filteredCommands).toEqual([])
+  })
+
+  it('keeps group order and visible indexes aligned when substring matches are ranked', () => {
+    const { result } = renderHook(() => useInputCommands({
+      scope: 'all',
+      skills: [{ name: 'status-report', description: '' }, { name: 'at', description: '' }],
+      quickPrompts: [
+        { id: 'late', name: 'Review status', prompt: 'Review', enabled: true, behavior: 'fill' },
+        { id: 'early', name: 'At once', prompt: 'Continue', enabled: true, behavior: 'fill' },
+      ],
+      goalEnabled: false,
+    }))
+    act(() => result.current.setCommandQuery('at'))
+    expect(result.current.filteredCommands.map(({ cmd }) => cmd)).toEqual([
+      '/status', 'At once', 'Review status', '/at', '/status-report',
+    ])
+    expect([
+      ...result.current.filteredBuiltinCommands,
+      ...result.current.filteredQuickPromptCommands,
+      ...result.current.filteredSkillCommands,
+    ].map(({ command, index }) => [command, index])).toEqual(
+      result.current.filteredCommands.map((command, index) => [command, index]),
+    )
+  })
+
   it.each<CommandScope>(['skills', 'none'])('keeps prompts out of the %s command scope', (scope) => {
     const { result } = renderHook(() => useInputCommands({
       scope, skills: [{ name: 'review', description: 'Review' }], quickPrompts, goalEnabled: false,

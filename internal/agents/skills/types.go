@@ -12,6 +12,7 @@ const (
 
 	CategoryGeneral       = "general"
 	CategoryWriting       = "writing"
+	CategoryGame          = "game"
 	CategoryImage         = "image"
 	CategoryResearch      = "research"
 	CategoryConfiguration = "configuration"

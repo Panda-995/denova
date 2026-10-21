@@ -28,6 +28,7 @@ docs/tests/*
 !docs/automation-project-agent.md
 !docs/plugin-developer-guide.md
 !docs/game-developer-guide.md
+!docs/game-craft-skill-design.md
 !docs/plugin-platform-design.md
 !docs/plugin-extensibility-audit-and-plan.md
 !docs/plugin-platform-api.md

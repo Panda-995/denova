@@ -117,6 +117,7 @@ const skills = {
   'skills.category.empty': 'No Skills in this category.',
   'skills.category.general': 'General',
   'skills.category.writing': 'Writing',
+  'skills.category.game': 'Game',
   'skills.category.image': 'Image',
   'skills.category.research': 'Research',
   'skills.category.configuration': 'Configuration',

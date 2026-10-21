@@ -1,3 +1,5 @@
+import { searchInputCommands } from '@/components/Chat/input-command-search'
+
 export interface StoryStageCommandItem {
   name: string
   description: string
@@ -23,9 +25,8 @@ interface StoryStageCommandMenu {
 
 export function buildStoryStageCommandMenu(query: string | null, skills: SkillCommand[], labels: CommandLabels): StoryStageCommandMenu {
   if (query === null) return { commands: [], builtInItems: [], skillItems: [] }
-  const normalizedQuery = query.toLowerCase()
   const seen = new Set(['compact'])
-  const commands: StoryStageCommandItem[] = [
+  const builtins: StoryStageCommandItem[] = [
     {
       name: 'compact',
       description: labels.compactDescription,
@@ -33,18 +34,20 @@ export function buildStoryStageCommandMenu(query: string | null, skills: SkillCo
       builtIn: true,
     },
   ]
+  const skillCommands: StoryStageCommandItem[] = []
 
   for (const skill of skills) {
     if (seen.has(skill.name)) continue
     seen.add(skill.name)
-    commands.push({
+    skillCommands.push({
       name: skill.name,
       description: skill.description || skill.name,
       builtIn: false,
     })
   }
 
-  const filtered = commands.filter((command) => command.name.toLowerCase().startsWith(normalizedQuery))
+  const filtered = [builtins, skillCommands]
+    .flatMap((group) => searchInputCommands(group, query, (command) => command.name))
   const indexed = filtered.map((command, index) => ({ command, index }))
   return {
     commands: filtered,

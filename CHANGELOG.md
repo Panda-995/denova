@@ -12,6 +12,25 @@ Denova records major user-visible features, important compatibility or data chan
 
 ## [Unreleased]
 
+### Brief / 简要说明
+
+#### 中文
+
+- 新增内置互动游戏创作 Skill，并支持按「游戏」分类管理 Skills。
+
+#### English
+
+- Adds a built-in interactive-game design Skill and a Game category for Skills.
+
+### Added / 新增
+
+- 内置互动游戏创作 Skill，支持游戏构思与核心循环、世界与角色资料库、状态系统、规则判定、游戏规划、开局回合和跑团诊断。
+- A built-in interactive-game design Skill covers game premises and loops, world and character Lore, state systems, rules and checks, planning, openings and turns, and play diagnostics.
+- 互动游戏创作 Skill 补充经典网文向的成长体系、爽点结构、资源与社会资本、世界阶梯、副本/规则恐怖/都市隐杀和外观沉浸感设计。
+- The interactive-game design Skill now covers classic web-novel progression, payoff structure, resources and social capital, world tiers, instance/rule-horror/urban-undercover patterns, and sensory immersion.
+- Skills 库新增「游戏」分类，可在创建、配置和筛选中使用。
+- The Skills library adds a Game category for creation, configuration, and filtering.
+
 ## [v0.6.3] - 2026-10-20
 
 ### Brief / 简要说明

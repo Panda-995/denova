@@ -15,7 +15,7 @@ export function isValidSkillName(name: string) {
 export const skillEntryFile = 'SKILL.md'
 export const skillScopes: SkillScope[] = ['user', 'workspace', 'builtin', 'shared']
 export const skillAgentOptions = AGENTS.filter((agent) => agent.capabilityMode === 'tools')
-export const skillCategoryOptions = ['general', 'writing', 'image', 'research', 'configuration'] as const
+export const skillCategoryOptions = ['general', 'writing', 'game', 'image', 'research', 'configuration'] as const
 export const writingWorkflowCapability = 'writing-workflow'
 
 export function keyOf(skill: Pick<SkillSummary, 'scope' | 'name'>) {
